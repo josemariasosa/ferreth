@@ -4,6 +4,7 @@ use revm::primitives::U256;
 
 pub mod benchmark;
 pub mod compiler;
+pub mod disassembler;
 pub mod execution;
 pub mod orchestrator;
 pub mod rv64;
@@ -107,7 +108,7 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             0x03 => DecodedInstruction::Sub { offset },
             0x50 => DecodedInstruction::Pop { offset },
             0x60..=0x7f => {
-                let width = usize::from(opcode - 0x5f);
+                let width = push_width(opcode).expect("0x60..=0x7f are PUSH opcodes");
                 let available = bytecode.len() - pc;
                 if available < width {
                     return Err(DecodeError::TruncatedPush {
@@ -135,6 +136,14 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
         }
     }
     Ok(instructions)
+}
+
+/// Immediate byte count for `PUSH1` (0x60) through `PUSH32` (0x7f).
+pub(crate) const fn push_width(opcode: u8) -> Option<usize> {
+    match opcode {
+        0x60..=0x7f => Some((opcode - 0x5f) as usize),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

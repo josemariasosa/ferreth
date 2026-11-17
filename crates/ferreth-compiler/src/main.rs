@@ -1,6 +1,7 @@
 use ferreth_compiler::{
     benchmark::{run_benchmark, run_guest_benchmark, BenchOptions},
     decode,
+    disassembler::{disassemble, format_disassembly, parse_hex},
     execution::DEFAULT_RANDOM_SEED,
     orchestrator::{
         execute_guest_add, execute_guest_evm_bytecode, execute_guest_pop, execute_guest_push1,
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
         Some("translate") => translate(&args),
         Some("execute") => execute(&args[1..]),
         Some("bench") => bench(&args[1..]),
+        Some("decode") => decode_command(&args[1..]),
         _ => usage_failure(),
     }
 }
@@ -190,6 +192,25 @@ fn execute(args: &[String]) -> ExitCode {
     }
 }
 
+fn decode_command(args: &[String]) -> ExitCode {
+    let [option, hex] = args else {
+        return usage_failure();
+    };
+    if option != "--bytecode" {
+        return usage_failure();
+    }
+    match parse_hex(hex) {
+        Ok(bytecode) => {
+            print!("{}", format_disassembly(&disassemble(&bytecode)));
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("invalid bytecode hex: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn bench(args: &[String]) -> ExitCode {
     if matches!(args, [scope, format] if scope == "guest" && format == "--format=json")
         || matches!(args, [scope, flag, format] if scope == "guest" && flag == "--format" && format == "json")
@@ -288,6 +309,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator decode --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
     ExitCode::FAILURE
 }
