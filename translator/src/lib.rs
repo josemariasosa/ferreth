@@ -4,6 +4,7 @@ use revm::primitives::U256;
 
 pub mod benchmark;
 pub mod execution;
+pub mod orchestrator;
 pub mod rv64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
