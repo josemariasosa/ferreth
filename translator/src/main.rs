@@ -4,7 +4,7 @@ use ferrum_eth_translator::{
     execution::DEFAULT_RANDOM_SEED,
     orchestrator::{
         execute_guest_add, execute_guest_evm_bytecode, execute_guest_push1,
-        execute_guest_push1_sequence,
+        execute_guest_push1_sequence, execute_guest_sub,
     },
     rv64::push::generate_guest_push1,
     Opcode,
@@ -57,14 +57,22 @@ fn translate(args: &[String]) -> ExitCode {
 fn execute(args: &[String]) -> ExitCode {
     match args {
         [option, operation, a_option, a, b_option, b]
-            if option == "--op" && operation == "ADD" && a_option == "--a" && b_option == "--b" =>
+            if option == "--op"
+                && matches!(operation.as_str(), "ADD" | "SUB")
+                && a_option == "--a"
+                && b_option == "--b" =>
         {
             let (Some(a), Some(b)) = (parse_u256(a), parse_u256(b)) else {
                 return usage_failure();
             };
-            match execute_guest_add(a, b) {
+            let execution = match operation.as_str() {
+                "ADD" => execute_guest_add(a, b),
+                "SUB" => execute_guest_sub(a, b),
+                _ => unreachable!("match guard accepts only ADD or SUB"),
+            };
+            match execution {
                 Ok(result) => {
-                    println!("Opcode: ADD");
+                    println!("Opcode: {operation}");
                     println!("Initial stack: [{a:?}, {b:?}]");
                     println!("Final guest status: {:?}", result.guest_result().status());
                     println!("Final stack: {:?}", result.guest_result().stack());
@@ -75,7 +83,7 @@ fn execute(args: &[String]) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("ADD execution failed: {error}");
+                    eprintln!("{operation} execution failed: {error}");
                     ExitCode::FAILURE
                 }
             }
@@ -248,6 +256,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD --a U256 --b U256\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
     ExitCode::FAILURE
 }
