@@ -11,7 +11,7 @@ use std::fmt;
 use revm::primitives::U256;
 
 use super::{
-    executor::{ExecutorError, IntegerRegister, Rv64Executor},
+    executor::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor},
     memory::{
         evm_stack_depth, validate_evm_stack_layout, LayoutError, EVM_STACK_CAPACITY,
         EVM_STACK_REGION, EVM_WORD_SIZE, METADATA_REGION,
@@ -392,6 +392,154 @@ impl PublishedGuestMetadata {
     pub const fn stack_depth(self) -> u64 {
         self.stack_depth
     }
+}
+
+/// A host-retrieved terminal EVM guest result.
+///
+/// `stack` is ordered from slot zero through the top item, so the top of a
+/// nonempty EVM stack is its last element.  The result deliberately retains
+/// the guest-published status and exception code: a guest exception is a
+/// successfully retrieved guest result, not an executor failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestResult {
+    metadata: PublishedGuestMetadata,
+    stack: Vec<U256>,
+}
+
+impl GuestResult {
+    pub const fn metadata(&self) -> PublishedGuestMetadata {
+        self.metadata
+    }
+
+    pub const fn status(&self) -> GuestExecutionStatus {
+        self.metadata.status()
+    }
+
+    pub const fn exception_code(&self) -> u64 {
+        self.metadata.exception_code()
+    }
+
+    pub const fn final_s1(&self) -> u64 {
+        self.metadata.final_s1()
+    }
+
+    pub const fn stack_depth(&self) -> u64 {
+        self.metadata.stack_depth()
+    }
+
+    pub fn stack(&self) -> &[U256] {
+        &self.stack
+    }
+}
+
+/// Failures while retrieving a guest-published terminal result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestResultError {
+    Layout(LayoutError),
+    Executor(ExecutorError),
+    Metadata(GuestMetadataError),
+    LiveStackPointerMismatch {
+        published_s1: u64,
+        live_s1: u64,
+    },
+    StackWord {
+        slot_index: usize,
+        error: GuestMemoryError,
+    },
+}
+
+impl fmt::Display for GuestResultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Layout(error) => write!(f, "invalid guest result layout: {error}"),
+            Self::Executor(error) => write!(f, "could not read guest result metadata: {error}"),
+            Self::Metadata(error) => write!(f, "invalid guest result metadata: {error}"),
+            Self::LiveStackPointerMismatch {
+                published_s1,
+                live_s1,
+            } => write!(
+                f,
+                "published final s1 0x{published_s1:016x} does not match live s1 0x{live_s1:016x}"
+            ),
+            Self::StackWord { slot_index, error } => {
+                write!(
+                    f,
+                    "could not read live EVM stack slot {slot_index}: {error}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for GuestResultError {}
+
+impl From<LayoutError> for GuestResultError {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
+    }
+}
+
+impl From<ExecutorError> for GuestResultError {
+    fn from(error: ExecutorError) -> Self {
+        Self::Executor(error)
+    }
+}
+
+impl From<GuestMetadataError> for GuestResultError {
+    fn from(error: GuestMetadataError) -> Self {
+        Self::Metadata(error)
+    }
+}
+
+/// Reads and validates a terminal EVM guest result after a successful run.
+///
+/// The [`Rv64Executor::execute`] contract makes a returned
+/// [`ExecutionReport`] evidence that its configured exit PC was observed
+/// before another instruction was fetched.  Thus this function neither treats
+/// metadata as termination proof nor introduces a duplicate completion flag.
+/// Instruction-limit exhaustion and backend faults yield `ExecutorError`
+/// instead of an `ExecutionReport`, and therefore cannot be passed here from a
+/// failed execution.
+pub fn read_guest_result(
+    executor: &mut impl Rv64Executor,
+    execution_report: &ExecutionReport,
+) -> Result<GuestResult, GuestResultError> {
+    // A report can only be obtained from the successful return path of
+    // `Rv64Executor::execute`; see that trait method's contract above.
+    let _ = execution_report;
+
+    METADATA_REGION.validate_aligned_access(
+        METADATA_REGION.start(),
+        GUEST_METADATA_ENCODED_SIZE,
+        std::mem::size_of::<u64>() as u64,
+    )?;
+    let mut encoded_metadata = [0; GUEST_METADATA_ENCODED_SIZE];
+    executor.read_memory(METADATA_REGION.start(), &mut encoded_metadata)?;
+    let metadata = GuestMetadata::decode(&encoded_metadata)?;
+    let published_metadata = metadata.validate_published_terminal(true)?;
+
+    let live_s1 = executor.read_register(IntegerRegister::EVM_STACK_NEXT_FREE);
+    if live_s1 != published_metadata.final_s1() {
+        return Err(GuestResultError::LiveStackPointerMismatch {
+            published_s1: published_metadata.final_s1(),
+            live_s1,
+        });
+    }
+
+    let stack_depth = usize::try_from(published_metadata.stack_depth())
+        .expect("the ABI-bounded EVM stack depth always fits usize");
+    let mut stack = Vec::with_capacity(stack_depth);
+    for slot_index in 0..stack_depth {
+        stack.push(
+            read_evm_word(executor, slot_index)
+                .map_err(|error| GuestResultError::StackWord { slot_index, error })?,
+        );
+    }
+
+    Ok(GuestResult {
+        metadata: published_metadata,
+        stack,
+    })
 }
 
 /// Failures while decoding or validating a guest result record.
