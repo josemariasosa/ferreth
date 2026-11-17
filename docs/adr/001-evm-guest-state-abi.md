@@ -6,13 +6,11 @@
 
 ## Implementation Summary
 
-The initial ADR-001 runtime is implemented for the deliberately narrow `STOP`,
-`PUSH1`, `ADD`, and `SUB` subset.  It uses the specified RV64 guest layout,
-register and result-record ABI, PC-sentinel termination, shared arithmetic
-cores, and a backend-neutral executor interface in both isolated RO and
-whole-program RC paths.  Full EVM compatibility, additional executor
-backends, native-stack use, and a stable guest exception-code taxonomy remain
-outside this initial scope.
+ADR-001 is implemented for the initial `STOP`, `PUSH1`, `ADD`, and `SUB` subset. Ferreth provides a defined RV64 guest memory layout, an ascending U256 stack, a result-publication ABI, PC-sentinel termination, reusable arithmetic cores, and a backend-neutral executor interface.
+
+Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 instructions through the shared guest ABI. The initial implementation is validated through unit tests, integration tests, arithmetic differential tests against REVM, and reproducible instruction-count benchmarks.
+
+**Remaining work:** Direct whole-program RC-to-REVM differential validation, broader EVM opcode coverage, stable exception-code definitions, and optional alternative execution backends. Native-stack execution and full EVM compatibility remain outside the initial ADR scope.
 
 | Component | Status | Evidence / Remaining work |
 |---|---|---|
