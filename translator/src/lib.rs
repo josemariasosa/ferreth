@@ -1,7 +1,85 @@
 use std::fmt::Write;
 
+use revm::primitives::U256;
+
 pub mod benchmark;
 pub mod execution;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Instruction {
+    Push(U256),
+    Add,
+    Sub,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    UnsupportedOpcode {
+        offset: usize,
+        opcode: u8,
+    },
+    TruncatedPush {
+        offset: usize,
+        opcode: u8,
+        expected: usize,
+        available: usize,
+    },
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedOpcode { offset, opcode } => {
+                write!(f, "unsupported opcode 0x{opcode:02x} at byte offset {offset}")
+            }
+            Self::TruncatedPush {
+                offset,
+                opcode,
+                expected,
+                available,
+            } => write!(
+                f,
+                "truncated PUSH opcode 0x{opcode:02x} at byte offset {offset}: expected {expected} immediate bytes, found {available}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+/// Decodes the strict PUSH1-PUSH32, ADD and SUB research subset.
+pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
+    let mut instructions = Vec::new();
+    let mut pc = 0;
+    while pc < bytecode.len() {
+        let offset = pc;
+        let opcode = bytecode[pc];
+        pc += 1;
+        let instruction = match opcode {
+            0x01 => Instruction::Add,
+            0x03 => Instruction::Sub,
+            0x60..=0x7f => {
+                let width = usize::from(opcode - 0x5f);
+                let available = bytecode.len() - pc;
+                if available < width {
+                    return Err(DecodeError::TruncatedPush {
+                        offset,
+                        opcode,
+                        expected: width,
+                        available,
+                    });
+                }
+                let mut bytes = [0; 32];
+                bytes[32 - width..].copy_from_slice(&bytecode[pc..pc + width]);
+                pc += width;
+                Instruction::Push(U256::from_be_bytes(bytes))
+            }
+            _ => return Err(DecodeError::UnsupportedOpcode { offset, opcode }),
+        };
+        instructions.push(instruction);
+    }
+    Ok(instructions)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
@@ -125,7 +203,65 @@ fn generate_sub() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_u256, sub_u256, Opcode};
+    use super::{add_u256, decode, sub_u256, DecodeError, Instruction, Opcode};
+    use revm::primitives::U256;
+
+    #[test]
+    fn decodes_push_widths_and_opcode_like_immediates() {
+        assert_eq!(decode(&[]), Ok(vec![]));
+        assert_eq!(
+            decode(&[0x60, 0x03, 0x01]),
+            Ok(vec![Instruction::Push(U256::from(3)), Instruction::Add])
+        );
+        for width in 1..=32 {
+            let immediate: Vec<u8> = (0..width)
+                .map(|index| [0x01, 0x03, 0x60, 0x7f, 0x02][index % 5])
+                .collect();
+            let mut bytecode = vec![0x5f + width as u8];
+            bytecode.extend_from_slice(&immediate);
+            bytecode.push(0x03);
+            let mut bytes = [0; 32];
+            bytes[32 - width..].copy_from_slice(&immediate);
+            assert_eq!(
+                decode(&bytecode),
+                Ok(vec![
+                    Instruction::Push(U256::from_be_bytes(bytes)),
+                    Instruction::Sub
+                ]),
+                "PUSH{width}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_and_truncated_opcodes_at_byte_offsets() {
+        let unsupported = decode(&[0x61, 0x02, 0x01, 0x02]).unwrap_err();
+        assert_eq!(
+            unsupported,
+            DecodeError::UnsupportedOpcode {
+                offset: 3,
+                opcode: 0x02
+            }
+        );
+        assert_eq!(
+            unsupported.to_string(),
+            "unsupported opcode 0x02 at byte offset 3"
+        );
+        let truncated = decode(&[0x60, 0x7f, 0x7f, 0x01, 0x03]).unwrap_err();
+        assert_eq!(
+            truncated,
+            DecodeError::TruncatedPush {
+                offset: 2,
+                opcode: 0x7f,
+                expected: 32,
+                available: 2
+            }
+        );
+        assert!(truncated.to_string().contains("0x7f at byte offset 2"));
+        assert!(truncated
+            .to_string()
+            .contains("expected 32 immediate bytes, found 2"));
+    }
 
     #[test]
     fn identifies_add_opcode() {

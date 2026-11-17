@@ -1,9 +1,10 @@
 # EVM ADD and SUB to RV64IM
 
-This experiment identifies EVM ADD (`0x01`) and SUB (`0x03`) and emits complete
-GNU assembly functions implementing arithmetic modulo 2^256. It does not
-implement the EVM stack, gas, bytecode parsing, or complete observable parity
-with revm.
+This experiment decodes the strict EVM PUSH1-PUSH32, ADD (`0x01`) and SUB
+(`0x03`) subset and emits complete GNU assembly functions implementing
+arithmetic modulo 2^256. Its execution harness manages the virtual stack on
+the host; it does not implement EVM stack manipulation in RV64, gas, or
+complete observable parity with revm.
 
 ```sh
 cargo run --manifest-path translator/Cargo.toml -- translate --op ADD
@@ -112,6 +113,14 @@ stack and executes the existing assembled routine for every arithmetic
 operation. The top item is the first operand, so `PUSH 3; PUSH 7; ADD;
 PUSH 2; SUB` yields -8 modulo 2^256. Both paths return the top stack value,
 even when other values remain underneath.
+
+The library's `decode` function also accepts raw bytecode, rejecting unsupported
+opcodes and truncated PUSH immediates with byte offsets. For example,
+`6003600701601460050301` decodes to `PUSH 3; PUSH 7; ADD; PUSH 20;
+PUSH 5; SUB; ADD`. `execution::ProgramRunner` executes that sequence using
+the host stack and generated RV64 arithmetic, yielding 2^256 - 5. The revm
+comparison appends an MSTORE/RETURN wrapper only after decoding the original
+program; those instructions are not supported by the decoder.
 
 These tests exercise arithmetic composition and data flow, not translation of
 EVM stack instructions into RISC-V or arbitrary EVM bytecode. The experiment

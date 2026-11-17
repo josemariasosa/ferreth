@@ -1,9 +1,10 @@
 use ferrum_eth_translator::{
+    decode,
     execution::{
-        directed_cases, hex, random_u256, run_evm, run_evm_bytecode, Rv64Runner,
+        directed_cases, hex, random_u256, run_evm, run_evm_bytecode, ProgramRunner, Rv64Runner,
         DEFAULT_RANDOM_SEED,
     },
-    Opcode,
+    Instruction, Opcode,
 };
 use revm::primitives::U256;
 
@@ -102,16 +103,9 @@ fn evm_sub_matches_rv64() {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum TestInstruction {
-    Push(U256),
-    Add,
-    Sub,
-}
+use Instruction::{Add, Push, Sub};
 
-use TestInstruction::{Add, Push, Sub};
-
-fn run_evm_program(program: &[TestInstruction]) -> Result<U256, String> {
+fn run_evm_program(program: &[Instruction]) -> Result<U256, String> {
     let mut bytecode = Vec::new();
     for instruction in program {
         match instruction {
@@ -123,52 +117,19 @@ fn run_evm_program(program: &[TestInstruction]) -> Result<U256, String> {
             Sub => bytecode.push(Opcode::Sub.evm_byte()),
         }
     }
+    run_evm_arithmetic_bytecode(&bytecode)
+}
+
+fn run_evm_arithmetic_bytecode(bytecode: &[u8]) -> Result<U256, String> {
+    let mut wrapped = bytecode.to_vec();
     // Return the top stack value, leaving any lower values untouched.
-    bytecode.extend_from_slice(&[0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3]);
-    run_evm_bytecode(bytecode)
-}
-
-struct ProgramRunner {
-    add: Rv64Runner,
-    sub: Rv64Runner,
-}
-
-impl ProgramRunner {
-    fn new() -> Result<Self, String> {
-        Ok(Self {
-            add: Rv64Runner::new(Opcode::Add)?,
-            sub: Rv64Runner::new(Opcode::Sub)?,
-        })
-    }
-
-    fn run(&mut self, program: &[TestInstruction]) -> Result<U256, String> {
-        let mut stack = Vec::new();
-        for (index, instruction) in program.iter().enumerate() {
-            match instruction {
-                Push(value) => stack.push(*value),
-                Add | Sub => {
-                    let a = stack
-                        .pop()
-                        .ok_or_else(|| format!("stack underflow at instruction {index}"))?;
-                    let b = stack
-                        .pop()
-                        .ok_or_else(|| format!("stack underflow at instruction {index}"))?;
-                    let runner = match instruction {
-                        Add => &mut self.add,
-                        Sub => &mut self.sub,
-                        Push(_) => unreachable!(),
-                    };
-                    stack.push(runner.run(a, b)?.result);
-                }
-            }
-        }
-        stack.pop().ok_or_else(|| "empty result stack".to_owned())
-    }
+    wrapped.extend_from_slice(&[0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3]);
+    run_evm_bytecode(wrapped)
 }
 
 fn assert_program_parity(
     runner: &mut ProgramRunner,
-    program: &[TestInstruction],
+    program: &[Instruction],
     label: &str,
     expected: Option<U256>,
 ) {
@@ -194,6 +155,78 @@ fn assert_program_parity(
             hex(expected)
         );
     }
+}
+
+#[test]
+fn decoded_sample_matches_revm() {
+    let bytecode = [
+        0x60, 0x03, 0x60, 0x07, 0x01, 0x60, 0x14, 0x60, 0x05, 0x03, 0x01,
+    ];
+    let program = decode(&bytecode).expect("decode sample bytecode");
+    assert_eq!(
+        program,
+        vec![
+            Push(U256::from(3)),
+            Push(U256::from(7)),
+            Add,
+            Push(U256::from(20)),
+            Push(U256::from(5)),
+            Sub,
+            Add
+        ]
+    );
+    let evm = run_evm_arithmetic_bytecode(&bytecode).expect("execute original bytecode in revm");
+    let rv64 = ProgramRunner::new()
+        .and_then(|mut runner| runner.run(&program))
+        .expect("execute decoded program in RV64");
+    let expected = U256::from_limbs([u64::MAX - 4, u64::MAX, u64::MAX, u64::MAX]);
+    assert_eq!(evm, expected);
+    assert_eq!(rv64, expected);
+    println!("decoded sample revm result: {}", hex(evm));
+    println!("decoded sample RV64 result: {}", hex(rv64));
+}
+
+#[test]
+fn decoded_full_width_program_matches_revm_across_limbs() {
+    let operands = [
+        U256::from_limbs([u64::MAX, u64::MAX, u64::MAX, 0x1234]),
+        U256::from_limbs([1, 0, 0, 1]),
+        U256::from_limbs([1, 0, 0, 1]),
+        U256::from_limbs([0, 0, 0, 0x1236]),
+    ];
+    let mut bytecode = Vec::new();
+    for (index, value) in operands.into_iter().enumerate() {
+        bytecode.push(0x7f);
+        bytecode.extend_from_slice(&value.to_be_bytes::<32>());
+        if index == 1 {
+            bytecode.push(0x01);
+        }
+    }
+    bytecode.extend_from_slice(&[0x03, 0x01]);
+    let program = decode(&bytecode).expect("decode full-width bytecode");
+    let evm = run_evm_arithmetic_bytecode(&bytecode).expect("execute full-width bytecode in revm");
+    let rv64 = ProgramRunner::new()
+        .and_then(|mut runner| runner.run(&program))
+        .expect("execute full-width decoded program in RV64");
+    let expected = U256::from_limbs([u64::MAX, u64::MAX, u64::MAX, 0x246a]);
+    assert_eq!(evm, expected);
+    assert_eq!(rv64, expected);
+    println!("full-width revm result: {}", hex(evm));
+    println!("full-width RV64 result: {}", hex(rv64));
+}
+
+#[test]
+fn decoded_program_rejects_stack_underflow() {
+    let mut runner = ProgramRunner::new().expect("initialize RV64 program runners");
+    for bytecode in [&[0x01][..], &[0x60, 0x01, 0x03][..]] {
+        let program = decode(bytecode).expect("decode underflow program");
+        let expected_index = program.len() - 1;
+        assert_eq!(
+            runner.run(&program),
+            Err(format!("stack underflow at instruction {expected_index}"))
+        );
+    }
+    assert_eq!(runner.run(&[]), Err("empty result stack".to_owned()));
 }
 
 #[test]

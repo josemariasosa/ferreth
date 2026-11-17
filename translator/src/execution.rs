@@ -15,7 +15,7 @@ use revm::{
 use rvemu::{bus::DRAM_BASE, emulator::Emulator};
 use std::{env, fs, path::PathBuf, sync::Mutex};
 
-use crate::Opcode;
+use crate::{Instruction, Opcode};
 
 const HALT_INSTRUCTION: u32 = 0x0010_0073;
 const MAX_INSTRUCTIONS: usize = 256;
@@ -231,6 +231,46 @@ impl Rv64Runner {
             result: U256::from_be_bytes(result_bytes),
             metrics,
         })
+    }
+}
+
+/// Executes decoded instructions with a host-managed stack and RV64 arithmetic.
+/// This does not implement EVM stack manipulation in RV64.
+pub struct ProgramRunner {
+    add: Rv64Runner,
+    sub: Rv64Runner,
+}
+
+impl ProgramRunner {
+    pub fn new() -> Result<Self, String> {
+        Ok(Self {
+            add: Rv64Runner::new(Opcode::Add)?,
+            sub: Rv64Runner::new(Opcode::Sub)?,
+        })
+    }
+
+    /// Returns the top stack value, or an error for underflow or an empty stack.
+    pub fn run(&mut self, program: &[Instruction]) -> Result<U256, String> {
+        let mut stack = Vec::new();
+        for (index, instruction) in program.iter().enumerate() {
+            match instruction {
+                Instruction::Push(value) => stack.push(*value),
+                Instruction::Add | Instruction::Sub => {
+                    if stack.len() < 2 {
+                        return Err(format!("stack underflow at instruction {index}"));
+                    }
+                    let a = stack.pop().expect("checked stack depth");
+                    let b = stack.pop().expect("checked stack depth");
+                    let runner = match instruction {
+                        Instruction::Add => &mut self.add,
+                        Instruction::Sub => &mut self.sub,
+                        Instruction::Push(_) => unreachable!(),
+                    };
+                    stack.push(runner.run(a, b)?.result);
+                }
+            }
+        }
+        stack.pop().ok_or_else(|| "empty result stack".to_owned())
     }
 }
 
