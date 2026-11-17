@@ -103,8 +103,20 @@ cargo test --manifest-path translator/Cargo.toml --test rv64_execution -- --noca
 ```
 
 The second command also prints an executed `ADD(5, 7)` example and its results.
-The experiment checks only the arithmetic result modulo 2^256 and the required
-SUB operand order. It does not verify complete EVM stack semantics, transaction
+The mixed-program tests additionally run seven directed sequences and 500
+deterministic programs with 3-20 arithmetic operations, using seed
+`0x123456789abcdef0`. Each random program contains both operations, and both
+ADD-then-SUB and SUB-then-ADD orders are exercised. The test encodes PUSH32,
+ADD and SUB as actual EVM bytecode; the RV64 path uses a host-managed virtual
+stack and executes the existing assembled routine for every arithmetic
+operation. The top item is the first operand, so `PUSH 3; PUSH 7; ADD;
+PUSH 2; SUB` yields -8 modulo 2^256. Both paths return the top stack value,
+even when other values remain underneath.
+
+These tests exercise arithmetic composition and data flow, not translation of
+EVM stack instructions into RISC-V or arbitrary EVM bytecode. The experiment
+checks arithmetic results modulo 2^256 and the required SUB operand order. It
+does not verify complete EVM stack semantics, transaction
 behavior, revert handling, other opcodes, or gas parity; the EVM bytecode
 consumes gas, but the RV64 function does not implement gas metering. Passing
 tests are experimental evidence, not a formal correctness proof or universal

@@ -293,6 +293,12 @@ pub fn run_evm(opcode: Opcode, a: U256, b: U256) -> Result<U256, String> {
         0xf3, // PUSH1 32; PUSH1 0; RETURN
     ]);
 
+    run_evm_bytecode(bytecode)
+}
+
+/// Executes bytecode in the same fixed environment used by the arithmetic
+/// differential tests and returns its 32-byte call output.
+pub fn run_evm_bytecode(bytecode: Vec<u8>) -> Result<U256, String> {
     let contract = Address::from([0x22; 20]);
     let caller = Address::from([0x11; 20]);
     let mut database = InMemoryDB::default();
