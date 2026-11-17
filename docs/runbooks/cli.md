@@ -9,6 +9,7 @@ current EVM-to-RV64 experiment:
 - `execute` runs isolated guest operations through RO (the isolated
   **R**untime **O**rchestrator), or compiles and runs supported EVM bytecode
   through RC (the whole-program **R**V64 **C**ompiler).
+- `decode` statically disassembles EVM bytecode; it does not execute it.
 - Execution commands report the guest result and dynamically executed RV64
   instruction counts. Some commands also print the linked assembly and
   machine-code words.
@@ -36,7 +37,7 @@ cargo run -p ferreth-compiler -- <command> [arguments]
 
 ## Command reference
 
-The CLI has three top-level commands: `translate`, `execute`, and `bench`.
+The CLI has four top-level commands: `translate`, `execute`, `decode`, and `bench`.
 There is no dedicated `--help` option. Running the CLI without a recognized
 command prints usage to stderr and exits unsuccessfully.
 
@@ -72,104 +73,27 @@ spaces or a `0x` prefix. A `STOP` ends decoding, so bytes after the first
 `STOP` are not interpreted. Unlike bytecode execution, isolated `PUSH1`
 commands print the generated RV64 assembly and machine-code words directly.
 
+### `decode`
+
+Statically disassemble EVM bytecode:
+
+```sh
+cargo run -p ferreth-compiler -- decode --bytecode 6005600350
+```
+
+See the [EVM Bytecode Disassembler](decode.md) runbook for output details,
+examples, and limitations.
+
 ### `bench`
 
-Benchmark command syntax and report fields are covered in the
-[Ferreth Benchmark Runbook](benchmark.md). The supported forms are:
+Run the arithmetic benchmark and emit JSON:
 
 ```sh
-cargo run -p ferreth-compiler -- bench --op ADD --cases 1000 --seed 42 --format json
-cargo run -p ferreth-compiler -- bench --op SUB --cases 1000 --seed 42 --format json
-cargo run -p ferreth-compiler -- bench --op ALL --cases 1000 --seed 42 --format json
-cargo run -p ferreth-compiler -- bench guest --format json
+cargo run -p ferreth-compiler -- bench --op ADD --cases 100 --format json
 ```
 
-The arithmetic benchmark requires `--op ADD|SUB|ALL`, `--cases N`, and
-`--format json`; `--seed N` is optional. The guest benchmark accepts
-`--format json` (also accepted as `--format=json`).
-
-## Important examples
-
-### Translate ADD and SUB
-
-```sh
-cargo run -p ferreth-compiler -- translate --op ADD
-cargo run -p ferreth-compiler -- translate --op SUB
-```
-
-Each command prints an RV64 assembly routine. The generated arithmetic routine
-operates on four 64-bit limbs for a 256-bit value.
-
-### Translate PUSH1 and inspect its instructions
-
-```sh
-cargo run -p ferreth-compiler -- translate --op PUSH1 --value 5
-```
-
-The output includes the readable opcode-body assembly followed by 11
-machine-code words in hexadecimal. This is an unlinked body with a placeholder
-overflow trampoline.
-
-### Run isolated guest operations
-
-```sh
-cargo run -p ferreth-compiler -- execute --op PUSH1 --value 5
-cargo run -p ferreth-compiler -- execute --op ADD --a 5 --b 3
-cargo run -p ferreth-compiler -- execute --op SUB --a 5 --b 3
-cargo run -p ferreth-compiler -- execute --op POP
-```
-
-Representative results:
-
-```text
-PUSH1: Final stack: [5]
-       Instructions: 17 (opcode body 10, termination 7)
-ADD:   Final stack: [8]
-       Dynamic RV64 instruction count: 49
-SUB:   Final stack: [115792089237316195423570985008687907853269984665640564039457584007913129639934]
-       Dynamic RV64 instruction count: 49
-```
-
-For SUB, `--a 5 --b 3` initializes `[5, 3]`, so the top item is subtracted
-from the lower item as `3 - 5`, modulo 2^256.
-
-### Run a PUSH1 sequence
-
-```sh
-cargo run -p ferreth-compiler -- execute --push1-sequence 5,3
-```
-
-This links and executes both pushes in one guest run. The expected stack is
-`[5, 3]`, with 27 instructions: 20 in the two opcode bodies and 7 in shared
-normal termination.
-
-### Run a complete bytecode program ending in STOP
-
-```sh
-cargo run -p ferreth-compiler -- execute --bytecode 600560030100
-```
-
-Expected output fields include:
-
-```text
-Decoded instructions: [Push(5), Push(3), Add, Stop]
-Final status: Normal
-Final stack: [8]
-Dynamic RV64 instruction count: 70
-```
-
-The explicit `STOP` is an executed guest instruction. The bytecode program
-without STOP (`6005600301`) executes 69 RV64 instructions; with STOP it
-executes 70.
-
-### POP in bytecode
-
-```sh
-cargo run -p ferreth-compiler -- execute --bytecode 600560035000
-```
-
-This pushes `5`, pushes `3`, removes the top word with `POP`, and stops with
-the final stack `[5]`. POP underflow is published as a guest exception.
+See the [Benchmark Runbook](benchmark.md) for supported options and report
+details.
 
 ## Error handling
 
@@ -203,7 +127,7 @@ The decoder and compiler do not support the same instruction set:
 
 | Component | Supported opcodes |
 | --- | --- |
-| EVM decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP` |
+| `execute` bytecode decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP` |
 | RC bytecode compiler | `STOP`, `PUSH1`, `ADD`, `SUB`, `POP` |
 | Isolated guest operations (RO) | `PUSH1`, `ADD`, `SUB`, `POP` |
 
