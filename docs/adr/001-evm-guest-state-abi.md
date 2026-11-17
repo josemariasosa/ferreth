@@ -1,7 +1,35 @@
 # ADR-001: EVM Guest State and RV64 Runtime ABI
 
 - **Status:** Accepted
+- **Implementation:** Implemented (initial scope)
 - **Date:** 2026-11-17
+
+## Implementation Summary
+
+The initial ADR-001 runtime is implemented for the deliberately narrow `STOP`,
+`PUSH1`, `ADD`, and `SUB` subset.  It uses the specified RV64 guest layout,
+register and result-record ABI, PC-sentinel termination, shared arithmetic
+cores, and a backend-neutral executor interface in both isolated RO and
+whole-program RC paths.  Full EVM compatibility, additional executor
+backends, native-stack use, and a stable guest exception-code taxonomy remain
+outside this initial scope.
+
+| Component | Status | Evidence / Remaining work |
+|---|---|---|
+| RV64 guest memory map | Implemented | `rv64/memory.rs` defines and validates the accepted code, metadata, EVM-stack, unassigned, and native-stack regions. |
+| Guest stack layout and U256 representation | Implemented | `rv64/guest.rs` encodes four little-endian `u64` limbs per 32-byte word and validates the 1024-word ascending stack. |
+| Guest state initialization (`s0`, `s1`) | Implemented | `initialize_guest_state` initializes both registers to the EVM stack base and initializes metadata to `RUNNING`. |
+| Guest status and result-publication ABI | Implemented | The 24-byte metadata record is encoded, validated, and published by generated normal and exceptional termination paths. |
+| Normal completion and guest exceptions | Implemented | `STOP` transfers to the normal publisher; stack overflow and binary-operation underflow transfer to exceptional publishers with provisional codes. |
+| Backend-neutral `Rv64Executor` interface | Implemented | `rv64/executor/mod.rs` exposes load, memory/register access, bounded execution, completion, and metrics without rvemu types. |
+| rvemu execution backend | Implemented | `RvemuExecutor` provides the initial rvemu 0.0.11 adapter and pre-fetch exit-sentinel accounting. |
+| Shared RV64 arithmetic cores | Implemented | `rv64/add.rs` and `rv64/sub.rs` wrappers call the reusable pointer-based cores used by both RO and RC. |
+| Rust Orchestrator (RO) execution path | Implemented | `orchestrator.rs` runs isolated PUSH1, ADD, and SUB guest programs through the shared ABI. |
+| Rust Compiler (RC) whole-program execution path | Implemented | `compiler.rs` compiles supported bytecode to one linked RV64 executable; `orchestrator.rs` executes it without per-opcode Rust callbacks. |
+| Supported EVM opcodes | Partially implemented | RC supports `STOP`, `PUSH1`, `ADD`, and `SUB`; decoding additionally recognizes `PUSH2`–`PUSH32`, which RC rejects. Full EVM is not in initial scope. |
+| REVM differential validation | Partially implemented | Arithmetic-core benchmark and tests compare RV64 execution with REVM 43.0.3 configured for `CANCUN`; whole-program RC differential coverage remains pending. |
+| Benchmark scopes (`opcode_core`, `opcode_guest`, `program_guest`) | Implemented | `benchmark.rs` produces the arithmetic baseline and deterministic guest/program measurements with split body and termination counts. |
+| Native RV64 execution or alternative executor backends | Not in initial scope | The native stack is reserved but unused; rvemu is the only backend. ADR-001 explicitly leaves Unicorn/other backend work optional. |
 
 ## 1. Context
 
