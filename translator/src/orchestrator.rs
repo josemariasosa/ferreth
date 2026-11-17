@@ -10,7 +10,7 @@ use std::fmt;
 use revm::primitives::U256;
 
 use crate::{
-    compiler::{compile_push1_program, CompileError},
+    compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},
     rv64::{
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
@@ -193,13 +193,30 @@ pub fn execute_guest_push1_sequence_with_initial_stack(
     immediates: &[u8],
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
+    let linked = compile_push1_program(immediates)?;
+    execute_linked_program(linked, initial_stack)
+}
+
+/// Decodes, compiles, and executes a PUSH1-only EVM bytecode program once.
+///
+/// The executor runs the resulting RV64 executable as a whole; Rust does not
+/// execute individual EVM operations.
+pub fn execute_guest_evm_bytecode(
+    bytecode: &[u8],
+) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_linked_program(compile_evm_bytecode(bytecode)?, &[])
+}
+
+fn execute_linked_program(
+    linked: CompiledRv64Program,
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
     if initial_stack.len() > EVM_STACK_CAPACITY as usize {
         return Err(OrchestratorError::InitialStackTooDeep {
             depth: initial_stack.len(),
         });
     }
 
-    let linked = compile_push1_program(immediates)?;
     let mut executor = RvemuExecutor::new()?;
     executor.load_code(linked.machine_code())?;
     // This makes an accidental fetch of the reserved exit slot observable as

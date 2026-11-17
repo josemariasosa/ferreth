@@ -1,7 +1,8 @@
 use ferrum_eth_translator::{
     benchmark::{run_benchmark, BenchOptions},
+    decode,
     execution::DEFAULT_RANDOM_SEED,
-    orchestrator::{execute_guest_push1, execute_guest_push1_sequence},
+    orchestrator::{execute_guest_evm_bytecode, execute_guest_push1, execute_guest_push1_sequence},
     rv64::push::generate_guest_push1,
     Opcode,
 };
@@ -52,6 +53,31 @@ fn translate(args: &[String]) -> ExitCode {
 
 fn execute(args: &[String]) -> ExitCode {
     match args {
+        [option, bytecode] if option == "--bytecode" => {
+            let Some(bytecode) = parse_bytecode(bytecode) else {
+                return usage_failure();
+            };
+            match (decode(&bytecode), execute_guest_evm_bytecode(&bytecode)) {
+                (Ok(instructions), Ok(result)) => {
+                    println!("Decoded instructions: {instructions:?}");
+                    println!("Final status: {:?}", result.guest_result().status());
+                    println!("Final stack: {:?}", result.guest_result().stack());
+                    println!(
+                        "Dynamic RV64 instruction count: {}",
+                        result.instruction_metrics().total()
+                    );
+                    ExitCode::SUCCESS
+                }
+                (Err(error), _) => {
+                    eprintln!("bytecode decoding failed: {error}");
+                    ExitCode::FAILURE
+                }
+                (_, Err(error)) => {
+                    eprintln!("bytecode execution failed: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         [option, values] if option == "--push1-sequence" => {
             let Some(immediates) = parse_push1_sequence(values) else {
                 return usage_failure();
@@ -180,7 +206,17 @@ fn parse_push1_sequence(value: &str) -> Option<Vec<u8>> {
     value.split(',').map(parse_push1_value).collect()
 }
 
+fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0 {
+        return None;
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
+        .collect()
+}
+
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
     ExitCode::FAILURE
 }

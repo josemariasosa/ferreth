@@ -12,6 +12,7 @@ use crate::rv64::{
     memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
     push::generate_guest_push1,
 };
+use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
 /// Provisional guest exception code for an EVM stack-overflow push.
 pub const PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE: u64 = 1;
@@ -58,6 +59,8 @@ impl CompiledRv64Program {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
+    Decode(DecodeError),
+    UnsupportedInstruction { opcode: u8, offset: usize },
     Layout(LayoutError),
     Link { description: String },
 }
@@ -65,6 +68,11 @@ pub enum CompileError {
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Decode(error) => write!(f, "could not decode EVM bytecode: {error}"),
+            Self::UnsupportedInstruction { offset, opcode } => write!(
+                f,
+                "EVM opcode 0x{opcode:02x} at byte offset {offset} is decoded but not supported by the RV64 compiler"
+            ),
             Self::Layout(error) => write!(f, "invalid compiled guest layout: {error}"),
             Self::Link { description } => write!(f, "could not link PUSH1 program: {description}"),
         }
@@ -77,6 +85,46 @@ impl From<LayoutError> for CompileError {
     fn from(error: LayoutError) -> Self {
         Self::Layout(error)
     }
+}
+
+impl From<DecodeError> for CompileError {
+    fn from(error: DecodeError) -> Self {
+        Self::Decode(error)
+    }
+}
+
+/// Decodes and compiles a PUSH1-only EVM bytecode program into one RV64 executable.
+///
+/// Reaching the end of the bytecode currently enters the temporary normal
+/// termination epilogue; this is not complete EVM `STOP` semantics.
+pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
+    let instructions = decode_detailed(bytecode)?;
+    let mut immediates = Vec::with_capacity(instructions.len());
+    for instruction in instructions {
+        match instruction {
+            DecodedInstruction::Push {
+                value,
+                opcode: 0x60,
+                ..
+            } => immediates.push(value.to::<u8>()),
+            DecodedInstruction::Push { opcode, offset, .. } => {
+                return Err(CompileError::UnsupportedInstruction { opcode, offset });
+            }
+            DecodedInstruction::Add { offset } => {
+                return Err(CompileError::UnsupportedInstruction {
+                    opcode: 0x01,
+                    offset,
+                });
+            }
+            DecodedInstruction::Sub { offset } => {
+                return Err(CompileError::UnsupportedInstruction {
+                    opcode: 0x03,
+                    offset,
+                });
+            }
+        }
+    }
+    compile_push1_program(&immediates)
 }
 
 /// Compiles a sequence of `PUSH1` immediates into one RV64 executable.

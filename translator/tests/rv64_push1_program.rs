@@ -1,7 +1,13 @@
 use asm_rs::{assemble, Arch};
 use ferrum_eth_translator::{
-    compiler::{compile_push1_program, PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE},
-    orchestrator::{execute_guest_push1_sequence, execute_guest_push1_sequence_with_initial_stack},
+    compiler::{
+        compile_evm_bytecode, compile_push1_program, CompileError,
+        PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
+    },
+    orchestrator::{
+        execute_guest_evm_bytecode, execute_guest_push1_sequence,
+        execute_guest_push1_sequence_with_initial_stack,
+    },
     rv64::{
         guest::GuestExecutionStatus,
         memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION},
@@ -85,4 +91,53 @@ fn linked_program_has_no_fallthrough_to_handlers_or_unpatched_trampoline() {
     let result = execute_guest_push1_sequence(&[5, 3]).expect("normal execution");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().exception_code(), 0);
+}
+
+#[test]
+fn bytecode_push1_programs_execute_in_one_rv64_run() {
+    for (bytecode, expected) in [
+        (&[0x60, 0x05][..], vec![U256::from(5)]),
+        (
+            &[0x60, 0x05, 0x60, 0x03][..],
+            vec![U256::from(5), U256::from(3)],
+        ),
+        (
+            &[0x60, 0x00, 0x60, 0xff][..],
+            vec![U256::ZERO, U256::from(255)],
+        ),
+    ] {
+        let result = execute_guest_evm_bytecode(bytecode).expect("compile and execute bytecode");
+        assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
+        assert_eq!(result.guest_result().stack(), expected);
+    }
+
+    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("two PUSH1s");
+    assert_eq!(result.instruction_metrics().total(), 27);
+}
+
+#[test]
+fn bytecode_compilation_reuses_the_push1_program_linker() {
+    let from_bytecode = compile_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("compile bytecode");
+    let from_sequence = compile_push1_program(&[5, 3]).expect("compile sequence");
+    assert_eq!(from_bytecode.machine_code(), from_sequence.machine_code());
+    assert_eq!(from_bytecode.assembly(), from_sequence.assembly());
+}
+
+#[test]
+fn bytecode_rejects_unimplemented_or_malformed_input_before_execution() {
+    for (bytecode, opcode, offset) in [
+        (&[0x01][..], 0x01, 0),
+        (&[0x03][..], 0x03, 0),
+        (&[0x61, 0, 1][..], 0x61, 0),
+    ] {
+        assert_eq!(
+            compile_evm_bytecode(bytecode),
+            Err(CompileError::UnsupportedInstruction { opcode, offset })
+        );
+    }
+
+    assert!(matches!(
+        compile_evm_bytecode(&[0x61, 0x05]),
+        Err(CompileError::Decode(_))
+    ));
 }

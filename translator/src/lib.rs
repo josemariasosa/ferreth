@@ -15,6 +15,22 @@ pub enum Instruction {
     Sub,
 }
 
+/// One decoded EVM instruction with source metadata for compiler diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodedInstruction {
+    Push {
+        value: U256,
+        opcode: u8,
+        offset: usize,
+    },
+    Add {
+        offset: usize,
+    },
+    Sub {
+        offset: usize,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
     UnsupportedOpcode {
@@ -52,6 +68,20 @@ impl std::error::Error for DecodeError {}
 
 /// Decodes the strict PUSH1-PUSH32, ADD and SUB research subset.
 pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
+    decode_detailed(bytecode).map(|instructions| {
+        instructions
+            .into_iter()
+            .map(|instruction| match instruction {
+                DecodedInstruction::Push { value, .. } => Instruction::Push(value),
+                DecodedInstruction::Add { .. } => Instruction::Add,
+                DecodedInstruction::Sub { .. } => Instruction::Sub,
+            })
+            .collect()
+    })
+}
+
+/// Decodes bytecode once while retaining opcode and byte-offset metadata.
+pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, DecodeError> {
     let mut instructions = Vec::new();
     let mut pc = 0;
     while pc < bytecode.len() {
@@ -59,8 +89,8 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
         let opcode = bytecode[pc];
         pc += 1;
         let instruction = match opcode {
-            0x01 => Instruction::Add,
-            0x03 => Instruction::Sub,
+            0x01 => DecodedInstruction::Add { offset },
+            0x03 => DecodedInstruction::Sub { offset },
             0x60..=0x7f => {
                 let width = usize::from(opcode - 0x5f);
                 let available = bytecode.len() - pc;
@@ -75,7 +105,11 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
                 let mut bytes = [0; 32];
                 bytes[32 - width..].copy_from_slice(&bytecode[pc..pc + width]);
                 pc += width;
-                Instruction::Push(U256::from_be_bytes(bytes))
+                DecodedInstruction::Push {
+                    value: U256::from_be_bytes(bytes),
+                    opcode,
+                    offset,
+                }
             }
             _ => return Err(DecodeError::UnsupportedOpcode { offset, opcode }),
         };
