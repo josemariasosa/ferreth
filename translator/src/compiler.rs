@@ -1,4 +1,4 @@
-//! Minimal whole-program composition for EVM `PUSH1` and `ADD` operations.
+//! Minimal whole-program composition for EVM `PUSH1`, `ADD`, and `SUB` operations.
 //!
 //! This is deliberately not an EVM decoder or a general compiler.  It links
 //! the reusable PUSH1 guest blocks into one executable and supplies the shared
@@ -12,6 +12,7 @@ use crate::rv64::{
     add::generate_guest_add,
     memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
     push::generate_guest_push1,
+    sub::generate_guest_sub,
 };
 use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
@@ -114,12 +115,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 return Err(CompileError::UnsupportedInstruction { opcode, offset });
             }
             DecodedInstruction::Add { .. } => operations.push(CompiledOperation::Add),
-            DecodedInstruction::Sub { offset } => {
-                return Err(CompileError::UnsupportedInstruction {
-                    opcode: 0x03,
-                    offset,
-                });
-            }
+            DecodedInstruction::Sub { .. } => operations.push(CompiledOperation::Sub),
         }
     }
     // Keep the established PUSH1-only linker (and therefore its exact output)
@@ -133,7 +129,9 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 .iter()
                 .map(|operation| match operation {
                     CompiledOperation::Push1(immediate) => *immediate,
-                    CompiledOperation::Add => unreachable!("checked above"),
+                    CompiledOperation::Add | CompiledOperation::Sub => {
+                        unreachable!("checked above")
+                    }
                 })
                 .collect::<Vec<_>>(),
         );
@@ -145,6 +143,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
 enum CompiledOperation {
     Push1(u8),
     Add,
+    Sub,
 }
 
 /// Links a mixed sequence of supported opcode bodies. Reaching the end still
@@ -175,6 +174,24 @@ fn compile_supported_program(
                     });
                 }
                 Ok(GeneratedOperation::Add { code, links })
+            }
+            CompiledOperation::Sub => {
+                let code = generate_guest_sub();
+                let links = code.link_metadata().ok_or_else(|| CompileError::Link {
+                    description: "SUB generator did not provide link metadata".to_owned(),
+                })?;
+                if links.normal_continuation_offset() != code.machine_code().len()
+                    || instruction_at(code.machine_code(), links.core_call_offset())? & 0x0000_0fff
+                        != 0x0000_00ef
+                    || instruction_at(code.machine_code(), links.exceptional_trampoline_offset())?
+                        != 0x0000_006f
+                {
+                    return Err(CompileError::Link {
+                        description: "SUB generator link metadata no longer describes its wrapper"
+                            .to_owned(),
+                    });
+                }
+                Ok(GeneratedOperation::Sub { code, links })
             }
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
@@ -235,6 +252,19 @@ fn compile_supported_program(
                     .copy_from_slice(&trampoline.to_le_bytes());
                 machine_code.extend_from_slice(&bytes);
             }
+            GeneratedOperation::Sub { code, links } => {
+                let trampoline_pc = operation_start
+                    + u64::try_from(links.exceptional_trampoline_offset())
+                        .expect("offset fits u64");
+                let offset = relative_jal_offset(trampoline_pc, underflow_start)?;
+                assembly.push_str(&linked_sub_assembly(code.assembly(), index, offset)?);
+                let mut bytes = code.machine_code().to_vec();
+                let trampoline = encode_jal_zero(offset)?;
+                let trampoline_offset = links.exceptional_trampoline_offset();
+                bytes[trampoline_offset..trampoline_offset + 4]
+                    .copy_from_slice(&trampoline.to_le_bytes());
+                machine_code.extend_from_slice(&bytes);
+            }
         }
     }
     assembly.push_str(&normal_assembly);
@@ -268,12 +298,18 @@ enum GeneratedOperation {
         code: crate::rv64::push::GeneratedRv64,
         links: crate::rv64::push::GeneratedRv64LinkMetadata,
     },
+    Sub {
+        code: crate::rv64::push::GeneratedRv64,
+        links: crate::rv64::push::GeneratedRv64LinkMetadata,
+    },
 }
 
 impl GeneratedOperation {
     fn len(&self) -> usize {
         match self {
-            Self::Push1 { code, .. } | Self::Add { code, .. } => code.machine_code().len(),
+            Self::Push1 { code, .. } | Self::Add { code, .. } | Self::Sub { code, .. } => {
+                code.machine_code().len()
+            }
         }
     }
 }
@@ -299,6 +335,32 @@ fn linked_add_assembly(
     if source.contains("guest_add_underflow:\n") || source.contains("evm_add:\n") {
         return Err(CompileError::Link {
             description: "ADD assembly no longer exposes patchable local labels".to_owned(),
+        });
+    }
+    Ok(source)
+}
+
+fn linked_sub_assembly(
+    source: &str,
+    index: usize,
+    underflow_offset: i64,
+) -> Result<String, CompileError> {
+    let source = source.replacen("guest_sub:\n", &format!("guest_sub_{index}:\n"), 1);
+    let source = source.replacen("jal ra, evm_sub", &format!("jal ra, evm_sub_{index}"), 1);
+    let source = source.replacen(
+        "bltu s1, t0, guest_sub_underflow",
+        &format!("bltu s1, t0, guest_sub_underflow_{index}"),
+        1,
+    );
+    let source = source.replacen(
+        "guest_sub_underflow:\n    jal zero, 0",
+        &format!("guest_sub_underflow_{index}:\n    jal zero, {underflow_offset}"),
+        1,
+    );
+    let source = source.replacen("evm_sub:\n", &format!("evm_sub_{index}:\n"), 1);
+    if source.contains("guest_sub_underflow:\n") || source.contains("evm_sub:\n") {
+        return Err(CompileError::Link {
+            description: "SUB assembly no longer exposes patchable local labels".to_owned(),
         });
     }
     Ok(source)
@@ -400,7 +462,7 @@ fn overflow_exit_assembly() -> String {
 
 fn underflow_exit_assembly() -> String {
     format!(
-        "add_stack_underflow_exit:\n\
+        "binary_stack_underflow_exit:\n\
          \x20   addi t1, s0, -2048\n\
          \x20   addi t1, t1, -2048\n\
          \x20   sd s1, 16(t1)\n\
@@ -433,7 +495,7 @@ fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, CompileErro
         .and_then(|bytes| bytes.try_into().ok())
         .map(u32::from_le_bytes)
         .ok_or_else(|| CompileError::Link {
-            description: format!("ADD link offset {offset} is outside generated code"),
+            description: format!("arithmetic link offset {offset} is outside generated code"),
         })
 }
 
