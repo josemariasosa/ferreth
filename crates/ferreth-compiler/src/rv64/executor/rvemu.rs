@@ -40,7 +40,7 @@ impl RvemuExecutor {
 
     fn validate_instruction_address(&self, address: u64) -> Result<(), ExecutorError> {
         self.validate_memory_access(address, 4)?;
-        if address % 4 == 0 {
+        if address.is_multiple_of(4) {
             Ok(())
         } else {
             Err(ExecutorError::InvalidInstructionAddress { address })

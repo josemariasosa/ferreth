@@ -50,12 +50,19 @@ The versioned `rv64-arithmetic-baseline` JSON includes:
 - `failures`: structured case and error evidence; it is empty for a passing
   run.
 
-### Checked-in historical baseline
+### Historical reference and approved current baseline
 
-The historical report is at
-[`crates/ferreth-compiler/runs/rv64-arithmetic.json`](../../crates/ferreth-compiler/runs/rv64-arithmetic.json).
-It records a seed of `42` and `1000` randomized cases per operation, in addition
-to 12 directed cases. Reproduce it with:
+The original historical JSON report was accidentally lost during repository
+migration and is not present in this checkout or its inspected Git history.
+The approved current baseline is
+[`runs/rv64-arithmetic.json`](../../runs/rv64-arithmetic.json). It is not a
+recovered historical artifact; it records the current implementation with
+`revm` `43.0.3`. The CLI does not create this artifact and it must not be
+overwritten by redirecting an unapproved run.
+
+The documented historical reference used seed `42` and `1000` randomized cases
+per operation, in addition to 12 directed cases. Generate a candidate for
+comparison with that reference using:
 
 ```sh
 cargo run -p ferreth-compiler -- bench --op ALL --cases 1000 --seed 42 --format json
@@ -70,13 +77,11 @@ The static routine size is 34 instruction words. Each successful case
 executes all 34 words, excluding the harness `EBREAK` return sentinel, giving
 `1,012 * 34 = 34,408` dynamic instructions per operation.
 
-**Verified metadata difference:** the checked-in historical report records
-`revm` version `19.7.0`; the current manifest and current CLI output record
-`revm` version `43.0.3`. A new run with seed 42 and 1,000 randomized cases
-matches the checked-in ADD/SUB case counts, 34-instruction counts, aggregate
-totals, routine sizes, and hashes. The dependency metadata differs, so compare
-the measurement fields rather than expecting the complete JSON files to be
-byte-for-byte identical.
+The documented historical metadata used `revm` `19.7.0`; the approved current
+baseline uses `revm` `43.0.3`. With seed 42 and 1,000 randomized cases, the
+current baseline preserves the listed ADD/SUB case counts, instruction counts,
+aggregate totals, routine sizes, and hashes. These matching measurements do
+not establish byte-for-byte equivalence with the lost historical artifact.
 
 ## Guest benchmarks
 
@@ -136,10 +141,10 @@ adds one executed instruction compared with the same program without STOP.
 
 ## Reproducing and comparing results
 
-Never redirect a new benchmark into the checked-in report. The following
-commands save a fresh baseline run to a temporary file, pretty-print its JSON,
-and compare the measurement fields to the historical report. Run the block
-from the workspace root; it requires `python3` only for inspection/comparison.
+Never redirect a new benchmark into the canonical artifact path. The following
+commands save a fresh candidate to a temporary file and pretty-print its JSON.
+Run the block from the workspace root; it requires `python3` only for
+inspection.
 
 ```sh
 tmp_report="$(mktemp)"
@@ -151,65 +156,21 @@ cargo run -p ferreth-compiler -- \
 
 python3 -m json.tool "$tmp_report"
 
-python3 - "$tmp_report" crates/ferreth-compiler/runs/rv64-arithmetic.json <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    current = json.load(stream)
-with open(sys.argv[2], encoding="utf-8") as stream:
-    historical = json.load(stream)
-
-configuration_fields = (
-    "seed",
-    "random_cases_per_operation",
-    "random_generator",
-    "emulator",
-    "evm_spec",
-)
-for field in configuration_fields:
-    assert current["configuration"][field] == historical["configuration"][field], field
-
-operation_fields = ("name", "cases")
-rv64_fields = (
-    "machine_code_fnv1a64",
-    "routine_instruction_words",
-    "instructions_per_case",
-    "instruction_categories",
-)
-if len(current["operations"]) != len(historical["operations"]):
-    raise SystemExit("operation counts differ")
-for actual, reference in zip(current["operations"], historical["operations"]):
-    for field in operation_fields:
-        assert actual[field] == reference[field], (actual["name"], field)
-    for field in rv64_fields:
-        assert actual["rv64"][field] == reference["rv64"][field], (
-            actual["name"],
-            field,
-        )
-
-print("ADD/SUB benchmark measurements match the historical report.")
-print(
-    "revm metadata:",
-    historical["configuration"]["dependencies"]["revm"],
-    "(historical) vs",
-    current["configuration"]["dependencies"]["revm"],
-    "(current)",
-)
-PY
 ```
 
-The comparison intentionally excludes dependency versions because the checked
-in report predates the current `revm` dependency. To inspect just the guest
-JSON, run the guest benchmark and pipe or redirect stdout as needed:
+Compare a candidate's configuration, schema, hashes, and measurement fields
+to the documented values above. Dependency metadata differs from the historical
+reference, so matching instruction counts do not prove byte-for-byte
+equivalence. To inspect just the guest JSON, run the guest benchmark and pipe
+or redirect stdout as needed:
 
 ```sh
 cargo run -p ferreth-compiler -- bench guest --format json
 ```
 
 The CLI has no output-file option; shell redirection is the supported way to
-capture reports. Use a new temporary path for each run and retain the
-checked-in report unchanged.
+capture reports. Use a new temporary path for each run. Do not treat a
+candidate as an approved baseline without explicit authorization.
 
 ## Regression checklist
 
@@ -221,6 +182,6 @@ checked-in report unchanged.
       remain reproducible.
 - [ ] Confirm `6005600301` reports 69 instructions and explicit STOP in
       `600560030100` reports 70.
-- [ ] Write reports to a temporary file; do not overwrite
-      `crates/ferreth-compiler/runs/rv64-arithmetic.json`.
+- [ ] Write reports to a temporary file; do not create or overwrite
+      `runs/rv64-arithmetic.json` without approval.
 - [ ] Run all package tests with `cargo test -p ferreth-compiler`.

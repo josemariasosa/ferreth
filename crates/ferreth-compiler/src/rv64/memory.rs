@@ -225,7 +225,7 @@ pub fn validate_alignment(address: u64, alignment: u64) -> Result<(), LayoutErro
     if alignment == 0 || !alignment.is_power_of_two() {
         return Err(LayoutError::InvalidAlignment { alignment });
     }
-    if address % alignment == 0 {
+    if address.is_multiple_of(alignment) {
         Ok(())
     } else {
         Err(LayoutError::MisalignedAddress { address, alignment })
@@ -262,7 +262,7 @@ pub fn validate_generated_code(entry_pc: u64, code_len: usize) -> Result<(), Lay
 
 /// Checks the fixed EVM stack constants against the accepted ABI.
 pub fn validate_evm_stack_layout() -> Result<(), LayoutError> {
-    if EVM_STACK_REGION.start() % EVM_WORD_SIZE != 0
+    if !EVM_STACK_REGION.start().is_multiple_of(EVM_WORD_SIZE)
         || EVM_STACK_REGION.size() != EVM_STACK_SIZE
         || EVM_STACK_SIZE != 32 * 1024
         || EVM_STACK_CAPACITY != 1024
@@ -282,7 +282,7 @@ pub fn evm_stack_depth(next_free: u64) -> Result<u64, LayoutError> {
         return Err(LayoutError::StackPointerOutOfRange { next_free });
     }
     let offset = next_free - EVM_STACK_REGION.start();
-    if offset % EVM_WORD_SIZE != 0 {
+    if !offset.is_multiple_of(EVM_WORD_SIZE) {
         return Err(LayoutError::StackPointerMisaligned { next_free });
     }
     Ok(offset / EVM_WORD_SIZE)

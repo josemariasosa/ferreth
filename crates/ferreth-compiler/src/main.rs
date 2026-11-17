@@ -260,7 +260,7 @@ fn parse_push1_sequence(value: &str) -> Option<Vec<u8>> {
 }
 
 fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     (0..value.len())

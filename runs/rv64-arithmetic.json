@@ -1,0 +1,87 @@
+{
+    "configuration": {
+        "dependencies": {
+            "asm_rs": "0.2.0",
+            "revm": "43.0.3",
+            "rvemu": "0.0.11"
+        },
+        "emulator": "rvemu",
+        "evm_reference": "revm",
+        "evm_spec": "CANCUN",
+        "random_cases_per_operation": 1000,
+        "random_generator": "xorshift64",
+        "seed": 42
+    },
+    "experiment": "rv64-arithmetic-baseline",
+    "operations": [
+        {
+            "cases": {
+                "directed": 12,
+                "failed": 0,
+                "passed": 1012,
+                "random": 1000,
+                "total": 1012
+            },
+            "evm_opcode": "0x01",
+            "failures": [],
+            "name": "ADD",
+            "rv64": {
+                "executed_cases": 1012,
+                "instruction_categories": {
+                    "arithmetic": 9108,
+                    "comparisons": 8096,
+                    "control_flow": 1012,
+                    "loads": 8096,
+                    "logical": 4048,
+                    "other": 0,
+                    "scope": "aggregate across executed cases",
+                    "stores": 4048,
+                    "total_executed": 34408
+                },
+                "instructions_per_case": {
+                    "max": 34,
+                    "mean": 34.000000,
+                    "min": 34
+                },
+                "machine_code_fnv1a64": "fnv1a64:0xf1fff32ff47962f3",
+                "measurement": "decoded 32-bit instructions successfully executed by rvemu; harness EBREAK excluded",
+                "routine_instruction_words": 34
+            }
+        },
+        {
+            "cases": {
+                "directed": 12,
+                "failed": 0,
+                "passed": 1012,
+                "random": 1000,
+                "total": 1012
+            },
+            "evm_opcode": "0x03",
+            "failures": [],
+            "name": "SUB",
+            "rv64": {
+                "executed_cases": 1012,
+                "instruction_categories": {
+                    "arithmetic": 9108,
+                    "comparisons": 8096,
+                    "control_flow": 1012,
+                    "loads": 8096,
+                    "logical": 4048,
+                    "other": 0,
+                    "scope": "aggregate across executed cases",
+                    "stores": 4048,
+                    "total_executed": 34408
+                },
+                "instructions_per_case": {
+                    "max": 34,
+                    "mean": 34.000000,
+                    "min": 34
+                },
+                "machine_code_fnv1a64": "fnv1a64:0x9f008f320eeb7a7b",
+                "measurement": "decoded 32-bit instructions successfully executed by rvemu; harness EBREAK excluded",
+                "routine_instruction_words": 34
+            }
+        }
+    ],
+    "schema_version": 1
+}

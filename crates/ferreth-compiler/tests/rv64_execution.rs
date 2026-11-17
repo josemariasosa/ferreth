@@ -357,7 +357,7 @@ fn mixed_arithmetic_random_programs() {
         let mut program = vec![Push(random_u256(&mut state)), Push(random_u256(&mut state))];
         let mut depth = 2;
         for operation_index in 0..operations {
-            if depth < 2 || next_program_random(&mut state) % 4 == 0 {
+            if depth < 2 || next_program_random(&mut state).is_multiple_of(4) {
                 program.push(Push(random_u256(&mut state)));
                 depth += 1;
             }
@@ -366,7 +366,7 @@ fn mixed_arithmetic_random_programs() {
                 0 => Sub,
                 1 if index % 2 == 0 => Sub,
                 1 => Add,
-                _ if next_program_random(&mut state) % 2 == 0 => Add,
+                _ if next_program_random(&mut state).is_multiple_of(2) => Add,
                 _ => Sub,
             };
             program.push(instruction);

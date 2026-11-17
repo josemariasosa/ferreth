@@ -302,12 +302,11 @@ fn bytecode_compilation_reuses_the_push1_program_linker() {
 
 #[test]
 fn bytecode_rejects_unimplemented_or_malformed_input_before_execution() {
-    for (bytecode, opcode, offset) in [(&[0x61, 0, 1][..], 0x61, 0)] {
-        assert_eq!(
-            compile_evm_bytecode(bytecode),
-            Err(CompileError::UnsupportedInstruction { opcode, offset })
-        );
-    }
+    let (bytecode, opcode, offset) = (&[0x61, 0, 1][..], 0x61, 0);
+    assert_eq!(
+        compile_evm_bytecode(bytecode),
+        Err(CompileError::UnsupportedInstruction { opcode, offset })
+    );
 
     assert!(matches!(
         compile_evm_bytecode(&[0x61, 0x05]),

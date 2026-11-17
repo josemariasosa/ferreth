@@ -8,9 +8,9 @@
 
 ADR-001 is implemented for the initial `STOP`, `PUSH1`, `ADD`, and `SUB` subset. Ferreth provides a defined RV64 guest memory layout, an ascending U256 stack, a result-publication ABI, PC-sentinel termination, reusable arithmetic cores, and a backend-neutral executor interface.
 
-Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 instructions through the shared guest ABI. The initial implementation is validated through unit tests, integration tests, arithmetic differential tests against REVM, and reproducible instruction-count benchmarks.
+Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 instructions through the shared guest ABI. The initial implementation is validated through unit tests, integration tests, deterministic whole-program RC-to-REVM differential tests, and reproducible instruction-count benchmarks.
 
-**Remaining work:** Direct whole-program RC-to-REVM differential validation, broader EVM opcode coverage, stable exception-code definitions, and optional alternative execution backends. Native-stack execution and full EVM compatibility remain outside the initial ADR scope.
+**Remaining work:** Broader EVM opcode coverage, stable exception-code definitions, and optional alternative execution backends. Native-stack execution and full EVM compatibility remain outside the initial ADR scope.
 
 | Component | Status | Evidence / Remaining work |
 |---|---|---|
@@ -25,7 +25,7 @@ Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 in
 | Rust Orchestrator (RO) execution path | Implemented | `orchestrator.rs` runs isolated PUSH1, ADD, and SUB guest programs through the shared ABI. |
 | Rust Compiler (RC) whole-program execution path | Implemented | `compiler.rs` compiles supported bytecode to one linked RV64 executable; `orchestrator.rs` executes it without per-opcode Rust callbacks. |
 | Supported EVM opcodes | Partially implemented | RC supports `STOP`, `PUSH1`, `ADD`, and `SUB`; decoding additionally recognizes `PUSH2`–`PUSH32`, which RC rejects. Full EVM is not in initial scope. |
-| REVM differential validation | Partially implemented | Arithmetic-core benchmark and tests compare RV64 execution with REVM 43.0.3 configured for `CANCUN`; whole-program RC differential coverage remains pending. |
+| REVM differential validation | Implemented for initial subset | Directed and seeded randomized whole-program RC tests compare generated RV64 execution with REVM 43.0.3 configured for `CANCUN`; broader opcode coverage remains future work. |
 | Benchmark scopes (`opcode_core`, `opcode_guest`, `program_guest`) | Implemented | `benchmark.rs` produces the arithmetic baseline and deterministic guest/program measurements with split body and termination counts. |
 | Native RV64 execution or alternative executor backends | Not in initial scope | The native stack is reserved but unused; rvemu is the only backend. ADR-001 explicitly leaves Unicorn/other backend work optional. |
 

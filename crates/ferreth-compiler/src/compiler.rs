@@ -504,7 +504,10 @@ fn assembly_error(error: impl fmt::Debug) -> CompileError {
 }
 
 fn instruction_count(machine_code: &[u8]) -> Result<u64, CompileError> {
-    if machine_code.len() % RV64_INSTRUCTION_SIZE as usize != 0 {
+    if !machine_code
+        .len()
+        .is_multiple_of(RV64_INSTRUCTION_SIZE as usize)
+    {
         return Err(CompileError::Link {
             description: "linked code is not a sequence of 32-bit instructions".to_owned(),
         });
