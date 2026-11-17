@@ -8,7 +8,12 @@
 
 use std::fmt;
 
-use super::memory::{evm_stack_depth, LayoutError};
+use super::{
+    executor::{ExecutorError, IntegerRegister, Rv64Executor},
+    memory::{
+        evm_stack_depth, validate_evm_stack_layout, LayoutError, EVM_STACK_REGION, METADATA_REGION,
+    },
+};
 
 /// Offset of the `status` field in the guest result record.
 pub const GUEST_METADATA_STATUS_OFFSET: usize = 0x00;
@@ -18,6 +23,78 @@ pub const GUEST_METADATA_EXCEPTION_CODE_OFFSET: usize = 0x08;
 pub const GUEST_METADATA_FINAL_S1_OFFSET: usize = 0x10;
 /// Exact encoded size of the guest result record.
 pub const GUEST_METADATA_ENCODED_SIZE: usize = 24;
+
+/// Failures while preparing an executor for a new guest execution.
+///
+/// A failed initialization never reports a ready guest. In particular, an
+/// executor memory-write failure is returned to the caller rather than being
+/// represented as guest metadata. No rollback of a partially completed backend
+/// memory write is attempted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestInitializationError {
+    Layout(LayoutError),
+    Executor(ExecutorError),
+}
+
+impl fmt::Display for GuestInitializationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Layout(error) => write!(f, "invalid guest initialization layout: {error}"),
+            Self::Executor(error) => write!(f, "could not initialize guest state: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for GuestInitializationError {}
+
+impl From<LayoutError> for GuestInitializationError {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
+    }
+}
+
+impl From<ExecutorError> for GuestInitializationError {
+    fn from(error: ExecutorError) -> Self {
+        Self::Executor(error)
+    }
+}
+
+/// Initializes the ABI-owned state for one new EVM guest execution.
+///
+/// This uses only [`Rv64Executor`]: it sets `s0` and `s1` to the EVM stack
+/// base and writes the initial 24-byte `RUNNING` metadata record. Therefore
+/// the stack is logically empty even when a reused executor still contains
+/// stale bytes in the stack reservation; no stack word is live while
+/// `s0 == s1`, so the initializer neither clears nor reads those bytes.
+///
+/// The current guest code does not use the native call stack, so `sp` and all
+/// unrelated registers are preserved. A later runtime that requires `sp` must
+/// initialize it independently inside [`super::memory::NATIVE_STACK_REGION`]
+/// with the required ABI alignment. Code loading and execution-PC management
+/// also remain the caller's responsibilities: use [`super::memory::ENTRY_PC`]
+/// and [`super::memory::EXIT_PC`] with [`Rv64Executor::execute`].
+///
+/// Repeated calls restore the two ABI registers and overwrite all 24 metadata
+/// bytes. The metadata write occurs before either register is changed, so a
+/// reported write failure does not present a newly initialized register pair as
+/// successful initialization.
+pub fn initialize_guest_state(
+    executor: &mut impl Rv64Executor,
+) -> Result<(), GuestInitializationError> {
+    validate_evm_stack_layout()?;
+    METADATA_REGION.validate_aligned_access(
+        METADATA_REGION.start(),
+        GUEST_METADATA_ENCODED_SIZE,
+        std::mem::size_of::<u64>() as u64,
+    )?;
+
+    let stack_base = EVM_STACK_REGION.start();
+    let metadata = GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base).encode();
+    executor.write_memory(METADATA_REGION.start(), &metadata)?;
+    executor.write_register(IntegerRegister::EVM_STACK_BASE, stack_base);
+    executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, stack_base);
+    Ok(())
+}
 
 /// Backend-neutral guest execution status published in the result record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

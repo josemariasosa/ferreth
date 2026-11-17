@@ -25,6 +25,12 @@ impl IntegerRegister {
 
     pub const ZERO: Self = Self(0);
     pub const RETURN_ADDRESS: Self = Self(1);
+    /// Native RISC-V stack pointer (`sp`, x2).
+    pub const STACK_POINTER: Self = Self(2);
+    /// EVM guest operand-stack base (`s0`, x8).
+    pub const EVM_STACK_BASE: Self = Self(8);
+    /// EVM guest next-free operand-stack pointer (`s1`, x9).
+    pub const EVM_STACK_NEXT_FREE: Self = Self(9);
 
     pub fn index(self) -> u8 {
         self.0
