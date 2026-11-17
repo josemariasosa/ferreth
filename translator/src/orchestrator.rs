@@ -26,9 +26,7 @@ use crate::{
 /// rvemu version used by this initial isolated-opcode orchestrator.
 pub const EXECUTOR_IDENTITY: &str = "rvemu 0.0.11";
 
-/// Explicitly provisional guest exception code for an EVM binary-operation
-/// stack underflow.
-pub const PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE: u64 = 2;
+pub use crate::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE;
 
 /// Explicitly provisional guest exception code for a rejected EVM stack push.
 ///
@@ -229,14 +227,25 @@ pub fn execute_guest_add_with_initial_stack(
     )
 }
 
-/// Decodes, compiles, and executes a PUSH1-only EVM bytecode program once.
+/// Decodes, compiles, and executes a supported EVM bytecode program once.
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not
 /// execute individual EVM operations.
 pub fn execute_guest_evm_bytecode(
     bytecode: &[u8],
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_linked_program(compile_evm_bytecode(bytecode)?, &[])
+    execute_guest_evm_bytecode_with_initial_stack(bytecode, &[])
+}
+
+/// Executes supported bytecode once with a host-provided valid initial stack.
+///
+/// This is test-facing ABI setup; compilation itself never interprets EVM
+/// operations. It also exposes ADD's zero- and one-word underflow paths.
+pub fn execute_guest_evm_bytecode_with_initial_stack(
+    bytecode: &[u8],
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_linked_program(compile_evm_bytecode(bytecode)?, initial_stack)
 }
 
 fn execute_linked_program(

@@ -5,10 +5,11 @@ use ferrum_eth_translator::{
         PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
     },
     orchestrator::{
-        execute_guest_evm_bytecode, execute_guest_push1_sequence,
-        execute_guest_push1_sequence_with_initial_stack,
+        execute_guest_evm_bytecode, execute_guest_evm_bytecode_with_initial_stack,
+        execute_guest_push1_sequence, execute_guest_push1_sequence_with_initial_stack,
     },
     rv64::{
+        add::generate_guest_add,
         guest::GuestExecutionStatus,
         memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION},
     },
@@ -116,6 +117,65 @@ fn bytecode_push1_programs_execute_in_one_rv64_run() {
 }
 
 #[test]
+fn bytecode_push1_and_add_programs_execute_as_one_linked_rv64_program() {
+    for (bytecode, expected) in [
+        (&[0x60, 5, 0x60, 3, 0x01][..], vec![U256::from(8)]),
+        (&[0x60, 1, 0x60, 2, 0x01][..], vec![U256::from(3)]),
+        (
+            &[0x60, 5, 0x60, 3, 0x01, 0x60, 2, 0x01][..],
+            vec![U256::from(10)],
+        ),
+    ] {
+        let first = execute_guest_evm_bytecode(bytecode).expect("compile and execute bytecode");
+        let second = execute_guest_evm_bytecode(bytecode).expect("repeat bytecode execution");
+        assert_eq!(first.guest_result().status(), GuestExecutionStatus::Normal);
+        assert_eq!(first.guest_result().exception_code(), 0);
+        assert_eq!(first.guest_result().stack(), expected);
+        assert_eq!(first.instruction_metrics(), second.instruction_metrics());
+    }
+
+    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01])
+        .expect("PUSH1 PUSH1 ADD executes once");
+    assert_eq!(result.instruction_metrics().opcode_body(), 62);
+    assert_eq!(result.instruction_metrics().guest_termination(), 7);
+    assert_eq!(result.instruction_metrics().total(), 69);
+}
+
+#[test]
+fn compiled_add_underflow_publishes_terminal_metadata_without_mutating_stack() {
+    for initial_stack in [vec![], vec![U256::from(9)]] {
+        let expected_s1 = EVM_STACK_REGION.start() + initial_stack.len() as u64 * 32;
+        let result = execute_guest_evm_bytecode_with_initial_stack(&[0x01], &initial_stack)
+            .expect("ADD underflow reaches the shared guest publisher");
+        assert_eq!(
+            result.guest_result().status(),
+            GuestExecutionStatus::GuestException
+        );
+        assert_eq!(
+            result.guest_result().exception_code(),
+            ferrum_eth_translator::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE
+        );
+        assert_eq!(result.guest_result().final_s1(), expected_s1);
+        assert_eq!(result.guest_result().stack(), initial_stack);
+        assert_eq!(result.instruction_metrics().total(), 11);
+    }
+}
+
+#[test]
+fn mixed_linker_keeps_the_generated_add_core_machine_code_unchanged() {
+    let generated = generate_guest_add();
+    let compiled = compile_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01]).expect("compile mixed program");
+    let add_start = 2 * 11 * 4;
+    // The continuation is the end of the generated body; the core starts at
+    // the documented fixed wrapper width (nine instructions).
+    let core_start = add_start + 9 * 4;
+    assert_eq!(
+        &compiled.machine_code()[core_start..core_start + generated.machine_code().len() - 9 * 4],
+        &generated.machine_code()[9 * 4..]
+    );
+}
+
+#[test]
 fn bytecode_compilation_reuses_the_push1_program_linker() {
     let from_bytecode = compile_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("compile bytecode");
     let from_sequence = compile_push1_program(&[5, 3]).expect("compile sequence");
@@ -125,11 +185,7 @@ fn bytecode_compilation_reuses_the_push1_program_linker() {
 
 #[test]
 fn bytecode_rejects_unimplemented_or_malformed_input_before_execution() {
-    for (bytecode, opcode, offset) in [
-        (&[0x01][..], 0x01, 0),
-        (&[0x03][..], 0x03, 0),
-        (&[0x61, 0, 1][..], 0x61, 0),
-    ] {
+    for (bytecode, opcode, offset) in [(&[0x03][..], 0x03, 0), (&[0x61, 0, 1][..], 0x61, 0)] {
         assert_eq!(
             compile_evm_bytecode(bytecode),
             Err(CompileError::UnsupportedInstruction { opcode, offset })
