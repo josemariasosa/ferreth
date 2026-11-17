@@ -54,6 +54,8 @@ dump.fst
 # Agent outputs
 runs/*
 !runs/.gitkeep
+translator/runs/*
+!translator/runs/.gitkeep
 
 # Logs (exclude specific agent log patterns we want to track)
 orchestrator/*.log
