@@ -196,7 +196,7 @@ impl BenchmarkReport {
         push_json_field_string(&mut output, "evm_spec", "CANCUN", true);
         output.push_str(",\"dependencies\":{");
         push_json_field_string(&mut output, "asm_rs", "0.2.0", false);
-        push_json_field_string(&mut output, "revm", "19.7.0", true);
+        push_json_field_string(&mut output, "revm", "43.0.3", true);
         push_json_field_string(&mut output, "rvemu", "0.0.11", true);
         output.push_str("}}");
         output.push_str(",\"operations\":[");

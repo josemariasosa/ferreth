@@ -1,4 +1,4 @@
-use ferrum_eth_translator::rv64::{
+use ferreth_compiler::rv64::{
     executor::{IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::{
         initialize_guest_state, read_evm_word, write_evm_word, GuestMemoryError, GuestMetadata,

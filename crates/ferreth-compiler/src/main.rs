@@ -1,4 +1,4 @@
-use ferrum_eth_translator::{
+use ferreth_compiler::{
     benchmark::{run_benchmark, run_guest_benchmark, BenchOptions},
     decode,
     execution::DEFAULT_RANDOM_SEED,

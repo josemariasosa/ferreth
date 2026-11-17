@@ -1,4 +1,4 @@
-use ferrum_eth_translator::rv64::{
+use ferreth_compiler::rv64::{
     executor::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::{
         initialize_guest_state, read_guest_result, GuestExecutionStatus, GuestMetadata,
@@ -220,7 +220,7 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
             )
             .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
-                ferrum_eth_translator::rv64::memory::LayoutError::StackPointerMisaligned {
+                ferreth_compiler::rv64::memory::LayoutError::StackPointerMisaligned {
                     next_free: EVM_STACK_REGION.start() + 1,
                 },
             )),
@@ -234,7 +234,7 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
             )
             .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
-                ferrum_eth_translator::rv64::memory::LayoutError::StackPointerOutOfRange {
+                ferreth_compiler::rv64::memory::LayoutError::StackPointerOutOfRange {
                     next_free: EVM_STACK_REGION.start() - 32,
                 },
             )),
@@ -244,7 +244,7 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
             GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.end() + 32)
                 .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
-                ferrum_eth_translator::rv64::memory::LayoutError::StackPointerOutOfRange {
+                ferreth_compiler::rv64::memory::LayoutError::StackPointerOutOfRange {
                     next_free: EVM_STACK_REGION.end() + 32,
                 },
             )),

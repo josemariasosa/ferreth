@@ -88,9 +88,11 @@ limit. The generated function uses RV64I instructions, which are a subset of
 RV64IM. It does not use a software fallback for RV64 execution.
 
 The other path constructs EVM bytecode with `PUSH32`, the tested opcode,
-`MSTORE`, and `RETURN` and executes it through revm using the fixed Cancun
-hardfork. For SUB it pushes B first and then A, so the EVM stack evaluates
-`A - B`. Each path produces all 32 result bytes independently; ADD compares
+`MSTORE`, and `RETURN` and executes it through revm 43 using the fixed Cancun
+hardfork. The reference uses an in-memory contract and a validated call with
+zero gas price and a 1,000,000 gas limit. For SUB it pushes B first and then
+A, so the EVM stack evaluates `A - B`. Each path produces all 32 result bytes
+independently; ADD compares
 seven fixed cases and 1,000 deterministic randomized inputs, while SUB checks
 nine directed cases (including wraparound and multi-limb borrows), 1,000
 random pairs, and their reverse-operand counterparts, all with seed

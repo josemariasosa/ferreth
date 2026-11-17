@@ -1,5 +1,5 @@
 use asm_rs::{assemble, Arch};
-use ferrum_eth_translator::{
+use ferreth_compiler::{
     add_u256,
     rv64::{
         add::generate_guest_add,

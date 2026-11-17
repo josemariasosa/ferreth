@@ -1,5 +1,5 @@
 use asm_rs::{assemble, Arch};
-use ferrum_eth_translator::{
+use ferreth_compiler::{
     compiler::{
         compile_evm_bytecode, compile_push1_program, CompileError,
         PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
@@ -212,7 +212,7 @@ fn compiled_add_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(
             result.guest_result().exception_code(),
-            ferrum_eth_translator::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE
+            ferreth_compiler::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);
@@ -253,7 +253,7 @@ fn compiled_sub_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(
             result.guest_result().exception_code(),
-            ferrum_eth_translator::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE
+            ferreth_compiler::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);

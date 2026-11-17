@@ -1,5 +1,5 @@
 use asm_rs::{assemble, Arch};
-use ferrum_eth_translator::rv64::{
+use ferreth_compiler::rv64::{
     executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::initialize_guest_state,
     memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},

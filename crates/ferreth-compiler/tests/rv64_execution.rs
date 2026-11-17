@@ -1,4 +1,4 @@
-use ferrum_eth_translator::{
+use ferreth_compiler::{
     decode,
     execution::{
         directed_cases, hex, random_u256, run_evm, run_evm_bytecode, ProgramRunner, Rv64Runner,
@@ -73,6 +73,30 @@ fn evm_sub_pushes_b_before_a() {
     let result = run_evm(Opcode::Sub, U256::from(7), U256::from(5))
         .expect("execute revm SUB stack-order check");
     assert_eq!(result, U256::from(2), "EVM SUB must evaluate 7 - 5");
+}
+
+#[test]
+fn revm_reference_uses_cancun_and_reports_execution_errors() {
+    // Cancun transient storage is available and returns the stored value.
+    let cancun = vec![
+        0x60, 0x2a, 0x60, 0x00, 0x5d, 0x60, 0x00, 0x5c, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00,
+        0xf3,
+    ];
+    assert_eq!(run_evm_bytecode(cancun), Ok(U256::from(42)));
+
+    for (bytecode, expected) in [
+        (vec![0x01], "StackUnderflow"),
+        (vec![0x60, 0x00, 0x60, 0x00, 0xfd], "Revert"),
+        (vec![0x00], "Success"),
+        (vec![0x60, 0x01, 0x1e], "NotActivated"),
+        (vec![0xef, 0x01], "OpcodeNotFound"),
+    ] {
+        let error = run_evm_bytecode(bytecode).expect_err("reference must reject this result");
+        assert!(
+            error.contains(expected),
+            "expected {expected} in reference error: {error}"
+        );
+    }
 }
 
 #[test]

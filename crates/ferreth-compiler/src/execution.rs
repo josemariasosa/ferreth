@@ -6,11 +6,13 @@
 
 use asm_rs::{assemble, Arch};
 use revm::{
-    db::InMemoryDB,
-    primitives::{
-        AccountInfo, Address, Bytecode, ExecutionResult, Output, SpecId, TransactTo, U256,
-    },
-    Evm,
+    bytecode::Bytecode,
+    context::TxEnv,
+    context_interface::result::{ExecutionResult, Output},
+    database::InMemoryDB,
+    primitives::{hardfork::SpecId, Address, U256},
+    state::AccountInfo,
+    Context, ExecuteEvm, MainBuilder, MainContext,
 };
 
 use crate::{
@@ -303,19 +305,22 @@ pub fn run_evm_bytecode(bytecode: Vec<u8>) -> Result<U256, String> {
     let mut database = InMemoryDB::default();
     database.insert_account_info(
         contract,
-        AccountInfo::from_bytecode(Bytecode::new_raw(bytecode.into())),
+        AccountInfo::default().with_code(Bytecode::new_legacy(bytecode.into())),
     );
-    let mut evm = Evm::builder()
+    let mut evm = Context::mainnet()
         .with_db(database)
-        .with_spec_id(SpecId::CANCUN)
-        .modify_tx_env(|tx| {
-            tx.caller = caller;
-            tx.transact_to = TransactTo::Call(contract);
-            tx.gas_limit = 1_000_000;
-        })
-        .build();
+        .modify_cfg_chained(|cfg| cfg.spec = SpecId::CANCUN)
+        .build_mainnet();
+    let tx = TxEnv::builder()
+        .caller(caller)
+        .call(contract)
+        .gas_limit(1_000_000)
+        .gas_price(0)
+        .chain_id(None)
+        .build()
+        .map_err(|error| format!("revm transaction configuration failed: {error:?}"))?;
     let result = evm
-        .transact_preverified()
+        .transact(tx)
         .map_err(|error| format!("revm transaction failed: {error:?}"))?
         .result;
     match result {

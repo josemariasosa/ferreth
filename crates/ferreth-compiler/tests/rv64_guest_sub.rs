@@ -1,5 +1,5 @@
 use asm_rs::{assemble, Arch};
-use ferrum_eth_translator::{
+use ferreth_compiler::{
     execution::run_evm,
     rv64::{
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
