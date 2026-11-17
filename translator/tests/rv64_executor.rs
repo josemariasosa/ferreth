@@ -52,6 +52,22 @@ fn executes_loaded_program_and_stops_before_exit_sentinel() {
 }
 
 #[test]
+fn execute_until_stops_at_a_measured_publisher_boundary_before_fetching_it() {
+    let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
+    let boundary = RvemuExecutor::DRAM_BASE + 4;
+    executor
+        .load_code(&program(&[ADDI_X5_X0_42, EBREAK]))
+        .expect("load RV64 program");
+
+    let body = executor
+        .execute_until(RvemuExecutor::DRAM_BASE, &[boundary], 2)
+        .expect("stop at boundary");
+    assert_eq!(body.executed_instructions, 1);
+    assert_eq!(body.exit_pc, boundary);
+    assert_eq!(executor.read_register(IntegerRegister::new(5).unwrap()), 42);
+}
+
+#[test]
 fn guest_jumps_to_the_reserved_exit_pc_before_it_is_fetched() {
     let machine_code = program(&[ADDI_X5_X0_42, jal_x0((EXIT_PC - (ENTRY_PC + 4)) as u32)]);
     validate_generated_code(ENTRY_PC, machine_code.len())

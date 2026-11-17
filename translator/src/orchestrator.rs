@@ -16,8 +16,8 @@ use crate::{
         add::generate_guest_add,
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
-            initialize_guest_state, read_guest_result, write_evm_word, GuestExecutionStatus,
-            GuestInitializationError, GuestMemoryError, GuestResult, GuestResultError,
+            initialize_guest_state, read_guest_result, write_evm_word, GuestInitializationError,
+            GuestMemoryError, GuestResult, GuestResultError,
         },
         memory::{LayoutError, ENTRY_PC, EVM_STACK_CAPACITY, EVM_STACK_REGION, EXIT_PC},
         sub::generate_guest_sub,
@@ -222,8 +222,7 @@ pub fn execute_guest_add_with_initial_stack(
     execute_raw_program(
         linked.assembly,
         linked.machine_code,
-        linked.normal_termination_instructions,
-        linked.exceptional_termination_instructions,
+        &linked.termination_entry_pcs,
         initial_stack,
     )
 }
@@ -247,8 +246,7 @@ pub fn execute_guest_sub_with_initial_stack(
     execute_raw_program(
         linked.assembly,
         linked.machine_code,
-        linked.normal_termination_instructions,
-        linked.exceptional_termination_instructions,
+        &linked.termination_entry_pcs,
         initial_stack,
     )
 }
@@ -281,8 +279,7 @@ fn execute_linked_program(
     execute_raw_program(
         linked.assembly().to_owned(),
         linked.machine_code().to_vec(),
-        linked.normal_termination_instructions(),
-        linked.exceptional_termination_instructions(),
+        linked.termination_entry_pcs(),
         initial_stack,
     )
 }
@@ -290,8 +287,7 @@ fn execute_linked_program(
 fn execute_raw_program(
     assembly: String,
     machine_code: Vec<u8>,
-    normal_termination_instructions: u64,
-    exceptional_termination_instructions: u64,
+    termination_entry_pcs: &[u64],
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
     if initial_stack.len() > EVM_STACK_CAPACITY as usize {
@@ -316,19 +312,23 @@ fn execute_raw_program(
     executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, initial_s1);
 
     let instruction_limit = u64::try_from(machine_code.len() / 4).expect("code length fits u64");
-    let report = executor.execute(ENTRY_PC, EXIT_PC, instruction_limit)?;
-    let guest_result = read_guest_result(&mut executor, &report)?;
-    let guest_termination = match guest_result.status() {
-        GuestExecutionStatus::Normal => normal_termination_instructions,
-        GuestExecutionStatus::GuestException => exceptional_termination_instructions,
-        GuestExecutionStatus::Running => unreachable!("guest result validation rejects RUNNING"),
-    };
-    let opcode_body = report
-        .executed_instructions
-        .checked_sub(guest_termination)
+    // Stop before the dynamically selected publisher, then execute that
+    // publisher to the sentinel. Both component counts are observed by rvemu.
+    let body_report = executor.execute_until(ENTRY_PC, termination_entry_pcs, instruction_limit)?;
+    let termination_limit = instruction_limit
+        .checked_sub(body_report.executed_instructions)
         .ok_or(OrchestratorError::ExecutionAccounting {
-            total: report.executed_instructions,
-            termination: guest_termination,
+            total: body_report.executed_instructions,
+            termination: 0,
+        })?;
+    let termination_report = executor.execute(body_report.exit_pc, EXIT_PC, termination_limit)?;
+    let guest_result = read_guest_result(&mut executor, &termination_report)?;
+    let total = body_report
+        .executed_instructions
+        .checked_add(termination_report.executed_instructions)
+        .ok_or(OrchestratorError::ExecutionAccounting {
+            total: u64::MAX,
+            termination: termination_report.executed_instructions,
         })?;
 
     Ok(OrchestratorResult {
@@ -336,9 +336,9 @@ fn execute_raw_program(
         machine_code,
         guest_result,
         instruction_metrics: GuestInstructionMetrics {
-            opcode_body,
-            guest_termination,
-            total: report.executed_instructions,
+            opcode_body: body_report.executed_instructions,
+            guest_termination: termination_report.executed_instructions,
+            total,
         },
         executor_identity: EXECUTOR_IDENTITY,
     })
@@ -347,8 +347,7 @@ fn execute_raw_program(
 struct LinkedGuestArithmetic {
     assembly: String,
     machine_code: Vec<u8>,
-    normal_termination_instructions: u64,
-    exceptional_termination_instructions: u64,
+    termination_entry_pcs: Vec<u64>,
 }
 
 /// Links the reusable ADD wrapper to its two isolated execution exits.
@@ -454,8 +453,7 @@ fn link_guest_arithmetic(
     Ok(LinkedGuestArithmetic {
         assembly,
         machine_code,
-        normal_termination_instructions: instruction_count(&normal_code)?,
-        exceptional_termination_instructions: instruction_count(&underflow_code)?,
+        termination_entry_pcs: vec![normal_start, underflow_start],
     })
 }
 
@@ -496,15 +494,6 @@ fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, Orchestrato
         })
 }
 
-fn instruction_count(machine_code: &[u8]) -> Result<u64, OrchestratorError> {
-    if machine_code.len() % 4 != 0 {
-        return Err(OrchestratorError::Link {
-            description: "termination code is not instruction aligned".to_owned(),
-        });
-    }
-    Ok(u64::try_from(machine_code.len() / 4).expect("instruction count fits u64"))
-}
-
 fn assembly_error(error: impl fmt::Debug) -> OrchestratorError {
     OrchestratorError::Link {
         description: format!("RV64 assembly failed: {error:?}"),
@@ -536,6 +525,7 @@ fn encode_jal_zero(offset: i64) -> Result<u32, OrchestratorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rv64::guest::GuestExecutionStatus;
 
     #[test]
     fn full_stack_overflow_publishes_an_exception_without_mutating_the_stack() {

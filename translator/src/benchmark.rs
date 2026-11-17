@@ -6,8 +6,154 @@ use revm::primitives::U256;
 
 use crate::{
     execution::{directed_cases, hex, random_u256, run_evm, InstructionMetrics, Rv64Runner},
+    orchestrator::{
+        execute_guest_add, execute_guest_evm_bytecode, execute_guest_push1, execute_guest_sub,
+        OrchestratorError, OrchestratorResult, EXECUTOR_IDENTITY,
+    },
+    rv64::guest::GuestExecutionStatus,
     Opcode,
 };
+
+/// Deterministic RV64 guest measurements. Unlike [`BenchmarkReport`], this
+/// is a separate schema so the historical arithmetic evidence stays byte-for-byte stable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestBenchmarkReport {
+    opcode_guest: Vec<GuestMeasurement>,
+    program_guest: Vec<GuestProgramMeasurement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GuestMeasurement {
+    name: &'static str,
+    metrics: crate::orchestrator::GuestInstructionMetrics,
+    status: GuestExecutionStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GuestProgramMeasurement {
+    bytecode: &'static str,
+    metrics: crate::orchestrator::GuestInstructionMetrics,
+    status: GuestExecutionStatus,
+}
+
+impl GuestBenchmarkReport {
+    /// Serializes the guest-only evidence schema without changing the
+    /// historical `rv64-arithmetic-baseline` schema.
+    pub fn to_json(&self) -> String {
+        let mut output =
+            String::from("{\"schema_version\":1,\"experiment\":\"rv64-guest-instruction-metrics\"");
+        output.push_str(",\"executor\":\"");
+        output.push_str(EXECUTOR_IDENTITY);
+        output.push_str("\",\"measurement\":\"successfully executed RV64 instructions; exit sentinel observed before fetch and excluded\"");
+        output.push_str(",\"opcode_guest\":[");
+        for (index, measurement) in self.opcode_guest.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            write_guest_measurement(
+                &mut output,
+                measurement.name,
+                measurement.status,
+                measurement.metrics,
+            );
+        }
+        output.push_str("],\"program_guest\":[");
+        for (index, measurement) in self.program_guest.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            write_guest_measurement(
+                &mut output,
+                measurement.bytecode,
+                measurement.status,
+                measurement.metrics,
+            );
+        }
+        output.push_str("]}");
+        output
+    }
+}
+
+fn write_guest_measurement(
+    output: &mut String,
+    name: &str,
+    status: GuestExecutionStatus,
+    metrics: crate::orchestrator::GuestInstructionMetrics,
+) {
+    write!(output, "{{\"input\":\"{name}\",\"status\":\"{}\",\"rv64\":{{\"opcode_body\":{},\"guest_termination\":{},\"total\":{}}}}}", guest_status_name(status), metrics.opcode_body(), metrics.guest_termination(), metrics.total()).expect("writing JSON to String");
+}
+
+fn guest_status_name(status: GuestExecutionStatus) -> &'static str {
+    match status {
+        GuestExecutionStatus::Running => "running",
+        GuestExecutionStatus::Normal => "normal",
+        GuestExecutionStatus::GuestException => "guest_exception",
+    }
+}
+
+/// Measures representative guest opcode and whole-program executions. Rust
+/// only supplies input bytes and initial operands; each EVM operation executes
+/// in the linked RV64 guest.
+pub fn run_guest_benchmark() -> Result<GuestBenchmarkReport, OrchestratorError> {
+    let opcode_guest = [
+        ("PUSH1 0x05", execute_guest_push1(5)),
+        (
+            "ADD 0x05 0x03",
+            execute_guest_add(U256::from(5), U256::from(3)),
+        ),
+        (
+            "SUB 0x05 0x03",
+            execute_guest_sub(U256::from(5), U256::from(3)),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, result)| guest_measurement(name, result))
+    .collect::<Result<Vec<_>, _>>()?;
+    let program_guest = [
+        "6005",
+        "60056003",
+        "6005600301",
+        "6005600303",
+        "600560030100",
+    ]
+    .into_iter()
+    .map(|bytecode| {
+        let bytes = (0..bytecode.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&bytecode[index..index + 2], 16).expect("fixed hex"))
+            .collect::<Vec<_>>();
+        guest_program_measurement(bytecode, execute_guest_evm_bytecode(&bytes))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    Ok(GuestBenchmarkReport {
+        opcode_guest,
+        program_guest,
+    })
+}
+
+fn guest_measurement(
+    name: &'static str,
+    result: Result<OrchestratorResult, OrchestratorError>,
+) -> Result<GuestMeasurement, OrchestratorError> {
+    let result = result?;
+    Ok(GuestMeasurement {
+        name,
+        metrics: result.instruction_metrics(),
+        status: result.guest_result().status(),
+    })
+}
+
+fn guest_program_measurement(
+    bytecode: &'static str,
+    result: Result<OrchestratorResult, OrchestratorError>,
+) -> Result<GuestProgramMeasurement, OrchestratorError> {
+    let result = result?;
+    Ok(GuestProgramMeasurement {
+        bytecode,
+        metrics: result.instruction_metrics(),
+        status: result.guest_result().status(),
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct BenchOptions {
@@ -389,7 +535,7 @@ fn push_json_string(output: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_benchmark, BenchOptions};
+    use super::{run_benchmark, run_guest_benchmark, BenchOptions};
     use crate::{execution::DEFAULT_RANDOM_SEED, Opcode};
 
     #[test]
@@ -411,5 +557,54 @@ mod tests {
             assert_eq!(operation.metrics.total, operation.metrics.category_sum());
             assert_eq!(operation.failed, 0);
         }
+    }
+
+    #[test]
+    fn guest_benchmark_reports_observed_components_and_is_deterministic() {
+        let first = run_guest_benchmark().expect("guest benchmark completes");
+        let second = run_guest_benchmark().expect("repeated guest benchmark completes");
+        assert_eq!(first, second);
+        assert_eq!(first.to_json(), second.to_json());
+
+        let opcode_totals = first
+            .opcode_guest
+            .iter()
+            .map(|measurement| {
+                let metrics = measurement.metrics;
+                assert_eq!(
+                    metrics.total(),
+                    metrics.opcode_body() + metrics.guest_termination()
+                );
+                (
+                    measurement.name,
+                    metrics.opcode_body(),
+                    metrics.guest_termination(),
+                    metrics.total(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            opcode_totals,
+            vec![
+                ("PUSH1 0x05", 10, 7, 17),
+                ("ADD 0x05 0x03", 42, 7, 49),
+                ("SUB 0x05 0x03", 42, 7, 49),
+            ]
+        );
+        let program_totals = first
+            .program_guest
+            .iter()
+            .map(|measurement| (measurement.bytecode, measurement.metrics.total()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            program_totals,
+            vec![
+                ("6005", 17),
+                ("60056003", 27),
+                ("6005600301", 69),
+                ("6005600303", 69),
+                ("600560030100", 70),
+            ]
+        );
     }
 }

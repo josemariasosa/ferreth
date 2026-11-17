@@ -119,17 +119,34 @@ impl Rv64Executor for RvemuExecutor {
         exit_pc: u64,
         instruction_limit: u64,
     ) -> Result<ExecutionReport, ExecutorError> {
+        self.execute_until(entry_pc, &[exit_pc], instruction_limit)
+    }
+
+    fn execute_until(
+        &mut self,
+        entry_pc: u64,
+        exit_pcs: &[u64],
+        instruction_limit: u64,
+    ) -> Result<ExecutionReport, ExecutorError> {
         self.validate_instruction_address(entry_pc)?;
-        self.validate_instruction_address(exit_pc)?;
+        if exit_pcs.is_empty() {
+            return Err(ExecutorError::Initialization {
+                description: "execution requires at least one exit PC".to_owned(),
+            });
+        }
+        for exit_pc in exit_pcs {
+            self.validate_instruction_address(*exit_pc)?;
+        }
         self.emulator.initialize_pc(entry_pc);
 
         let mut executed_instructions = 0;
         loop {
             // The exit boundary is tested before the next instruction fetch,
             // so the sentinel is neither executed nor counted.
-            if self.emulator.cpu.pc == exit_pc {
+            if exit_pcs.contains(&self.emulator.cpu.pc) {
                 return Ok(ExecutionReport {
                     executed_instructions,
+                    exit_pc: self.emulator.cpu.pc,
                 });
             }
             if executed_instructions == instruction_limit {

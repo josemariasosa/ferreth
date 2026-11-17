@@ -43,6 +43,8 @@ pub struct ExecutionReport {
     /// Instructions for which the backend completed `execute()` successfully.
     /// The configured exit-PC instruction is never included.
     pub executed_instructions: u64,
+    /// Configured exit PC observed before its next instruction fetch.
+    pub exit_pc: u64,
 }
 
 /// Errors raised by the executor boundary.
@@ -148,6 +150,16 @@ pub trait Rv64Executor {
         &mut self,
         entry_pc: u64,
         exit_pc: u64,
+        instruction_limit: u64,
+    ) -> Result<ExecutionReport, ExecutorError>;
+
+    /// Executes until one of `exit_pcs` is observed before an instruction
+    /// fetch. This permits callers to measure a dynamically reached boundary
+    /// without treating the boundary instruction itself as executed.
+    fn execute_until(
+        &mut self,
+        entry_pc: u64,
+        exit_pcs: &[u64],
         instruction_limit: u64,
     ) -> Result<ExecutionReport, ExecutorError>;
 }

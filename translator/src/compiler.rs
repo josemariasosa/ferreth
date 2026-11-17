@@ -28,6 +28,7 @@ pub struct CompiledRv64Program {
     machine_code: Vec<u8>,
     normal_termination_instructions: u64,
     exceptional_termination_instructions: u64,
+    termination_entry_pcs: Vec<u64>,
 }
 
 impl CompiledRv64Program {
@@ -58,6 +59,11 @@ impl CompiledRv64Program {
 
     pub const fn exceptional_termination_instructions(&self) -> u64 {
         self.exceptional_termination_instructions
+    }
+
+    /// RV64 PCs at which shared normal or exceptional publishers begin.
+    pub fn termination_entry_pcs(&self) -> &[u64] {
+        &self.termination_entry_pcs
     }
 }
 
@@ -302,6 +308,7 @@ fn compile_supported_program(
         normal_termination_instructions: instruction_count(&normal_code)?,
         // Both currently supported guest-exception publishers are eight instructions.
         exceptional_termination_instructions: instruction_count(&overflow_code)?,
+        termination_entry_pcs: vec![normal_start, overflow_start, underflow_start],
     })
 }
 
@@ -446,6 +453,7 @@ pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, C
         machine_code,
         normal_termination_instructions: instruction_count(&normal_code)?,
         exceptional_termination_instructions: instruction_count(&overflow_code)?,
+        termination_entry_pcs: vec![normal_start, overflow_start],
     })
 }
 

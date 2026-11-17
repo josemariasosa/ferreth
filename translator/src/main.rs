@@ -1,5 +1,5 @@
 use ferrum_eth_translator::{
-    benchmark::{run_benchmark, BenchOptions},
+    benchmark::{run_benchmark, run_guest_benchmark, BenchOptions},
     decode,
     execution::DEFAULT_RANDOM_SEED,
     orchestrator::{
@@ -173,6 +173,20 @@ fn execute(args: &[String]) -> ExitCode {
 }
 
 fn bench(args: &[String]) -> ExitCode {
+    if matches!(args, [scope, format] if scope == "guest" && format == "--format=json")
+        || matches!(args, [scope, flag, format] if scope == "guest" && flag == "--format" && format == "json")
+    {
+        return match run_guest_benchmark() {
+            Ok(report) => {
+                println!("{}", report.to_json());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("guest benchmark failed: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let mut operation = None;
     let mut cases = None;
     let mut seed = DEFAULT_RANDOM_SEED;
@@ -256,6 +270,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
     ExitCode::FAILURE
 }
