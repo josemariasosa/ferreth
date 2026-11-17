@@ -2,31 +2,32 @@
 
 | Field | Value |
 |---|---|
-| Document type | Initial research architecture |
-| Version | 0.2 |
+| Document type | Research architecture |
+| Version | 0.3 |
 | Status | Proposed; decisions are provisional unless marked as constraints |
 | Date | 2026-11-16 |
-| Scope | Ethereum-oriented RISC-V hardware research and independent agent-orchestration research |
+| Scope | EVM-to-RISC-V translation, Ethereum-oriented hardware research, and supporting agent-workflow experiments |
 
 ### Change history
 
 | Version | Summary |
 |---|---|
+| 0.3 | Established behavioral parity as the primary empirical objective; separated bytecode translation, hardware acceleration, and agent-workflow experiments; added an incremental research roadmap and clarified evidence claims. |
 | 0.2 | Corrected the evm-asm reference; clarified RV64IM as a candidate, ETH-001's abstract combinational interface, ETH-004 reset decisions, and documentation precedence. |
 | 0.1 | Initial research architecture. |
 
 ## 1. Executive Summary
 
-Ferrum ETH is a research project with two related but independently evolvable tracks:
+Ferrum ETH's primary empirical objective is to investigate whether EVM behavior can be reproduced by execution translated to RISC-V, and under what conditions (if any) hardware specialization offers a measurable advantage. The two complementary research tracks are:
 
-1. **Hardware:** explore arithmetic and execution mechanisms that could eventually support an Ethereum-oriented RISC-V processor.
-2. **Orchestration:** evaluate whether local language-model-based engineering agents can produce hardware artifacts through reproducible, independently verified workflows.
+1. **EVM-to-RISC-V translation and behavioral parity:** begin with small EVM bytecode sequences translated to RV64IM; compare observable behavior with a pinned executable reference.
+2. **Ethereum-oriented hardware acceleration:** compare conventional RV64IM implementations of EVM operations with separately specified RTL units and, later, possible accelerators.
 
-The first hardware milestone is a small EVM arithmetic unit, not a RISC-V processor and not an Ethereum execution client. The proposed progression is from combinational 256-bit operations, through registered execution and explicit interfaces, to evidence-based consideration of a RISC-V core and optional Ethereum-specific accelerators. No pipeline, cache, custom instruction, or accelerator microarchitecture is selected here.
+These tracks are related but independently testable. ETH-001 remains the existing standalone 256-bit RTL and agent-orchestration experiment; its arithmetic contract is not an EVM bytecode translator or a full opcode implementation. Agent tournaments are an optional experimental methodology for comparing workflows, not the scientific objective.
 
-The orchestration track is deliberately separate from hardware semantics. It defines roles, workspaces, experimental controls, and evaluation practices; it does not grant an agent authority to change specifications or declare its own work correct. Initially sequential agent stages are preferred for reproducibility and for the stated 16 GB Apple Silicon development constraint. This is a practical starting point, not a claim that parallel execution is inherently inferior.
+Start translation research with bytecode, not Yul. A future Yul path may be studied through an intermediate representation, but Yul is not interchangeable with bytecode: parity requires identifying the exact compiled EVM program used as the reference. Ethereum specifications are normative; an execution client such as revm is an executable reference. Passing differential tests is empirical evidence for tested cases, not proof of universal correctness or complete Ethereum conformance.
 
-This document records goals, boundaries, provisional architecture, initial roadmap descriptions, verification strategy, and unresolved decisions. It does not define executable missions or claim measured performance, area, or correctness.
+Agent orchestration remains separate from execution semantics and is evaluated only when useful as a workflow experiment. This document records research goals, provisional architecture, verification strategy, and unresolved decisions. It does not define executable missions or claim measured performance, area, or correctness.
 
 ## 2. Vision, Goals, and Non-Goals
 
@@ -34,25 +35,37 @@ This document records goals, boundaries, provisional architecture, initial roadm
 
 Ferrum ETH will investigate whether:
 
-- Useful EVM word operations can be represented and verified as hardware blocks.
-- Those blocks can be integrated, where justified, with a RISC-V-compatible processor or software environment.
+- Small EVM bytecode programs can be translated to RV64IM while preserving their observable EVM behavior.
+- Conventional RV64IM code and specialized hardware can implement selected EVM operations with measurable differences in cost under specified workloads.
+- Specialized hardware's correctness, interface, and workload-dependent costs can be evaluated without assuming it is faster or more efficient.
 - A disciplined local-agent workflow can design and review hardware without substituting agent claims for deterministic evidence.
 - The research can be reproduced from versioned specifications, source, tool settings, and test inputs.
 
-### 2.2 Four distinct engineering outcomes
+### 2.2 Research questions and hypotheses
+
+| Question | Testable hypothesis |
+|---|---|
+| Can small EVM bytecode sequences be translated to RV64IM? | For a pinned EVM specification revision and executable reference, a documented translation of selected sequences can match the reference's applicable observable outputs on a declared differential test corpus. Report mismatches and untested behavior. |
+| Can physical implementation be optimized without changing EVM gas behavior? | For selected bytecode and a named fork, a translation may reorder or eliminate native instructions while preserving the original bytecode's gas and other observable behavior, including `GAS` and out-of-gas cases where applicable. This is a test target, not an assumption that gas charges may be safely aggregated. |
+| Does specialized hardware help selected workloads? | For a declared workload and accounting boundary, a specialized unit may show a measurable difference from conventional RV64IM multi-limb code in one or more specified metrics; the direction and significance are unknown until measured. |
+
+These are bounded empirical hypotheses, not universal claims. Differential-test success is **empirical parity for tested cases**. **Specification conformance** is a claim against a named normative Ethereum specification and requires appropriate coverage. **Formal correctness** requires a stated property, model, assumptions, and proof boundary; neither differential testing nor implementation in a proof-oriented project implies it.
+
+### 2.3 Five distinct engineering outcomes
 
 The following are different deliverables and must not be conflated:
 
 | Outcome | What it is | What it does not establish |
 |---|---|---|
+| EVM-to-RISC-V translation | A translation of a specified EVM bytecode program to a specified RISC-V profile, evaluated for observable parity | Equivalence for all programs, complete Ethereum conformance, or formal correctness |
 | EVM arithmetic hardware | A hardware module implementing a defined subset of arithmetic or bitwise operations over 256-bit values | A processor, complete EVM, gas accounting, memory, or Ethereum state transition |
 | RISC-V processor executing EVM software | A CPU implementing a specified RISC-V ISA that runs an interpreter or other EVM-related program | Native EVM opcodes, Ethereum consensus compatibility, or acceleration |
 | RISC-V processor with Ethereum-specific acceleration | A RISC-V processor with a defined interface to one or more EVM-oriented operations | Full opcode semantics or complete execution-client behavior |
 | Ethereum execution environment | Software and supporting components that implement the applicable Ethereum execution rules, state transitions, and interfaces | A consequence of having an arithmetic unit or RISC-V core |
 
-These are separate milestones because they have different architectural boundaries, state, verification oracles, and compatibility requirements. In particular, a 256-bit adder alone does not interpret bytecode, manipulate an EVM stack, charge gas, access contract state, or apply transaction and fork rules.
+These are separate milestones because they have different architectural boundaries, state, verification oracles, and compatibility requirements. A 256-bit adder alone does not interpret bytecode, manipulate an EVM stack, charge gas, access contract state, or apply transaction and fork rules.
 
-### 2.3 Non-goals for the initial phase
+### 2.4 Non-goals for the initial phase
 
 - Claiming to implement a complete RISC-V CPU or Ethereum execution client.
 - Choosing a pipeline, cache, bus protocol, memory hierarchy, or custom instruction encoding before requirements justify it.
@@ -60,13 +73,16 @@ These are separate milestones because they have different architectural boundari
 - Treating a zero-knowledge virtual machine as a physical processor architecture.
 - Treating RTL simulation as synthesis, physical implementation, or fabrication.
 - Treating existing EVM assembly, compiler, or zkVM projects as ready-made hardware designs.
+- Claiming universal parity, complete Ethereum conformance, or formal correctness from finite differential tests.
 
 ## 3. Architecture Boundaries and Terminology
 
 ### 3.1 Terms
 
 - **EVM word:** a 256-bit stack value used by the Ethereum Virtual Machine.
+- **EVM bytecode:** the EVM instruction sequence executed by the virtual machine. A source language or IR such as Yul is not itself the bytecode reference.
 - **EVM opcode semantics:** the complete behavior of an opcode, including operands, stack effects, exceptional conditions, memory or state effects, and gas rules where applicable.
+- **Behavioral parity:** agreement on the applicable observable behavior for specified inputs and conditions; always qualify its tested scope.
 - **Arithmetic unit:** a module that computes explicitly specified arithmetic or bitwise functions on operands. It need not contain architectural state.
 - **RISC-V ISA:** the software-visible instruction-set contract implemented by a RISC-V processor.
 - **Accelerator:** a hardware block invoked through a defined software-visible mechanism, such as a coprocessor interface, memory-mapped registers, or (if separately justified) a custom instruction.
@@ -101,11 +117,13 @@ The diagram is a set of possible layers, not a committed system topology. Early 
 
 The hardware track is staged to keep interfaces and design choices reversible:
 
-1. **Isolated combinational unit:** define input/output values and operations for combinational logic; ETH-001 covers 256-bit ADD/SUB, with other operations deferred to later missions.
-2. **Registered execution unit:** define clocking, request acceptance, result validity, and any backpressure or latency behavior; determine whether reset is required and, if so, define it. The exact protocol is to be specified in ETH-004.
-3. **Integration experiment:** connect a software-visible caller or test harness to the unit and measure correctness and cost against software baselines.
-4. **RISC-V-compatible processor study:** select a precise ISA profile and establish processor-level conformance goals before implementing or adopting a core.
-5. **Optional specialization:** consider accelerators or ISA extensions only when application workloads and measurements show a defensible benefit.
+The hardware milestones are one track, not a prerequisite chain for translation research:
+
+1. **Isolated combinational unit:** ETH-001 covers 256-bit ADD/SUB; other operations remain candidate work.
+2. **Registered execution and integration studies:** define protocols and compare measured cost against software baselines.
+3. **Optional processor or specialization:** select a precise ISA profile and consider accelerators or extensions only when workloads and measurements justify investigation.
+
+In parallel, translation starts with small bytecode programs and their RV64IM equivalents (Section 11.5). No pipeline, cache, custom instruction, or accelerator microarchitecture is selected here.
 
 The stages do not require a single implementation to grow into a monolithic design. A component may remain a standalone research result.
 
@@ -156,7 +174,7 @@ SystemVerilog is the proposed RTL language, and Verilator is the proposed simula
 
 Hardware is responsible only for functions explicitly assigned to its module contract. Software is responsible for operations outside that contract, including dispatch, EVM stack management, operand extraction and writeback, byte-addressed memory, gas calculations, calls, persistent state, fork selection, and transaction-level behavior unless a later requirement deliberately moves a defined portion into hardware.
 
-An accelerator that computes a numeric function is not automatically an implementation of the corresponding EVM opcode. Opcode-level behavior may additionally depend on stack underflow/overflow rules, memory ranges, state, exceptional halting, gas, and execution context.
+An accelerator that computes a numeric function is not automatically an implementation of the corresponding EVM opcode. Opcode-level behavior may additionally depend on stack underflow/overflow rules, memory ranges, state, exceptional halting, gas, and execution context. Translated code need not reproduce physical EVM stack operations instruction by instruction; it must preserve the observable semantics. Virtual EVM gas is independent of RISC-V instruction count, cycles, and elapsed time.
 
 ## 5. Ethereum Execution Semantics
 
@@ -178,7 +196,7 @@ A raw Keccak-f permutation accelerator is only a component. An opcode implementa
 
 ### 5.4 Gas, memory, and state
 
-- **Gas:** opcode and transaction costs are specified by Ethereum rules and can vary by operation, data, and fork. Hardware latency does not determine or change the gas charged by Ethereum and is not a substitute for gas accounting. Gas policy remains software-owned initially.
+- **Gas:** opcode and transaction costs are specified by Ethereum rules and can vary by operation, data, and fork. Virtual gas must remain independent of native instruction count, cycle count, and execution time. Translation must account for dynamic costs, memory expansion, control-flow-dependent execution, out-of-gas exceptional halts, and the observable `GAS` opcode. Basic-block aggregation is a research question: it is not assumed safe for every control flow, optimization, or gas observation.
 - **EVM memory:** byte-addressed, execution-local memory with expansion and gas consequences. A 256-bit arithmetic datapath does not implement memory expansion, zero initialization, bounds, or load/store semantics.
 - **Persistent account and storage state:** belongs to the execution environment and state-transition logic, not the initial arithmetic unit. Storage access and proof/state-root computation are separate concerns.
 - **Calls and execution contexts:** caller/callee context, call data, return data, value, static/delegate-call distinctions, and error propagation require execution semantics beyond arithmetic.
@@ -210,7 +228,7 @@ These are candidate boundaries, not claims that a given acceleration is worthwhi
 | 3. Add memory-mapped or coprocessor-style accelerators | Requires interface, data movement, arbitration, and software integration | Can preserve a standard base ISA if the interface is software-accessible without new instructions | Candidate for expensive operations; transfer and invocation overhead may erase benefit | Separate block, interface, and system-level verification | Moderate; new operations can be added behind interface |
 | 4. Add custom RISC-V instructions | Requires encoding, toolchain/software support, and precise architectural behavior | Nonstandard extension can reduce portability unless standardized or guarded | May reduce invocation overhead for selected operations | ISA, decoder, trap, privilege, and software-toolchain verification | Lower compatibility; extension surface can grow |
 
-The initial default is to establish a software baseline and standalone arithmetic correctness before choosing among integration strategies. A custom instruction is not justified by convenience alone; it requires evidence of a bottleneck, a stable semantic contract, a verification plan, and an explicit compatibility policy.
+The initial translation target is small EVM bytecode to RV64IM instruction sequences. A later Yul-to-RISC-V route may use an intermediate representation, but must state which exact compiled EVM bytecode program is the semantic and gas reference. Do not treat Yul and bytecode as interchangeable or infer parity from source-level output alone. A custom instruction is not justified by convenience alone; it requires evidence of a bottleneck, a stable semantic contract, a verification plan, and an explicit compatibility policy.
 
 ### 6.2 RISC-V profile
 
@@ -222,7 +240,7 @@ Neither RV64I nor RV64IM specifies 256-bit EVM registers. For later RISC-V integ
 
 The relevant research project is [Verified-zkEVM/evm-asm](https://github.com/Verified-zkEVM/evm-asm), not [ApeWorX/evm-asm](https://github.com/ApeWorX/evm-asm). Verified-zkEVM/evm-asm is relevant to EVM semantics, Lean 4 specifications and proof infrastructure, RV64IM guest-code execution, and verification research. Its documented backend and four-limb software representation are research context, not a ready-made hardware CPU, 256-bit RTL unit, or Ferrum ETH interface.
 
-The local [evm-asm evidence pack](references/evm-asm.md) summarizes source-authored claims and their stated limitations. The pack does not independently establish complete opcode correctness, complete Ethereum consensus compatibility, or formal verification of the full project. Its source links are mutable and it records no immutable upstream commit. Treat it as offline evidence, not live verification; capture and review an immutable revision before using upstream material normatively. No compatibility or correctness claim is made for Ferrum ETH based on this reference.
+Investigate this project as a prior-art reference for translating EVM operations into RV64IM sequences; study its implementation and tests for ideas that could be reused, subject to source, license, and provenance review. Distinguish documented implementations, experimental capabilities, and formally verified properties. The local [evm-asm evidence pack](references/evm-asm.md) summarizes source-authored claims and their stated limitations; it does not independently establish complete opcode correctness, complete Ethereum consensus compatibility, or formal verification of the full project. Its source links are mutable and it records no immutable upstream commit. Capture and review an immutable revision before relying on upstream status. No compatibility or correctness claim is made for Ferrum ETH based on this reference.
 
 ## 7. AI Agent Orchestration Architecture
 
@@ -264,6 +282,8 @@ Sequential specialists use fresh contexts for design, review, verification, or r
 Sequential execution is the initial operating mode because the stated development system has 16 GB of Apple Silicon memory and because controlled handoffs are easier to audit. This is a provisional experimental constraint, not a claim that sequential teams are more capable. Parallel trials may be added when resource controls and isolation can be demonstrated.
 
 ## 8. Tournament and Experimental Methodology
+
+Agent-team comparison is an optional methodology for studying engineering workflows, not the project's primary scientific objective. A tournament can measure differences between workflows on a frozen mission; it cannot by itself establish EVM parity, specification conformance, formal correctness, or a hardware performance advantage. Run one only when a separate, approved experiment calls for it.
 
 ### 8.1 Team architectures
 
@@ -356,15 +376,19 @@ For ETH-004, verify request acceptance, latency, result-valid behavior, backpres
 ### 10.3 Processor and Ethereum milestones
 
 - **CPU:** apply the relevant RISC-V ISA compliance tests only after the implemented profile, extensions, privilege mode, and execution environment are fixed. A handful of arithmetic unit tests is not CPU compliance.
-- **EVM behavior:** use execution-specification-derived and independently maintained conformance tests for a named fork/spec revision. Validate stack effects, exceptional behavior, memory, gas, and context at the relevant software/system boundary.
+- **EVM-to-RISC-V parity:** begin with bytecode programs and compare translated execution to both a pinned executable reference (such as a specified revm revision) and expectations derived from a named Ethereum specification. Compare applicable results and return data, success/revert/exceptional halt, gas, stack and memory behavior, state transitions, and logs. Record which observations apply to each test. The specification is normative; the client is an executable oracle, not the specification.
+- **EVM specification conformance:** use specification-derived and independently maintained tests for a named fork/revision. Passing a finite differential suite is empirical parity only for tested cases; it neither proves universal correctness nor, by itself, establishes full conformance.
+- **Gas and optimization:** include control-flow and dynamic-cost cases, memory expansion, out-of-gas, and `GAS` where in scope. Check the original bytecode's virtual gas behavior independently of physical RV64 instruction count, simulated cycles, or runtime. Do not presume gas aggregation, instruction reordering, or elimination preserves observables.
+- **Yul path:** if later studied, pin the compiler and exact output bytecode; use that compiled program as the EVM reference. A Yul-level comparison alone does not establish bytecode-level gas parity.
 - **Execution environment:** test transaction/state transitions, storage, calls, receipts, and state roots at the full-system milestone. These are not established by unit-level RTL tests.
-- **Synthesis and formal methods:** future milestones may add reproducible synthesis checks, area/timing reports under declared constraints, and formal properties/equivalence checks. Tool results must be described within their assumptions and proof boundaries.
+- **Hardware comparison:** compare conventional RV64IM multi-limb code and specialized RTL/accelerator implementations on the same defined operations and workloads. Report correctness separately from instruction count, simulated cycles, synthesized area/timing, and eventually energy. Include interface/data-movement costs where measured; do not assume any implementation wins.
+- **Formal methods:** future milestones may add reproducible formal properties or equivalence checks. Name the property, model, assumptions, and proof boundary. Simulation, differential testing, and passing an external project's tests are not formal proof.
 
-Passing simulation tests demonstrates only that the tested model matched the tested expectations under the tested conditions. It does not prove all inputs, all temporal sequences, all tool interpretations, ISA/EVM conformance, physical timing, area, power, or fabrication correctness.
+Keep three claims distinct: **empirical parity** means observed agreement on specified tested cases; **specification conformance** means evidence against a named normative specification and stated scope; **formal correctness** means a property was proved under explicit models and assumptions. Passing simulation tests demonstrates only that the tested model matched the tested expectations under the tested conditions.
 
 ## 11. Initial Development Roadmap
 
-These are planning descriptions, not executable mission specifications. No `missions/ETH-*.md` files are authorized or created by this architecture task.
+These are planning descriptions, not executable mission specifications. This roadmap does not authorize or create a mission; existing mission documents, including ETH-001, retain their own scope and acceptance criteria.
 
 ### 11.1 ETH-001 — 256-bit ADD/SUB
 
@@ -414,6 +438,27 @@ These are planning descriptions, not executable mission specifications. No `miss
 | Risks | Ambiguous request acceptance, stale results, reset races if applicable, protocol deadlock, accidentally assuming fixed latency. |
 | Explicit non-goals | Pipeline/caches, bus or ISA integration, custom instructions, target frequency, synthesis or physical performance claims. |
 
+### 11.5 Research roadmap: EVM translation and hardware acceleration
+
+This roadmap is exploratory and does not authorize implementation or change the existing ETH-001 mission. It identifies small, testable research steps; each executable task still needs an approved mission with pinned semantics, tools, and acceptance criteria.
+
+**Track A — EVM-to-RISC-V translation and behavioral parity**
+
+1. **ADD/SUB bytecode:** select small EVM bytecode sequences using `ADD` and `SUB`; translate them to RV64IM equivalents and compare stack results, termination status, and bytecode gas against a pinned reference for a named specification revision. Record the four-limb representation and operand order used without assuming a particular instruction sequence.
+2. **Stack and control flow:** extend to `PUSH`, `DUP`, `SWAP`, and `JUMPI`; exercise valid/invalid control flow, stack effects, and control-flow-dependent gas. Measure how physical code changes while keeping virtual gas behavior fixed.
+3. **Dynamic execution effects:** add carefully bounded cases for memory expansion, out-of-gas behavior, and `GAS`; identify where instruction reordering, elimination, or basic-block metering can and cannot preserve observations.
+4. **Broader subsets:** expand opcode and state coverage only when the reference revision, test oracle, and observable contract are explicit. Treat each extension as empirical evidence, not universal parity.
+5. **Future Yul study:** investigate a Yul-to-RISC-V path, potentially through an IR, only after bytecode work; pin compiler settings and the exact compiled EVM program that defines the comparison.
+
+**Track B — Ethereum-oriented hardware acceleration**
+
+1. **Preserve ETH-001:** retain the current combinational RTL ADD/SUB and its agent-orchestration experiment as a narrow standalone arithmetic/workflow study. It establishes neither EVM opcode parity nor an acceleration benefit.
+2. **Like-for-like baseline:** compare conventional RV64IM implementations of 256-bit ADD/SUB with specialized RTL implementations on the same operand cases. First measure correctness and instruction count; add simulated cycles and synthesis area/timing only with declared models, tools, and constraints.
+3. **End-to-end integration:** consider invocation, data movement, protocol, and workload costs before evaluating an accelerator or extension. Measure energy only when a defensible methodology and target are available.
+4. **Select later operations by evidence:** do not assume a hardware unit, custom instruction, or specific accelerator interface is beneficial; leave the architecture open until workload and measurement evidence support a choice.
+
+The tracks may share operations and reference material, but results from one do not establish results in the other.
+
 ## 12. Risks, Open Questions, and Proposed ADR Topics
 
 ### 12.1 Principal risks
@@ -427,6 +472,9 @@ These are planning descriptions, not executable mission specifications. No `miss
 - **Inadequate trials:** small sample sizes and contamination can make tournament rankings unstable.
 - **Unverified project compatibility:** similarly named EVM assembly projects may have different goals, fork support, or license terms.
 - **Tool portability:** behavior may vary across simulator and synthesis interpretations; record supported subsets and configurations.
+- **Gas-preservation risk:** native optimization may alter control flow or when gas is observed; no universal safe aggregation rule is assumed.
+- **Oracle mismatch:** a client can contain bugs or support a different fork; pin it and compare its behavior with the normative specification.
+- **Yul/bytecode ambiguity:** gas comparisons are undefined unless the exact compiled EVM bytecode reference is identified.
 
 ### 12.2 Unresolved questions requiring human decisions
 
@@ -439,6 +487,12 @@ These are planning descriptions, not executable mission specifications. No `miss
 7. Which integration strategy should be evaluated first after arithmetic baselines: software interpreter, translation, or an external accelerator interface?
 8. How should selected generated run artifacts be archived while keeping `runs/` ignored?
 9. Which qualitative rubric and evaluator-blinding method should be preregistered for the tournament?
+10. Which revm release/commit and Ethereum specification revision should anchor the first bytecode differential cases?
+11. Which observable outputs and test-case boundaries are feasible for the first ADD/SUB translation experiment?
+12. What EVM word representation, limb order, and calling convention should the first RV64IM sequences use?
+13. Under which control-flow and `GAS` conditions, if any, can basic-block gas accounting or native instruction reordering preserve behavior?
+14. Which workload and accounting boundary should be used to compare RV64IM code with RTL, including interface and data-movement overhead?
+15. Which Yul compiler, options, and emitted bytecode revision would define any future Yul-path comparison?
 
 ### 12.3 Proposed architecture decision records
 
@@ -455,6 +509,8 @@ All topics below are proposed ADRs; none is silently finalized here.
 | Whether 256-bit acceleration is justified | Open research question | Representative workload and end-to-end performance/cost measurements |
 | Whether custom RISC-V instructions are appropriate | Deferred | Demonstrated bottleneck, stable semantics, toolchain and compatibility plan |
 | How to expose accelerator operations | Deferred | Invocation/data-transfer measurements and integration requirements |
+| How to meter gas in translated code | Open | Differential observations for dynamic costs, `GAS`, control flow, and out-of-gas behavior |
+| Whether and how to add a Yul path | Deferred | Bytecode parity baseline and a pinned compiler/output reference |
 
 ## 13. References
 

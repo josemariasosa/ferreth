@@ -3,13 +3,19 @@
 | Field | Value |
 |---|---|
 | Document type | Experiment scorecard policy |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | Proposed |
-| Scope | Hardware deliverables and agent-team performance |
+| Scope | Optional tournament scorecards and separate reporting of research outcomes |
 
-Score hardware quality and agent engineering performance as separate scorecards. Publish the evidence, rubric, and any weights before trials begin; this document assigns no scores to teams and reports no results.
+This policy supports optional agent-workflow experiments; it does not make tournaments the primary Ferrum ETH objective. Score hardware quality and agent engineering performance as separate scorecards. Do not combine them into a single team ranking. Publish the evidence, rubric, and any weights before trials begin; this document assigns no scores to teams and reports no results.
 
-## 1. Hardware Engineering Quality
+## 1. Research outcome reporting
+
+Research findings are not tournament scores. Report EVM-to-RISC-V results by named specification/fork, executable reference and revision, exact bytecode, tested observables, test counts, mismatches, and limitations. Distinguish empirical parity on tested cases from specification conformance and formal correctness.
+
+For hardware comparisons, report correctness separately from the measured metrics and state the workload, baseline, accounting boundary, tools, constraints, and unavailable measurements. Suitable metrics may include instruction count, simulated cycles, synthesized area and timing, and eventually energy. Include interface/data-movement costs when measured. Do not infer that a specialized implementation is faster or more efficient, and do not combine unlike measurements into an unqualified score.
+
+## 2. Hardware Engineering Quality
 
 ### Objective gates
 
@@ -30,7 +36,7 @@ Report, with raw counts and test/configuration revisions:
 
 Use a predeclared rubric, preferably blinded, to assess contract clarity, maintainability, traceability to requirements, implementation simplicity, and quality of failure/reproducibility evidence. Explain ratings with specific evidence. Qualitative ratings cannot waive objective gates.
 
-## 2. Agent Engineering Performance
+## 3. Agent Engineering Performance
 
 Measure workflow performance separately from the hardware artifact. Report quantitative measures such as elapsed time, inference/token or other available resource use, tool invocations, retries, completion rate, handoff/rework count, and reproducibility of the run. State the accounting method and unavailable measurements; do not treat incomparable counters as equivalent.
 

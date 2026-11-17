@@ -3,11 +3,11 @@
 | Field | Value |
 |---|---|
 | Document type | Reproducible experiment protocol |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | Proposed |
-| Scope | Comparison of agent-team workflows on approved missions |
+| Scope | Optional comparison of agent-team workflows on approved missions |
 
-This protocol defines controls for comparing Team A (Solo Engineer), Team B (Sequential Specialists), and Team C (Adversarial Review). It does not implement or authorize an orchestrator. Mission-specific requirements and acceptance criteria come from the approved, frozen mission.
+This protocol defines controls for comparing Team A (Solo Engineer), Team B (Sequential Specialists), and Team C (Adversarial Review), when a separate experiment is approved. A tournament is an experimental methodology for studying workflows, not Ferrum ETH's primary scientific objective; it does not establish EVM behavioral parity, Ethereum specification conformance, formal correctness, or hardware advantage. No tournament is required by this protocol. Mission-specific requirements and acceptance criteria come from the approved, frozen mission.
 
 ## Before a trial
 
@@ -41,4 +41,4 @@ Run repeated independent trials when resources permit. A single trial is descrip
 
 Archive the preregistration, exact starting and submission revisions, mission and evaluator revisions, model/tool configuration, resource records, test results, logs, and analysis through an approved repository strategy. Preserve raw results alongside any summaries. Record what could not be captured and known contamination risks, including shared caches or pretraining, nondeterministic inference, evaluator leakage, model changes, reused context, and unequal effective retries.
 
-Use [the scoring policy](scoring.md) to report hardware quality and agent performance separately.
+Use [the scoring policy](scoring.md) to report hardware quality and agent performance separately. If a trial is part of an EVM translation or hardware-acceleration study, report those scientific outcomes separately from the team/workflow comparison.

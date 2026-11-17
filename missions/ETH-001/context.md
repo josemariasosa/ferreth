@@ -2,6 +2,7 @@
 
 This short document provides offline background only. It is not the executable mission specification and does not approve ports, operation encodings, or acceptance criteria.
 
+- ETH-001 is the existing standalone RTL and agent-workflow experiment. It does not evaluate EVM bytecode translation, opcode-level parity, gas preservation, or acceleration performance.
 - EVM words are 256 bits. `ADD` and `SUB` operate modulo \(2^{256}\); overflow and underflow wrap.
 - The hardware component is combinational: it has no clock or reset.
 - Ethereum opcode-level stack behavior and gas semantics are outside this component's scope. Ethereum protocol rules define gas; hardware latency does not.
