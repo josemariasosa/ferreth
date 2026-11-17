@@ -1,6 +1,11 @@
 use ferrum_eth_translator::rv64::executor::{
     ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor,
 };
+use ferrum_eth_translator::rv64::memory::{
+    validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC,
+};
+use ferrum_eth_translator::{execution::Rv64Runner, Opcode};
+use revm::primitives::U256;
 
 const ADDI_X5_X0_42: u32 = 0x02a0_0293;
 const JAL_X0_PLUS_4: u32 = 0x0040_006f;
@@ -9,6 +14,22 @@ const EBREAK: u32 = 0x0010_0073;
 
 fn program(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+fn jal_x0(relative_offset: u32) -> u32 {
+    assert_eq!(
+        relative_offset & 1,
+        0,
+        "JAL offsets must be two-byte aligned"
+    );
+    assert!(
+        relative_offset < (1 << 20),
+        "test jump must be forward and in range"
+    );
+    ((relative_offset & 0x7fe) << 20)
+        | ((relative_offset & 0x800) << 9)
+        | (relative_offset & 0xff000)
+        | 0x6f
 }
 
 #[test]
@@ -31,6 +52,40 @@ fn executes_loaded_program_and_stops_before_exit_sentinel() {
 }
 
 #[test]
+fn guest_jumps_to_the_reserved_exit_pc_before_it_is_fetched() {
+    let machine_code = program(&[ADDI_X5_X0_42, jal_x0((EXIT_PC - (ENTRY_PC + 4)) as u32)]);
+    validate_generated_code(ENTRY_PC, machine_code.len())
+        .expect("guest code must leave the reserved exit slot unoccupied");
+
+    let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
+    executor.load_code(&machine_code).expect("load guest code");
+    // A breakpoint at the exit slot turns an accidental execution of that
+    // address into an execution fault. It is not generated guest code.
+    executor
+        .write_memory(EXIT_PC, &EBREAK.to_le_bytes())
+        .expect("place exit-slot trap marker");
+
+    let report = executor
+        .execute(ENTRY_PC, EXIT_PC, 2)
+        .expect("jump to the accepted exit boundary");
+
+    assert_eq!(report.executed_instructions, 2);
+    assert_eq!(
+        executor.read_register(IntegerRegister::new(5).unwrap()),
+        42,
+        "the observable guest operation must complete before the exit jump"
+    );
+}
+
+#[test]
+fn generated_code_cannot_overlap_the_reserved_exit_slot() {
+    assert!(matches!(
+        validate_generated_code(ENTRY_PC, (EXIT_PC - ENTRY_PC + 4) as usize),
+        Err(LayoutError::CodeOverlapsExitSlot { .. })
+    ));
+}
+
+#[test]
 fn registers_and_guest_memory_round_trip() {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
     let register = IntegerRegister::new(10).unwrap();
@@ -48,10 +103,12 @@ fn registers_and_guest_memory_round_trip() {
 #[test]
 fn instruction_limit_is_distinct_from_normal_completion() {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
-    executor.load_code(&program(&[JAL_X0_SELF])).unwrap();
+    let machine_code = program(&[JAL_X0_SELF]);
+    validate_generated_code(ENTRY_PC, machine_code.len()).unwrap();
+    executor.load_code(&machine_code).unwrap();
 
     assert_eq!(
-        executor.execute(RvemuExecutor::DRAM_BASE, RvemuExecutor::DRAM_BASE + 4, 2),
+        executor.execute(ENTRY_PC, EXIT_PC, 2),
         Err(ExecutorError::InstructionLimitExceeded {
             limit: 2,
             executed_instructions: 2,
@@ -62,12 +119,30 @@ fn instruction_limit_is_distinct_from_normal_completion() {
 #[test]
 fn execution_fault_is_not_normal_completion() {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
-    executor.load_code(&program(&[EBREAK])).unwrap();
+    let machine_code = program(&[EBREAK]);
+    validate_generated_code(ENTRY_PC, machine_code.len()).unwrap();
+    executor.load_code(&machine_code).unwrap();
 
     assert!(matches!(
-        executor.execute(RvemuExecutor::DRAM_BASE, RvemuExecutor::DRAM_BASE + 4, 1),
-        Err(ExecutorError::ExecutionFault { .. })
+        executor.execute(ENTRY_PC, EXIT_PC, 1),
+        Err(ExecutorError::ExecutionFault {
+            executed_instructions: 0,
+            ..
+        })
     ));
+}
+
+#[test]
+fn arithmetic_runner_retains_its_ebreak_return_sentinel_behavior() {
+    let execution = Rv64Runner::new(Opcode::Add)
+        .and_then(|mut runner| runner.run(U256::from(5), U256::from(7)))
+        .expect("execute historical ADD runner");
+
+    assert_eq!(execution.result, U256::from(12));
+    assert_eq!(
+        execution.metrics.total, 34,
+        "the appended EBREAK return sentinel remains excluded from the historical count"
+    );
 }
 
 #[test]
