@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.so
+*.pyd
+env/
+venv/
+.venv/
+
+# Virtual environments
+ENV/
+virtualenvs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Editor backup files
+*.bak
+*.backup
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# SystemVerilog / Verilator
+waveform.vdb
+fusesoc_cache/
+sim_build/
+sim_vhdl_db/
+sim_vlog_db/
+*.vdb
+*.db_lib
+
+# Verilator
+obj_dir/
+*.vcd
+*.fst
+
+# Simulation artifacts
+*.log
+*.out
+*.ltx
+*.fst
+dump.vcd
+dump.fst
+
+# Agent outputs
+runs/*
+!runs/.gitkeep
+
+# Logs (exclude specific agent log patterns we want to track)
+orchestrator/*.log
+
+# Testing
+unittests/*.pyc
+tests/coverage.html
+tests/coverage.xml
