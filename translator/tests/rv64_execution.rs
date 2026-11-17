@@ -135,6 +135,7 @@ fn run_evm_program(program: &[Instruction]) -> Result<U256, String> {
     let mut bytecode = Vec::new();
     for instruction in program {
         match instruction {
+            Instruction::Stop => bytecode.push(0x00),
             Push(value) => {
                 bytecode.push(0x7f);
                 bytecode.extend_from_slice(&value.to_be_bytes::<32>());

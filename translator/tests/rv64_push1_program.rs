@@ -118,6 +118,64 @@ fn bytecode_push1_programs_execute_in_one_rv64_run() {
 }
 
 #[test]
+fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
+    let cases = [
+        (&[0x00][..], vec![], EVM_STACK_REGION.start(), 8),
+        (
+            &[0x60, 0x05, 0x00][..],
+            vec![U256::from(5)],
+            EVM_STACK_REGION.start() + 32,
+            18,
+        ),
+        (
+            &[0x60, 0x05, 0x60, 0x03, 0x01, 0x00][..],
+            vec![U256::from(8)],
+            EVM_STACK_REGION.start() + 32,
+            70,
+        ),
+        (
+            &[0x60, 0x05, 0x60, 0x03, 0x03, 0x00][..],
+            vec![U256::MAX - U256::from(1)],
+            EVM_STACK_REGION.start() + 32,
+            70,
+        ),
+    ];
+
+    for (bytecode, expected_stack, expected_s1, expected_count) in cases {
+        let first = execute_guest_evm_bytecode(bytecode).expect("STOP program executes once");
+        let second = execute_guest_evm_bytecode(bytecode).expect("STOP program executes twice");
+        assert_eq!(first.guest_result().status(), GuestExecutionStatus::Normal);
+        assert_eq!(first.guest_result().exception_code(), 0);
+        assert_eq!(first.guest_result().stack(), expected_stack);
+        assert_eq!(first.guest_result().final_s1(), expected_s1);
+        assert_eq!(first.instruction_metrics().guest_termination(), 7);
+        assert_eq!(first.instruction_metrics().total(), expected_count);
+        assert_eq!(first.instruction_metrics(), second.instruction_metrics());
+    }
+
+    let stop = compile_evm_bytecode(&[0x00]).expect("compile STOP");
+    assert_eq!(stop.assembly().matches("normal_exit:").count(), 1);
+    assert!(stop
+        .assembly()
+        .contains("evm_stop:\n    jal zero, 4\nnormal_exit:"));
+}
+
+#[test]
+fn explicit_stop_does_not_execute_trailing_bytecode() {
+    let result = execute_guest_evm_bytecode(&[0x60, 0x05, 0x00, 0x60, 0x09])
+        .expect("STOP bypasses the trailing PUSH1");
+    assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
+    assert_eq!(result.guest_result().stack(), &[U256::from(5)]);
+    assert_eq!(
+        result.guest_result().final_s1(),
+        EVM_STACK_REGION.start() + 32
+    );
+    // Successful completion also establishes that the EBREAK installed at the
+    // exit sentinel was not fetched or executed.
+    assert_eq!(result.instruction_metrics().total(), 18);
+}
+
+#[test]
 fn bytecode_push1_and_add_programs_execute_as_one_linked_rv64_program() {
     for (bytecode, expected) in [
         (&[0x60, 5, 0x60, 3, 0x01][..], vec![U256::from(8)]),
