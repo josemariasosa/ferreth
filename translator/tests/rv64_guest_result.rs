@@ -226,6 +226,30 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
             )),
         ),
         (
+            "final stack pointer below base",
+            GuestMetadata::new(
+                GuestExecutionStatus::Normal,
+                0,
+                EVM_STACK_REGION.start() - 32,
+            )
+            .encode(),
+            GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
+                ferrum_eth_translator::rv64::memory::LayoutError::StackPointerOutOfRange {
+                    next_free: EVM_STACK_REGION.start() - 32,
+                },
+            )),
+        ),
+        (
+            "final stack pointer beyond limit",
+            GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.end() + 32)
+                .encode(),
+            GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
+                ferrum_eth_translator::rv64::memory::LayoutError::StackPointerOutOfRange {
+                    next_free: EVM_STACK_REGION.end() + 32,
+                },
+            )),
+        ),
+        (
             "normal status with exception",
             GuestMetadata::new(GuestExecutionStatus::Normal, 1, EVM_STACK_REGION.start()).encode(),
             GuestResultError::Metadata(GuestMetadataError::NormalStatusHasExceptionCode {
@@ -264,6 +288,27 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
         Err(GuestResultError::LiveStackPointerMismatch {
             published_s1: EVM_STACK_REGION.start() + 32,
             live_s1: EVM_STACK_REGION.start(),
+        })
+    );
+}
+
+#[test]
+fn retrieval_rejects_a_changed_live_stack_base() {
+    let (mut executor, report) = completed_executor_for_negative_metadata();
+    executor
+        .write_memory(
+            METADATA_REGION.start(),
+            &GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.start()).encode(),
+        )
+        .expect("publish otherwise-valid test metadata");
+    let changed_s0 = EVM_STACK_REGION.start() + 32;
+    executor.write_register(IntegerRegister::EVM_STACK_BASE, changed_s0);
+
+    assert_eq!(
+        read_guest_result(&mut executor, &report),
+        Err(GuestResultError::LiveStackBaseMismatch {
+            expected_s0: EVM_STACK_REGION.start(),
+            live_s0: changed_s0,
         })
     );
 }

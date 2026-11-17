@@ -30,6 +30,80 @@ pub const GUEST_METADATA_ENCODED_SIZE: usize = 24;
 /// Exact byte width of one EVM word in guest memory.
 pub const EVM_WORD_ENCODED_SIZE: usize = EVM_WORD_SIZE as usize;
 
+/// Side-effect-free failures of an EVM operand-stack operation precondition.
+///
+/// These describe intentional guest-level stack errors, not executor failures
+/// or corrupted ABI state.  The current helpers accept a next-free pointer and
+/// derive its depth through [`evm_stack_depth`], so pointer bounds, alignment,
+/// and the architectural capacity all have one source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackError {
+    InvalidStackPointer(LayoutError),
+    StackOverflow { depth: u64 },
+    StackUnderflow { depth: u64, required: u64 },
+}
+
+impl fmt::Display for StackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidStackPointer(error) => {
+                write!(f, "invalid EVM stack pointer for operation: {error}")
+            }
+            Self::StackOverflow { depth } => write!(
+                f,
+                "EVM stack push at depth {depth} exceeds capacity {EVM_STACK_CAPACITY}"
+            ),
+            Self::StackUnderflow { depth, required } => write!(
+                f,
+                "EVM stack operation requires {required} live words, but depth is {depth}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StackError {}
+
+impl From<LayoutError> for StackError {
+    fn from(error: LayoutError) -> Self {
+        Self::InvalidStackPointer(error)
+    }
+}
+
+/// Validates that an EVM push can use the current next-free stack pointer.
+///
+/// This only checks the operation precondition. It never writes a word or
+/// updates `s1`.
+pub fn validate_evm_stack_push(next_free: u64) -> Result<(), StackError> {
+    let depth = evm_stack_depth(next_free)?;
+    if depth == EVM_STACK_CAPACITY {
+        Err(StackError::StackOverflow { depth })
+    } else {
+        Ok(())
+    }
+}
+
+/// Validates that an EVM pop can use the current next-free stack pointer.
+///
+/// This only checks the operation precondition. It never reads a word or
+/// updates `s1`.
+pub fn validate_evm_stack_pop(next_free: u64) -> Result<(), StackError> {
+    validate_evm_stack_operands(next_free, 1)
+}
+
+/// Validates that an EVM operation has the required number of live operands.
+///
+/// This is suitable for binary operations with `required == 2`. It is pure:
+/// invalid operations leave guest registers, metadata, and stack memory
+/// untouched because this helper accepts only copied scalar values.
+pub fn validate_evm_stack_operands(next_free: u64, required: u64) -> Result<(), StackError> {
+    let depth = evm_stack_depth(next_free)?;
+    if depth < required {
+        Err(StackError::StackUnderflow { depth, required })
+    } else {
+        Ok(())
+    }
+}
+
 /// Failures while reading or writing an EVM word in the guest stack region.
 ///
 /// These host-side helpers only access the fixed stack reservation. They do
@@ -438,6 +512,10 @@ pub enum GuestResultError {
     Layout(LayoutError),
     Executor(ExecutorError),
     Metadata(GuestMetadataError),
+    LiveStackBaseMismatch {
+        expected_s0: u64,
+        live_s0: u64,
+    },
     LiveStackPointerMismatch {
         published_s1: u64,
         live_s1: u64,
@@ -454,6 +532,13 @@ impl fmt::Display for GuestResultError {
             Self::Layout(error) => write!(f, "invalid guest result layout: {error}"),
             Self::Executor(error) => write!(f, "could not read guest result metadata: {error}"),
             Self::Metadata(error) => write!(f, "invalid guest result metadata: {error}"),
+            Self::LiveStackBaseMismatch {
+                expected_s0,
+                live_s0,
+            } => write!(
+                f,
+                "live s0 0x{live_s0:016x} does not match the EVM stack base 0x{expected_s0:016x}"
+            ),
             Self::LiveStackPointerMismatch {
                 published_s1,
                 live_s1,
@@ -517,6 +602,15 @@ pub fn read_guest_result(
     executor.read_memory(METADATA_REGION.start(), &mut encoded_metadata)?;
     let metadata = GuestMetadata::decode(&encoded_metadata)?;
     let published_metadata = metadata.validate_published_terminal(true)?;
+
+    let expected_s0 = EVM_STACK_REGION.start();
+    let live_s0 = executor.read_register(IntegerRegister::EVM_STACK_BASE);
+    if live_s0 != expected_s0 {
+        return Err(GuestResultError::LiveStackBaseMismatch {
+            expected_s0,
+            live_s0,
+        });
+    }
 
     let live_s1 = executor.read_register(IntegerRegister::EVM_STACK_NEXT_FREE);
     if live_s1 != published_metadata.final_s1() {
@@ -728,5 +822,65 @@ mod tests {
 
         assert_eq!(empty.stack_depth(), 0);
         assert_eq!(full.stack_depth(), EVM_STACK_CAPACITY);
+    }
+
+    #[test]
+    fn stack_preconditions_enforce_boundaries_without_mutating_state() {
+        let empty = EVM_STACK_REGION.start();
+        let one_word = empty + EVM_WORD_SIZE;
+        let two_words = empty + 2 * EVM_WORD_SIZE;
+        let almost_full = EVM_STACK_REGION.end() - EVM_WORD_SIZE;
+        let full = EVM_STACK_REGION.end();
+        let invalid_depth = full + EVM_WORD_SIZE;
+
+        assert_eq!(validate_evm_stack_push(empty), Ok(()));
+        assert_eq!(validate_evm_stack_push(almost_full), Ok(()));
+        assert_eq!(
+            validate_evm_stack_push(full),
+            Err(StackError::StackOverflow {
+                depth: EVM_STACK_CAPACITY
+            })
+        );
+
+        assert_eq!(
+            validate_evm_stack_pop(empty),
+            Err(StackError::StackUnderflow {
+                depth: 0,
+                required: 1
+            })
+        );
+        assert_eq!(validate_evm_stack_pop(one_word), Ok(()));
+
+        for next_free in [empty, one_word] {
+            assert_eq!(
+                validate_evm_stack_operands(next_free, 2),
+                Err(StackError::StackUnderflow {
+                    depth: evm_stack_depth(next_free).expect("test stack pointer is valid"),
+                    required: 2,
+                })
+            );
+        }
+        assert_eq!(validate_evm_stack_operands(two_words, 2), Ok(()));
+        assert!(matches!(
+            validate_evm_stack_push(invalid_depth),
+            Err(StackError::InvalidStackPointer(
+                LayoutError::StackPointerOutOfRange { .. }
+            ))
+        ));
+
+        // The helpers have no executor or mutable arguments, so rejected
+        // checks cannot change logical guest state.
+        let registers = [empty, full];
+        let metadata = GuestMetadata::new(GuestExecutionStatus::Running, 0, empty);
+        let stack_memory = [0xa5_u8; EVM_WORD_ENCODED_SIZE];
+        let _ = validate_evm_stack_push(full);
+        let _ = validate_evm_stack_pop(empty);
+        let _ = validate_evm_stack_operands(one_word, 2);
+        assert_eq!(registers, [empty, full]);
+        assert_eq!(
+            metadata,
+            GuestMetadata::new(GuestExecutionStatus::Running, 0, empty)
+        );
+        assert_eq!(stack_memory, [0xa5_u8; EVM_WORD_ENCODED_SIZE]);
     }
 }
