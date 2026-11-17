@@ -3,6 +3,7 @@ name = "ferreth-compiler"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 asm-rs = { version = "0.2.0", default-features = false, features = [
