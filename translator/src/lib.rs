@@ -1,5 +1,8 @@
 use std::fmt::Write;
 
+pub mod benchmark;
+pub mod execution;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     Add,
@@ -19,6 +22,20 @@ impl Opcode {
         match self {
             Self::Add => generate_add(),
             Self::Sub => generate_sub(),
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Add => "ADD",
+            Self::Sub => "SUB",
+        }
+    }
+
+    pub const fn evm_byte(self) -> u8 {
+        match self {
+            Self::Add => 0x01,
+            Self::Sub => 0x03,
         }
     }
 }

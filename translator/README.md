@@ -11,6 +11,47 @@ cargo run --manifest-path translator/Cargo.toml -- translate --op SUB
 cargo test --manifest-path translator/Cargo.toml
 ```
 
+## Reproducible RV64 execution baseline
+
+The `bench` command uses the same differential path as the integration test:
+generated assembly is assembled with `asm-rs`, decoded instructions are executed
+in `rvemu`, and the complete 256-bit result is compared with `revm` under
+Cancun. It is an empirical retired-instruction baseline, not a cycle, energy,
+gas, or hardware-performance benchmark.
+
+```sh
+mkdir -p translator/runs
+cargo run --release --manifest-path translator/Cargo.toml -- \
+  bench --op ALL --cases 1000 --seed 42 --format json \
+  > translator/runs/rv64-arithmetic.json
+```
+
+`ADD`, `SUB`, and `ALL` are accepted values for `--op`; `ALL` applies the same
+shared directed vectors and the same seed-reset xorshift64 random operand pairs
+to each operation. `--cases` is the number of random pairs per operation; the
+JSON report separately identifies the 12 directed cases. When `--format json`
+is selected, stdout contains only the versioned JSON report. Diagnostics are
+written to stderr. A parity or execution failure produces a nonzero status but
+still writes JSON with operation, case index, operands, available results, seed,
+and execution error evidence in the operation's `failures` array.
+
+If omitted, `--seed` defaults to `0x123456789abcdef0`; always retain the
+reported seed with evidence so the exact random input sequence can be replayed.
+
+The `instruction_categories` values are aggregate counts over successfully
+executed cases. They are mutually exclusive and sum to `total_executed`.
+Classification is performed on the decoded 32-bit instruction at rvemu's PC
+immediately before execution, so assembler-expanded `li` and `ret` are counted
+as their real instructions. The harness `EBREAK` return sentinel is excluded.
+Unrecognized instruction encodings are counted as `other`; this baseline only
+classifies base 32-bit RV64 encodings and would require extension if compressed
+or other instruction formats were introduced.
+
+Reports and `rvemu`'s DTB/DTS byproducts are intentionally kept in
+`translator/runs/`, which is ignored by Git. To promote a reviewed
+baseline, copy it to a new, explicitly named file under `experiments/baselines/`
+in a separate reviewed change. Do not overwrite an existing baseline file.
+
 ## Calling convention
 
 `evm_add` and `evm_sub` use the RISC-V integer calling convention: `a0` points
