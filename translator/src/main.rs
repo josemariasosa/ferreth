@@ -1,7 +1,7 @@
 use ferrum_eth_translator::{
     benchmark::{run_benchmark, BenchOptions},
     execution::DEFAULT_RANDOM_SEED,
-    orchestrator::execute_guest_push1,
+    orchestrator::{execute_guest_push1, execute_guest_push1_sequence},
     rv64::push::generate_guest_push1,
     Opcode,
 };
@@ -52,6 +52,29 @@ fn translate(args: &[String]) -> ExitCode {
 
 fn execute(args: &[String]) -> ExitCode {
     match args {
+        [option, values] if option == "--push1-sequence" => {
+            let Some(immediates) = parse_push1_sequence(values) else {
+                return usage_failure();
+            };
+            match execute_guest_push1_sequence(&immediates) {
+                Ok(result) => {
+                    println!("PUSH1 sequence {immediates:?} complete linked executable program:");
+                    print!("{}", result.assembly());
+                    println!("Final stack: {:?}", result.guest_result().stack());
+                    println!(
+                        "Instructions: {} (opcode body {}, termination {})",
+                        result.instruction_metrics().total(),
+                        result.instruction_metrics().opcode_body(),
+                        result.instruction_metrics().guest_termination(),
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("PUSH1 sequence execution failed: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         [option, operation, value_option, value]
             if option == "--op" && operation == "PUSH1" && value_option == "--value" =>
         {
@@ -153,7 +176,11 @@ fn parse_push1_value(value: &str) -> Option<u8> {
     u8::try_from(parse_u64(value)?).ok()
 }
 
+fn parse_push1_sequence(value: &str) -> Option<Vec<u8>> {
+    value.split(',').map(parse_push1_value).collect()
+}
+
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json");
     ExitCode::FAILURE
 }

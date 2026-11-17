@@ -3,6 +3,7 @@ use std::fmt::Write;
 use revm::primitives::U256;
 
 pub mod benchmark;
+pub mod compiler;
 pub mod execution;
 pub mod orchestrator;
 pub mod rv64;
