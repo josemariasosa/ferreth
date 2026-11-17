@@ -1,2 +1,4 @@
 target/
 .DS_Store
+**/rvemu.dtb
+**/rvemu.dts

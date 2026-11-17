@@ -1,5 +1,3 @@
-use std::{env, fs, path::PathBuf, sync::Mutex};
-
 use rvemu::{bus::DRAM_BASE, emulator::Emulator};
 
 use super::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor};
@@ -8,11 +6,6 @@ use super::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor};
 // adapter-local fact behind the backend-neutral executor interface.
 const DRAM_SIZE: u64 = 1024 * 1024 * 1024;
 const DRAM_END: u64 = DRAM_BASE + DRAM_SIZE;
-
-// rvemu writes generated device-tree files relative to the process working
-// directory during construction. Serialize the temporary directory change so
-// the artifacts remain in the ignored translator/runs directory.
-static RVEMU_INITIALIZATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Executor implementation backed by rvemu 0.0.11.
 pub struct RvemuExecutor {
@@ -25,7 +18,7 @@ impl RvemuExecutor {
 
     pub fn new() -> Result<Self, ExecutorError> {
         Ok(Self {
-            emulator: new_emulator_in_artifact_directory()?,
+            emulator: Emulator::new(),
         })
     }
 
@@ -165,43 +158,5 @@ impl Rv64Executor for RvemuExecutor {
             // Count only instructions whose execution completed successfully.
             executed_instructions += 1;
         }
-    }
-}
-
-fn new_emulator_in_artifact_directory() -> Result<Emulator, ExecutorError> {
-    let _lock = RVEMU_INITIALIZATION_LOCK
-        .lock()
-        .map_err(|_| ExecutorError::Initialization {
-            description: "initialization lock was poisoned".to_owned(),
-        })?;
-    let artifact_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runs");
-    fs::create_dir_all(&artifact_directory).map_err(|error| ExecutorError::Initialization {
-        description: format!(
-            "could not create artifact directory {}: {error}",
-            artifact_directory.display()
-        ),
-    })?;
-    let original_directory = env::current_dir().map_err(|error| ExecutorError::Initialization {
-        description: format!("could not read process working directory: {error}"),
-    })?;
-    env::set_current_dir(&artifact_directory).map_err(|error| ExecutorError::Initialization {
-        description: format!(
-            "could not enter artifact directory {}: {error}",
-            artifact_directory.display()
-        ),
-    })?;
-    let restore = WorkingDirectoryRestore { original_directory };
-    let emulator = Emulator::new();
-    drop(restore);
-    Ok(emulator)
-}
-
-struct WorkingDirectoryRestore {
-    original_directory: PathBuf,
-}
-
-impl Drop for WorkingDirectoryRestore {
-    fn drop(&mut self) {
-        let _ = env::set_current_dir(&self.original_directory);
     }
 }
