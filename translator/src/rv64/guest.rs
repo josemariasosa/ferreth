@@ -8,10 +8,13 @@
 
 use std::fmt;
 
+use revm::primitives::U256;
+
 use super::{
     executor::{ExecutorError, IntegerRegister, Rv64Executor},
     memory::{
-        evm_stack_depth, validate_evm_stack_layout, LayoutError, EVM_STACK_REGION, METADATA_REGION,
+        evm_stack_depth, validate_evm_stack_layout, LayoutError, EVM_STACK_CAPACITY,
+        EVM_STACK_REGION, EVM_WORD_SIZE, METADATA_REGION,
     },
 };
 
@@ -23,6 +26,137 @@ pub const GUEST_METADATA_EXCEPTION_CODE_OFFSET: usize = 0x08;
 pub const GUEST_METADATA_FINAL_S1_OFFSET: usize = 0x10;
 /// Exact encoded size of the guest result record.
 pub const GUEST_METADATA_ENCODED_SIZE: usize = 24;
+
+/// Exact byte width of one EVM word in guest memory.
+pub const EVM_WORD_ENCODED_SIZE: usize = EVM_WORD_SIZE as usize;
+
+/// Failures while reading or writing an EVM word in the guest stack region.
+///
+/// These host-side helpers only access the fixed stack reservation. They do
+/// not determine whether a slot is live, and never modify guest registers or
+/// metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestMemoryError {
+    InvalidStackSlot { slot_index: usize },
+    Layout(LayoutError),
+    Executor(ExecutorError),
+}
+
+impl fmt::Display for GuestMemoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidStackSlot { slot_index } => write!(
+                f,
+                "EVM stack slot {slot_index} is outside the valid range 0..{EVM_STACK_CAPACITY}"
+            ),
+            Self::Layout(error) => write!(f, "invalid EVM stack word layout: {error}"),
+            Self::Executor(error) => write!(f, "could not access EVM stack word: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for GuestMemoryError {}
+
+impl From<LayoutError> for GuestMemoryError {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
+    }
+}
+
+impl From<ExecutorError> for GuestMemoryError {
+    fn from(error: ExecutorError) -> Self {
+        Self::Executor(error)
+    }
+}
+
+/// Writes one complete EVM word to a fixed guest stack slot.
+///
+/// Slot zero begins at [`EVM_STACK_REGION`]'s base; slot 1023 is the final
+/// valid slot. The four 64-bit limbs are written in least-significant-limb
+/// first order, with each limb explicitly encoded little-endian. This does
+/// not adjust `s0`, `s1`, or metadata, so it is suitable only for host-side
+/// setup and inspection rather than guest stack operations.
+pub fn write_evm_word(
+    executor: &mut impl Rv64Executor,
+    slot_index: usize,
+    word: U256,
+) -> Result<(), GuestMemoryError> {
+    let address = evm_stack_slot_address(slot_index)?;
+    executor.write_memory(address, &encode_evm_word(word))?;
+    Ok(())
+}
+
+/// Reads one complete EVM word from a fixed guest stack slot.
+///
+/// This is the inverse of [`write_evm_word`]. It does not inspect or modify
+/// guest registers or metadata, and does not establish stack liveness.
+pub fn read_evm_word(
+    executor: &mut impl Rv64Executor,
+    slot_index: usize,
+) -> Result<U256, GuestMemoryError> {
+    let address = evm_stack_slot_address(slot_index)?;
+    let mut bytes = [0; EVM_WORD_ENCODED_SIZE];
+    executor.read_memory(address, &mut bytes)?;
+    Ok(decode_evm_word(bytes))
+}
+
+fn evm_stack_slot_address(slot_index: usize) -> Result<u64, GuestMemoryError> {
+    validate_evm_stack_layout()?;
+    if slot_index >= EVM_STACK_CAPACITY as usize {
+        return Err(GuestMemoryError::InvalidStackSlot { slot_index });
+    }
+
+    let slot_index =
+        u64::try_from(slot_index).map_err(|_| GuestMemoryError::InvalidStackSlot { slot_index })?;
+    let slot_offset =
+        slot_index
+            .checked_mul(EVM_WORD_SIZE)
+            .ok_or(LayoutError::AddressOverflow {
+                address: EVM_STACK_REGION.start(),
+                width: EVM_WORD_SIZE,
+            })?;
+    let address =
+        EVM_STACK_REGION
+            .start()
+            .checked_add(slot_offset)
+            .ok_or(LayoutError::AddressOverflow {
+                address: EVM_STACK_REGION.start(),
+                width: slot_offset,
+            })?;
+    EVM_STACK_REGION.validate_aligned_access(address, EVM_WORD_ENCODED_SIZE, EVM_WORD_SIZE)?;
+    Ok(address)
+}
+
+fn encode_evm_word(word: U256) -> [u8; EVM_WORD_ENCODED_SIZE] {
+    let big_endian = word.to_be_bytes::<EVM_WORD_ENCODED_SIZE>();
+    let mut encoded = [0; EVM_WORD_ENCODED_SIZE];
+    for limb_index in 0..EVM_WORD_ENCODED_SIZE / std::mem::size_of::<u64>() {
+        let big_endian_start = EVM_WORD_ENCODED_SIZE - (limb_index + 1) * 8;
+        let limb = u64::from_be_bytes(
+            big_endian[big_endian_start..big_endian_start + 8]
+                .try_into()
+                .expect("EVM word limbs are always eight bytes"),
+        );
+        let little_endian_start = limb_index * 8;
+        encoded[little_endian_start..little_endian_start + 8].copy_from_slice(&limb.to_le_bytes());
+    }
+    encoded
+}
+
+fn decode_evm_word(encoded: [u8; EVM_WORD_ENCODED_SIZE]) -> U256 {
+    let mut big_endian = [0; EVM_WORD_ENCODED_SIZE];
+    for limb_index in 0..EVM_WORD_ENCODED_SIZE / std::mem::size_of::<u64>() {
+        let little_endian_start = limb_index * 8;
+        let limb = u64::from_le_bytes(
+            encoded[little_endian_start..little_endian_start + 8]
+                .try_into()
+                .expect("EVM word limbs are always eight bytes"),
+        );
+        let big_endian_start = EVM_WORD_ENCODED_SIZE - (limb_index + 1) * 8;
+        big_endian[big_endian_start..big_endian_start + 8].copy_from_slice(&limb.to_be_bytes());
+    }
+    U256::from_be_bytes(big_endian)
+}
 
 /// Failures while preparing an executor for a new guest execution.
 ///
