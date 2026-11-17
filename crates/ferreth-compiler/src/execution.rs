@@ -229,8 +229,10 @@ impl Rv64Runner {
     }
 }
 
-/// Executes decoded instructions with a host-managed stack and RV64 arithmetic.
-/// This does not implement EVM stack manipulation in RV64.
+/// Executes decoded arithmetic instructions with a host-managed stack and RV64 arithmetic.
+///
+/// This legacy helper deliberately rejects POP: POP is implemented only by the
+/// stack-aware guest RV64 path, never by a host-managed stack mutation.
 pub struct ProgramRunner {
     add: Rv64Runner,
     sub: Rv64Runner,
@@ -251,6 +253,9 @@ impl ProgramRunner {
             match instruction {
                 Instruction::Stop => break,
                 Instruction::Push(value) => stack.push(*value),
+                Instruction::Pop => {
+                    return Err("POP requires the stack-aware RV64 guest execution path".to_owned())
+                }
                 Instruction::Add | Instruction::Sub => {
                     if stack.len() < 2 {
                         return Err(format!("stack underflow at instruction {index}"));
@@ -260,7 +265,9 @@ impl ProgramRunner {
                     let runner = match instruction {
                         Instruction::Add => &mut self.add,
                         Instruction::Sub => &mut self.sub,
-                        Instruction::Stop | Instruction::Push(_) => unreachable!(),
+                        Instruction::Stop | Instruction::Push(_) | Instruction::Pop => {
+                            unreachable!()
+                        }
                     };
                     stack.push(runner.run(a, b)?.result);
                 }

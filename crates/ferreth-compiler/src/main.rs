@@ -3,7 +3,7 @@ use ferreth_compiler::{
     decode,
     execution::DEFAULT_RANDOM_SEED,
     orchestrator::{
-        execute_guest_add, execute_guest_evm_bytecode, execute_guest_push1,
+        execute_guest_add, execute_guest_evm_bytecode, execute_guest_pop, execute_guest_push1,
         execute_guest_push1_sequence, execute_guest_sub,
     },
     rv64::push::generate_guest_push1,
@@ -56,6 +56,24 @@ fn translate(args: &[String]) -> ExitCode {
 
 fn execute(args: &[String]) -> ExitCode {
     match args {
+        [option, operation] if option == "--op" && operation == "POP" => {
+            match execute_guest_pop() {
+                Ok(result) => {
+                    println!("Opcode: POP");
+                    println!("Final guest status: {:?}", result.guest_result().status());
+                    println!("Final stack: {:?}", result.guest_result().stack());
+                    println!(
+                        "Dynamic RV64 instruction count: {}",
+                        result.instruction_metrics().total()
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("POP execution failed: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         [option, operation, a_option, a, b_option, b]
             if option == "--op"
                 && matches!(operation.as_str(), "ADD" | "SUB")
@@ -270,6 +288,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
+    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
     ExitCode::FAILURE
 }

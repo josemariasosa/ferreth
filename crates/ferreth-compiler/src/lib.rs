@@ -14,6 +14,7 @@ pub enum Instruction {
     Push(U256),
     Add,
     Sub,
+    Pop,
 }
 
 /// One decoded EVM instruction with source metadata for compiler diagnostics.
@@ -31,6 +32,9 @@ pub enum DecodedInstruction {
         offset: usize,
     },
     Sub {
+        offset: usize,
+    },
+    Pop {
         offset: usize,
     },
 }
@@ -70,7 +74,7 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Decodes the strict STOP, PUSH1-PUSH32, ADD and SUB research subset.
+/// Decodes the strict STOP, PUSH1-PUSH32, ADD, SUB, and POP research subset.
 ///
 /// Decoding ends at the first `STOP`, so bytes after it are unreachable and
 /// intentionally not interpreted as EVM instructions.
@@ -83,6 +87,7 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
                 DecodedInstruction::Push { value, .. } => Instruction::Push(value),
                 DecodedInstruction::Add { .. } => Instruction::Add,
                 DecodedInstruction::Sub { .. } => Instruction::Sub,
+                DecodedInstruction::Pop { .. } => Instruction::Pop,
             })
             .collect()
     })
@@ -100,6 +105,7 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             0x00 => DecodedInstruction::Stop { offset },
             0x01 => DecodedInstruction::Add { offset },
             0x03 => DecodedInstruction::Sub { offset },
+            0x50 => DecodedInstruction::Pop { offset },
             0x60..=0x7f => {
                 let width = usize::from(opcode - 0x5f);
                 let available = bytecode.len() - pc;

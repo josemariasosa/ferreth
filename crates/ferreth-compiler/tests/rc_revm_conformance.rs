@@ -248,6 +248,21 @@ fn directed_rc_programs_match_revm_cancun() {
             vec![0x60, 0x01, 0x60, 0x00, 0x03, 0x60, 0x00, 0x01],
         ),
         ("U256 modular underflow", vec![0x60, 0x01, 0x60, 0x00, 0x03]),
+        (
+            "POP retains the lower item",
+            vec![0x60, 0x05, 0x60, 0x03, 0x50],
+        ),
+        ("POP leaves an empty stack", vec![0x60, 0x50, 0x50]),
+        ("POP with empty stack", vec![0x50]),
+        (
+            "POP underflows after one successful POP",
+            vec![0x60, 0x05, 0x50, 0x50],
+        ),
+        (
+            "POP then ADD underflows",
+            vec![0x60, 0x05, 0x60, 0x03, 0x50, 0x01],
+        ),
+        ("STOP makes POP unreachable", vec![0x60, 0x05, 0x00, 0x50]),
         ("ADD with empty stack", vec![0x01]),
         ("ADD with one operand", vec![0x60, 0x01, 0x01]),
         ("SUB with empty stack", vec![0x03]),

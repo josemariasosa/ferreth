@@ -251,6 +251,21 @@ pub fn execute_guest_sub_with_initial_stack(
     )
 }
 
+/// Executes one isolated EVM `POP` through the shared compiled RV64 body.
+pub fn execute_guest_pop() -> Result<OrchestratorResult, OrchestratorError> {
+    execute_guest_pop_with_initial_stack(&[U256::ZERO])
+}
+
+/// Executes the isolated guest `POP` body with caller-provided stack words.
+///
+/// This uses RC's linked POP body directly, so RO does not maintain a Rust
+/// implementation of the opcode or a duplicate termination path.
+pub fn execute_guest_pop_with_initial_stack(
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_linked_program(compile_evm_bytecode(&[0x50])?, initial_stack)
+}
+
 /// Decodes, compiles, and executes a supported EVM bytecode program once.
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not

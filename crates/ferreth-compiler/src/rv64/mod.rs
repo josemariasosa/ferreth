@@ -4,5 +4,6 @@ pub mod add;
 pub mod executor;
 pub mod guest;
 pub mod memory;
+pub mod pop;
 pub mod push;
 pub mod sub;

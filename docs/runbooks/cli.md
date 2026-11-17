@@ -58,8 +58,9 @@ assembly only; the `PUSH1` translation also prints machine-code words.
 | `cargo run -p ferreth-compiler -- execute --op PUSH1 --value 5` | Run an isolated `PUSH1` guest operation. `--value` is `0..255` (decimal or `0x`-prefixed). | Linked executable assembly, machine-code words, final guest stack, and total/body/termination instruction counts. |
 | `cargo run -p ferreth-compiler -- execute --op ADD --a 5 --b 3` | Run isolated guest `ADD`. `--a` and `--b` are values parseable as EVM `U256` words. The initial stack is `[a, b]`. | Opcode, initial stack, final guest status, final stack, and dynamic RV64 instruction count. |
 | `cargo run -p ferreth-compiler -- execute --op SUB --a 5 --b 3` | Run isolated guest `SUB` with the same `U256` arguments and initial-stack order. `SUB` evaluates the top item minus the item below it (`b - a`). | For this example the result wraps to `2^256 - 2`; output includes the status, final stack, and dynamic count. |
+| `cargo run -p ferreth-compiler -- execute --op POP` | Run isolated guest `POP` with one initialized zero word. | Final status, empty final stack, and dynamic RV64 instruction count. |
 | `cargo run -p ferreth-compiler -- execute --push1-sequence 5,3` | Run a comma-separated sequence of `PUSH1` immediates; each item must be a decimal or `0x`-prefixed byte value. | One linked executable's assembly, final stack, and total/opcode-body/termination counts. |
-| `cargo run -p ferreth-compiler -- execute --bytecode 600560030100` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. Supported source opcodes are `STOP`, `PUSH1`–`PUSH32`, `ADD`, and `SUB`; RC supports only `PUSH1` among the push widths. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
+| `cargo run -p ferreth-compiler -- execute --bytecode 600560035000` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. Supported source opcodes are `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, and `POP`; RC supports only `PUSH1` among the push widths. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
 
 `--op ADD` and `--op SUB` require both `--a` and `--b`. For the isolated
 guest wrappers, `--a` is the lower stack item and `--b` is the top item; EVM
@@ -115,6 +116,7 @@ overflow trampoline.
 cargo run -p ferreth-compiler -- execute --op PUSH1 --value 5
 cargo run -p ferreth-compiler -- execute --op ADD --a 5 --b 3
 cargo run -p ferreth-compiler -- execute --op SUB --a 5 --b 3
+cargo run -p ferreth-compiler -- execute --op POP
 ```
 
 Representative results:
@@ -160,6 +162,15 @@ The explicit `STOP` is an executed guest instruction. The bytecode program
 without STOP (`6005600301`) executes 69 RV64 instructions; with STOP it
 executes 70.
 
+### POP in bytecode
+
+```sh
+cargo run -p ferreth-compiler -- execute --bytecode 600560035000
+```
+
+This pushes `5`, pushes `3`, removes the top word with `POP`, and stops with
+the final stack `[5]`. POP underflow is published as a guest exception.
+
 ## Error handling
 
 - **Missing arguments or invalid CLI syntax:** prints the usage block to
@@ -192,9 +203,9 @@ The decoder and compiler do not support the same instruction set:
 
 | Component | Supported opcodes |
 | --- | --- |
-| EVM decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB` |
-| RC bytecode compiler | `STOP`, `PUSH1`, `ADD`, `SUB` |
-| Isolated guest operations (RO) | `PUSH1`, `ADD`, `SUB` |
+| EVM decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP` |
+| RC bytecode compiler | `STOP`, `PUSH1`, `ADD`, `SUB`, `POP` |
+| Isolated guest operations (RO) | `PUSH1`, `ADD`, `SUB`, `POP` |
 
 Other `PUSH` widths can decode but cannot be compiled to RV64 by RC. Control
 flow other than stopping at `STOP`, EVM memory and storage operations, and gas

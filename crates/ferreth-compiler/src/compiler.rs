@@ -1,4 +1,4 @@
-//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, and `SUB` operations.
+//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, `SUB`, and `POP` operations.
 //!
 //! This is deliberately not an EVM decoder or a general compiler.  It links
 //! the reusable PUSH1 guest blocks into one executable and supplies the shared
@@ -11,6 +11,7 @@ use asm_rs::{assemble, Arch};
 use crate::rv64::{
     add::generate_guest_add,
     memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
+    pop::generate_guest_pop,
     push::generate_guest_push1,
     sub::generate_guest_sub,
 };
@@ -127,6 +128,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
             }
             DecodedInstruction::Add { .. } => operations.push(CompiledOperation::Add),
             DecodedInstruction::Sub { .. } => operations.push(CompiledOperation::Sub),
+            DecodedInstruction::Pop { .. } => operations.push(CompiledOperation::Pop),
         }
     }
     // Keep the established PUSH1-only linker (and therefore its exact output)
@@ -141,7 +143,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 .iter()
                 .map(|operation| match operation {
                     CompiledOperation::Push1(immediate) => *immediate,
-                    CompiledOperation::Add | CompiledOperation::Sub => {
+                    CompiledOperation::Add | CompiledOperation::Sub | CompiledOperation::Pop => {
                         unreachable!("checked above")
                     }
                 })
@@ -156,6 +158,7 @@ enum CompiledOperation {
     Push1(u8),
     Add,
     Sub,
+    Pop,
 }
 
 /// Links a mixed sequence of supported opcode bodies. Reaching the end falls
@@ -205,6 +208,21 @@ fn compile_supported_program(
                     });
                 }
                 Ok(GeneratedOperation::Sub { code, links })
+            }
+            CompiledOperation::Pop => {
+                let code = generate_guest_pop();
+                let trampoline_offset = code.machine_code().len() - RV64_INSTRUCTION_SIZE as usize;
+                if instruction_at(code.machine_code(), trampoline_offset)? != 0x0000_006f {
+                    return Err(CompileError::Link {
+                        description:
+                            "POP generator no longer has its documented underflow trampoline"
+                                .to_owned(),
+                    });
+                }
+                Ok(GeneratedOperation::Pop {
+                    code,
+                    trampoline_offset,
+                })
             }
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
@@ -282,6 +300,19 @@ fn compile_supported_program(
                     .copy_from_slice(&trampoline.to_le_bytes());
                 machine_code.extend_from_slice(&bytes);
             }
+            GeneratedOperation::Pop {
+                code,
+                trampoline_offset,
+            } => {
+                let trampoline_pc =
+                    operation_start + u64::try_from(*trampoline_offset).expect("offset fits u64");
+                let offset = relative_jal_offset(trampoline_pc, underflow_start)?;
+                assembly.push_str(&linked_pop_assembly(code.assembly(), index, offset)?);
+                let mut bytes = code.machine_code().to_vec();
+                bytes[*trampoline_offset..*trampoline_offset + 4]
+                    .copy_from_slice(&encode_jal_zero(offset)?.to_le_bytes());
+                machine_code.extend_from_slice(&bytes);
+            }
         }
     }
     if has_explicit_stop {
@@ -324,16 +355,45 @@ enum GeneratedOperation {
         code: crate::rv64::push::GeneratedRv64,
         links: crate::rv64::push::GeneratedRv64LinkMetadata,
     },
+    Pop {
+        code: crate::rv64::push::GeneratedRv64,
+        trampoline_offset: usize,
+    },
 }
 
 impl GeneratedOperation {
     fn len(&self) -> usize {
         match self {
-            Self::Push1 { code, .. } | Self::Add { code, .. } | Self::Sub { code, .. } => {
-                code.machine_code().len()
-            }
+            Self::Push1 { code, .. }
+            | Self::Add { code, .. }
+            | Self::Sub { code, .. }
+            | Self::Pop { code, .. } => code.machine_code().len(),
         }
     }
+}
+
+fn linked_pop_assembly(
+    source: &str,
+    index: usize,
+    underflow_offset: i64,
+) -> Result<String, CompileError> {
+    let source = source.replacen("guest_pop:\n", &format!("guest_pop_{index}:\n"), 1);
+    let source = source.replacen(
+        "bgeu s0, s1, guest_pop_underflow",
+        &format!("bgeu s0, s1, guest_pop_underflow_{index}"),
+        1,
+    );
+    let source = source.replacen(
+        "guest_pop_underflow:\n    jal zero, 0",
+        &format!("guest_pop_underflow_{index}:\n    jal zero, {underflow_offset}"),
+        1,
+    );
+    if source.contains("guest_pop_underflow:\n") {
+        return Err(CompileError::Link {
+            description: "POP assembly no longer exposes a patchable underflow label".to_owned(),
+        });
+    }
+    Ok(source)
 }
 
 fn linked_add_assembly(
