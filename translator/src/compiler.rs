@@ -1,4 +1,4 @@
-//! Minimal whole-program composition for EVM `PUSH1`, `ADD`, and `SUB` operations.
+//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, and `SUB` operations.
 //!
 //! This is deliberately not an EVM decoder or a general compiler.  It links
 //! the reusable PUSH1 guest blocks into one executable and supplies the shared
@@ -99,13 +99,18 @@ impl From<DecodeError> for CompileError {
 
 /// Decodes and compiles the supported EVM bytecode subset into one RV64 executable.
 ///
-/// Reaching the end of the bytecode currently enters the temporary normal
-/// termination epilogue; this is not complete EVM `STOP` semantics.
+/// Reaching the end of bytecode falls through to the compatibility normal
+/// epilogue. An explicit `STOP` emits a direct transfer to that same epilogue.
 pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
     let instructions = decode_detailed(bytecode)?;
     let mut operations = Vec::with_capacity(instructions.len());
+    let mut has_explicit_stop = false;
     for instruction in instructions {
         match instruction {
+            DecodedInstruction::Stop { .. } => {
+                has_explicit_stop = true;
+                break;
+            }
             DecodedInstruction::Push {
                 value,
                 opcode: 0x60,
@@ -120,9 +125,10 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
     }
     // Keep the established PUSH1-only linker (and therefore its exact output)
     // for existing callers. Mixed programs use the small linker below.
-    if operations
-        .iter()
-        .all(|operation| matches!(operation, CompiledOperation::Push1(_)))
+    if !has_explicit_stop
+        && operations
+            .iter()
+            .all(|operation| matches!(operation, CompiledOperation::Push1(_)))
     {
         return compile_push1_program(
             &operations
@@ -136,7 +142,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 .collect::<Vec<_>>(),
         );
     }
-    compile_supported_program(&operations)
+    compile_supported_program(&operations, has_explicit_stop)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -146,10 +152,11 @@ enum CompiledOperation {
     Sub,
 }
 
-/// Links a mixed sequence of supported opcode bodies. Reaching the end still
-/// uses the temporary normal epilogue rather than production EVM STOP.
+/// Links a mixed sequence of supported opcode bodies. Reaching the end falls
+/// through to the compatibility normal epilogue; an explicit STOP jumps there.
 fn compile_supported_program(
     operations: &[CompiledOperation],
+    has_explicit_stop: bool,
 ) -> Result<CompiledRv64Program, CompileError> {
     let generated = operations
         .iter()
@@ -203,7 +210,11 @@ fn compile_supported_program(
     let overflow_code = assemble(&overflow_assembly, Arch::Rv64).map_err(assembly_error)?;
     let underflow_code = assemble(&underflow_assembly, Arch::Rv64).map_err(assembly_error)?;
     let opcode_len = generated.iter().map(GeneratedOperation::len).sum::<usize>();
-    let normal_start = ENTRY_PC + u64::try_from(opcode_len).expect("opcode length fits u64");
+    // STOP is one `jal zero, 4`, which skips directly to the shared normal
+    // publisher. It does not alter the EVM stack registers or native `sp`.
+    let stop_len = usize::from(has_explicit_stop) * RV64_INSTRUCTION_SIZE as usize;
+    let normal_start =
+        ENTRY_PC + u64::try_from(opcode_len + stop_len).expect("opcode length fits u64");
     let overflow_start =
         normal_start + u64::try_from(normal_code.len()).expect("code length fits u64");
     let underflow_start =
@@ -211,7 +222,7 @@ fn compile_supported_program(
 
     let mut assembly = String::new();
     let mut machine_code = Vec::with_capacity(
-        opcode_len + normal_code.len() + overflow_code.len() + underflow_code.len(),
+        opcode_len + stop_len + normal_code.len() + overflow_code.len() + underflow_code.len(),
     );
     for (index, operation) in generated.iter().enumerate() {
         let operation_start =
@@ -266,6 +277,10 @@ fn compile_supported_program(
                 machine_code.extend_from_slice(&bytes);
             }
         }
+    }
+    if has_explicit_stop {
+        assembly.push_str("evm_stop:\n    jal zero, 4\n");
+        machine_code.extend_from_slice(&encode_jal_zero(4)?.to_le_bytes());
     }
     assembly.push_str(&normal_assembly);
     assembly.push_str(&overflow_assembly);

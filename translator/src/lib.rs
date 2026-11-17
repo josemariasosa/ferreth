@@ -10,6 +10,7 @@ pub mod rv64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
+    Stop,
     Push(U256),
     Add,
     Sub,
@@ -18,6 +19,9 @@ pub enum Instruction {
 /// One decoded EVM instruction with source metadata for compiler diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodedInstruction {
+    Stop {
+        offset: usize,
+    },
     Push {
         value: U256,
         opcode: u8,
@@ -66,12 +70,16 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Decodes the strict PUSH1-PUSH32, ADD and SUB research subset.
+/// Decodes the strict STOP, PUSH1-PUSH32, ADD and SUB research subset.
+///
+/// Decoding ends at the first `STOP`, so bytes after it are unreachable and
+/// intentionally not interpreted as EVM instructions.
 pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
     decode_detailed(bytecode).map(|instructions| {
         instructions
             .into_iter()
             .map(|instruction| match instruction {
+                DecodedInstruction::Stop { .. } => Instruction::Stop,
                 DecodedInstruction::Push { value, .. } => Instruction::Push(value),
                 DecodedInstruction::Add { .. } => Instruction::Add,
                 DecodedInstruction::Sub { .. } => Instruction::Sub,
@@ -89,6 +97,7 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
         let opcode = bytecode[pc];
         pc += 1;
         let instruction = match opcode {
+            0x00 => DecodedInstruction::Stop { offset },
             0x01 => DecodedInstruction::Add { offset },
             0x03 => DecodedInstruction::Sub { offset },
             0x60..=0x7f => {
@@ -113,7 +122,11 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             }
             _ => return Err(DecodeError::UnsupportedOpcode { offset, opcode }),
         };
+        let is_stop = matches!(instruction, DecodedInstruction::Stop { .. });
         instructions.push(instruction);
+        if is_stop {
+            break;
+        }
     }
     Ok(instructions)
 }
@@ -268,6 +281,15 @@ mod tests {
                 "PUSH{width}"
             );
         }
+    }
+
+    #[test]
+    fn decodes_stop_and_ignores_unreachable_trailing_bytes() {
+        assert_eq!(decode(&[0x00]), Ok(vec![Instruction::Stop]));
+        assert_eq!(
+            decode(&[0x60, 0x05, 0x00, 0x02]),
+            Ok(vec![Instruction::Push(U256::from(5)), Instruction::Stop])
+        );
     }
 
     #[test]

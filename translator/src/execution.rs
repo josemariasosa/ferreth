@@ -247,6 +247,7 @@ impl ProgramRunner {
         let mut stack = Vec::new();
         for (index, instruction) in program.iter().enumerate() {
             match instruction {
+                Instruction::Stop => break,
                 Instruction::Push(value) => stack.push(*value),
                 Instruction::Add | Instruction::Sub => {
                     if stack.len() < 2 {
@@ -257,7 +258,7 @@ impl ProgramRunner {
                     let runner = match instruction {
                         Instruction::Add => &mut self.add,
                         Instruction::Sub => &mut self.sub,
-                        Instruction::Push(_) => unreachable!(),
+                        Instruction::Stop | Instruction::Push(_) => unreachable!(),
                     };
                     stack.push(runner.run(a, b)?.result);
                 }
