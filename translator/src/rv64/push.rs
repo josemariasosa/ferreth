@@ -14,8 +14,35 @@ use asm_rs::{assemble, Arch};
 /// possible without maintaining a second hand-encoded instruction stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedRv64 {
-    assembly: String,
-    machine_code: Vec<u8>,
+    pub(crate) assembly: String,
+    pub(crate) machine_code: Vec<u8>,
+    pub(crate) link_metadata: Option<GeneratedRv64LinkMetadata>,
+}
+
+/// Named offsets for an opcode body which embeds a callable RV64 core.
+///
+/// Offsets are relative to the start of [`GeneratedRv64::machine_code`]. The
+/// normal continuation is the first byte after the embedded core, where a
+/// later composed guest program may place its next opcode body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratedRv64LinkMetadata {
+    pub(crate) core_call_offset: usize,
+    pub(crate) normal_continuation_offset: usize,
+    pub(crate) exceptional_trampoline_offset: usize,
+}
+
+impl GeneratedRv64LinkMetadata {
+    pub const fn core_call_offset(self) -> usize {
+        self.core_call_offset
+    }
+
+    pub const fn normal_continuation_offset(self) -> usize {
+        self.normal_continuation_offset
+    }
+
+    pub const fn exceptional_trampoline_offset(self) -> usize {
+        self.exceptional_trampoline_offset
+    }
 }
 
 impl GeneratedRv64 {
@@ -38,6 +65,11 @@ impl GeneratedRv64 {
                     .expect("generated RV64 instructions are four bytes"),
             )
         })
+    }
+
+    /// Optional link information for an opcode body with an embedded core.
+    pub const fn link_metadata(&self) -> Option<GeneratedRv64LinkMetadata> {
+        self.link_metadata
     }
 
     /// Byte offset of the patchable overflow trampoline instruction.
@@ -80,5 +112,6 @@ pub fn generate_guest_push1(immediate: u8) -> GeneratedRv64 {
     GeneratedRv64 {
         assembly,
         machine_code,
+        link_metadata: None,
     }
 }
