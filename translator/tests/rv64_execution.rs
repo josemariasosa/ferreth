@@ -17,10 +17,10 @@ const OPERAND_A: u64 = DRAM_BASE + 0x1000;
 const OPERAND_B: u64 = DRAM_BASE + 0x1020;
 const RESULT: u64 = DRAM_BASE + 0x1040;
 
-fn assemble_generated_add() -> Result<Vec<u8>, String> {
+fn assemble_generated(opcode: Opcode) -> Result<Vec<u8>, String> {
     let generated = format!(
         "{}\n.globl __rv64_halt\n__rv64_halt:\n    ebreak\n",
-        Opcode::Add.assembly()
+        opcode.assembly()
     );
     let assembly = generated
         .lines()
@@ -51,21 +51,21 @@ fn assemble_generated_add() -> Result<Vec<u8>, String> {
     Ok(program)
 }
 
-struct Rv64AddRunner {
+struct Rv64Runner {
     emulator: Emulator,
     halt_pc: u64,
 }
 
-impl Rv64AddRunner {
-    fn new() -> Result<Self, String> {
-        let program = assemble_generated_add()?;
+impl Rv64Runner {
+    fn new(opcode: Opcode) -> Result<Self, String> {
+        let program = assemble_generated(opcode)?;
         let halt_pc = DRAM_BASE + program.len() as u64 - 4;
         let mut emulator = Emulator::new();
         emulator.initialize_dram(program);
         Ok(Self { emulator, halt_pc })
     }
 
-    fn add(&mut self, a: U256, b: U256) -> Result<U256, String> {
+    fn run(&mut self, a: U256, b: U256) -> Result<U256, String> {
         // rvemu's bus access widths are specified in bits, not bytes.
         for (address, value) in [(OPERAND_A, a), (OPERAND_B, b)] {
             for (index, limb) in to_limbs(value).into_iter().enumerate() {
@@ -117,18 +117,31 @@ impl Rv64AddRunner {
     }
 }
 
-fn run_evm_add(a: U256, b: U256) -> Result<U256, String> {
+fn run_evm(opcode: Opcode, a: U256, b: U256) -> Result<U256, String> {
     let mut bytecode = Vec::with_capacity(2 * 33 + 9);
-    for operand in [a, b] {
+    // EVM binary operations pop the top item first. SUB therefore needs b
+    // below a on the stack to evaluate a - b; ADD's order is immaterial.
+    let operands = match opcode {
+        Opcode::Add => [a, b],
+        Opcode::Sub => [b, a],
+    };
+    for operand in operands {
         bytecode.push(0x7f); // PUSH32
         bytecode.extend_from_slice(&operand.to_be_bytes::<32>());
     }
+    let opcode_byte = match opcode {
+        Opcode::Add => 0x01,
+        Opcode::Sub => 0x03,
+    };
     bytecode.extend_from_slice(&[
-        0x01, // ADD
-        0x60, 0x00, // PUSH1 0
+        opcode_byte,
+        0x60,
+        0x00, // PUSH1 0
         0x52, // MSTORE
-        0x60, 0x20, // PUSH1 32
-        0x60, 0x00, // PUSH1 0
+        0x60,
+        0x20, // PUSH1 32
+        0x60,
+        0x00, // PUSH1 0
         0xf3, // RETURN
     ]);
 
@@ -229,16 +242,16 @@ fn evm_add_matches_rv64() {
         ),
     ];
 
-    let mut rv64 = Rv64AddRunner::new().expect("initialize RV64 execution harness");
+    let mut rv64 = Rv64Runner::new(Opcode::Add).expect("initialize RV64 execution harness");
     let mut check = |label: &str, a: U256, b: U256| {
-        let expected = run_evm_add(a, b).unwrap_or_else(|error| {
+        let expected = run_evm(Opcode::Add, a, b).unwrap_or_else(|error| {
             panic!(
                 "{label}; seed=0x{RANDOM_SEED:016x}; a={}, b={}: {error}",
                 hex(a),
                 hex(b)
             )
         });
-        let actual = rv64.add(a, b).unwrap_or_else(|error| {
+        let actual = rv64.run(a, b).unwrap_or_else(|error| {
             panic!(
                 "{label}; seed=0x{RANDOM_SEED:016x}; a={}, b={}, expected={}: {error}",
                 hex(a),
@@ -275,5 +288,109 @@ fn evm_add_matches_rv64() {
         let a = random_u256(&mut state);
         let b = random_u256(&mut state);
         check(&format!("random case {index}"), a, b);
+    }
+}
+
+#[test]
+fn evm_sub_pushes_b_before_a() {
+    let result = run_evm(Opcode::Sub, U256::from(7), U256::from(5))
+        .expect("execute revm SUB stack-order check");
+    assert_eq!(result, U256::from(2), "EVM SUB must evaluate 7 - 5");
+}
+
+#[test]
+fn evm_sub_matches_rv64() {
+    let max = U256::MAX;
+    let cases = [
+        ("zero minus zero", U256::ZERO, U256::ZERO, U256::ZERO),
+        (
+            "seven minus five",
+            U256::from(7),
+            U256::from(5),
+            U256::from(2),
+        ),
+        (
+            "five minus seven wraps",
+            U256::from(5),
+            U256::from(7),
+            max - U256::from(1),
+        ),
+        ("maximum minus zero", max, U256::ZERO, max),
+        ("maximum minus maximum", max, max, U256::ZERO),
+        ("zero minus one wraps", U256::ZERO, U256::from(1), max),
+        (
+            "borrow across the first limb",
+            from_limbs([0, 1, 0, 0]),
+            U256::from(1),
+            from_limbs([u64::MAX, 0, 0, 0]),
+        ),
+        (
+            "borrow across multiple limbs",
+            from_limbs([0, 0, 1, 0]),
+            U256::from(1),
+            from_limbs([u64::MAX, u64::MAX, 0, 0]),
+        ),
+        (
+            "borrow propagation across all four limbs",
+            from_limbs([0, 0, 0, 1]),
+            U256::from(1),
+            from_limbs([u64::MAX, u64::MAX, u64::MAX, 0]),
+        ),
+    ];
+
+    let mut rv64 = Rv64Runner::new(Opcode::Sub).expect("initialize RV64 execution harness");
+    let mut check = |label: &str, a: U256, b: U256, independently_expected: Option<U256>| {
+        let expected = run_evm(Opcode::Sub, a, b).unwrap_or_else(|error| {
+            panic!(
+                "{label}; seed=0x{RANDOM_SEED:016x}; a={}, b={}: {error}",
+                hex(a),
+                hex(b)
+            )
+        });
+        if let Some(independently_expected) = independently_expected {
+            assert_eq!(
+                expected,
+                independently_expected,
+                "{label}; revm disagrees with independently computed result; a={}, b={}",
+                hex(a),
+                hex(b)
+            );
+        }
+        let actual = rv64.run(a, b).unwrap_or_else(|error| {
+            panic!(
+                "{label}; seed=0x{RANDOM_SEED:016x}; a={}, b={}, expected={}: {error}",
+                hex(a),
+                hex(b),
+                hex(expected)
+            )
+        });
+        assert_eq!(
+            expected,
+            actual,
+            "{label}; seed=0x{RANDOM_SEED:016x}; a={}, b={}, expected={}, actual={}",
+            hex(a),
+            hex(b),
+            hex(expected),
+            hex(actual)
+        );
+        (expected, actual)
+    };
+
+    for (label, a, b, independently_expected) in cases {
+        let (expected, actual) = check(label, a, b, Some(independently_expected));
+        if label == "seven minus five" || label == "five minus seven wraps" {
+            println!("SUB({}, {})", a, b);
+            println!("revm result:  {}", hex(expected));
+            println!("RV64 result:  {}", hex(actual));
+            println!("Parity: PASS");
+        }
+    }
+
+    let mut state = RANDOM_SEED;
+    for index in 0..RANDOM_CASES {
+        let a = random_u256(&mut state);
+        let b = random_u256(&mut state);
+        check(&format!("random case {index}"), a, b, None);
+        check(&format!("random reverse case {index}"), b, a, None);
     }
 }
