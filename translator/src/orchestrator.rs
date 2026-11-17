@@ -7,11 +7,13 @@
 
 use std::fmt;
 
+use asm_rs::{assemble, Arch};
 use revm::primitives::U256;
 
 use crate::{
     compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},
     rv64::{
+        add::generate_guest_add,
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
             initialize_guest_state, read_guest_result, write_evm_word, GuestExecutionStatus,
@@ -23,6 +25,10 @@ use crate::{
 
 /// rvemu version used by this initial isolated-opcode orchestrator.
 pub const EXECUTOR_IDENTITY: &str = "rvemu 0.0.11";
+
+/// Explicitly provisional guest exception code for an EVM binary-operation
+/// stack underflow.
+pub const PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE: u64 = 2;
 
 /// Explicitly provisional guest exception code for a rejected EVM stack push.
 ///
@@ -58,7 +64,7 @@ impl GuestInstructionMetrics {
     }
 }
 
-/// Host-visible result of one linked, isolated guest `PUSH1` execution.
+/// Host-visible result of one linked, isolated guest opcode execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorResult {
     assembly: String,
@@ -121,7 +127,7 @@ impl fmt::Display for OrchestratorError {
                 "initial EVM stack depth {depth} exceeds capacity {EVM_STACK_CAPACITY}"
             ),
             Self::Link { description } => {
-                write!(f, "could not link isolated PUSH1 program: {description}")
+                write!(f, "could not link isolated guest program: {description}")
             }
             Self::ExecutionAccounting { total, termination } => write!(
                 f,
@@ -197,6 +203,32 @@ pub fn execute_guest_push1_sequence_with_initial_stack(
     execute_linked_program(linked, initial_stack)
 }
 
+/// Executes one isolated EVM `ADD` through the RV64 guest ABI.
+///
+/// `a` occupies the lower stack slot and `b` the top slot, so the initialized
+/// guest stack is `[a, b]`. Both the modular arithmetic and the retirement of
+/// the top slot are performed by the RV64 guest code.
+pub fn execute_guest_add(a: U256, b: U256) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_guest_add_with_initial_stack(&[a, b])
+}
+
+/// Executes the isolated guest `ADD` body with a caller-provided initial stack.
+///
+/// This exposes the wrapper's guest-level underflow behavior for integration
+/// tests without adding ADD to the bytecode compiler or RC execution path.
+pub fn execute_guest_add_with_initial_stack(
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
+    let linked = link_guest_add()?;
+    execute_raw_program(
+        linked.assembly,
+        linked.machine_code,
+        linked.normal_termination_instructions,
+        linked.exceptional_termination_instructions,
+        initial_stack,
+    )
+}
+
 /// Decodes, compiles, and executes a PUSH1-only EVM bytecode program once.
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not
@@ -211,6 +243,22 @@ fn execute_linked_program(
     linked: CompiledRv64Program,
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_raw_program(
+        linked.assembly().to_owned(),
+        linked.machine_code().to_vec(),
+        linked.normal_termination_instructions(),
+        linked.exceptional_termination_instructions(),
+        initial_stack,
+    )
+}
+
+fn execute_raw_program(
+    assembly: String,
+    machine_code: Vec<u8>,
+    normal_termination_instructions: u64,
+    exceptional_termination_instructions: u64,
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
     if initial_stack.len() > EVM_STACK_CAPACITY as usize {
         return Err(OrchestratorError::InitialStackTooDeep {
             depth: initial_stack.len(),
@@ -218,7 +266,7 @@ fn execute_linked_program(
     }
 
     let mut executor = RvemuExecutor::new()?;
-    executor.load_code(linked.machine_code())?;
+    executor.load_code(&machine_code)?;
     // This makes an accidental fetch of the reserved exit slot observable as
     // an executor fault. A valid run is instead stopped by `execute` before
     // this instruction is fetched.
@@ -232,11 +280,12 @@ fn execute_linked_program(
         + u64::try_from(initial_stack.len()).expect("stack capacity fits u64") * 32;
     executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, initial_s1);
 
-    let report = executor.execute(ENTRY_PC, EXIT_PC, linked.instruction_limit())?;
+    let instruction_limit = u64::try_from(machine_code.len() / 4).expect("code length fits u64");
+    let report = executor.execute(ENTRY_PC, EXIT_PC, instruction_limit)?;
     let guest_result = read_guest_result(&mut executor, &report)?;
     let guest_termination = match guest_result.status() {
-        GuestExecutionStatus::Normal => linked.normal_termination_instructions(),
-        GuestExecutionStatus::GuestException => linked.exceptional_termination_instructions(),
+        GuestExecutionStatus::Normal => normal_termination_instructions,
+        GuestExecutionStatus::GuestException => exceptional_termination_instructions,
         GuestExecutionStatus::Running => unreachable!("guest result validation rejects RUNNING"),
     };
     let opcode_body = report
@@ -248,8 +297,8 @@ fn execute_linked_program(
         })?;
 
     Ok(OrchestratorResult {
-        assembly: linked.assembly().to_owned(),
-        machine_code: linked.machine_code().to_vec(),
+        assembly,
+        machine_code,
         guest_result,
         instruction_metrics: GuestInstructionMetrics {
             opcode_body,
@@ -258,6 +307,162 @@ fn execute_linked_program(
         },
         executor_identity: EXECUTOR_IDENTITY,
     })
+}
+
+struct LinkedGuestAdd {
+    assembly: String,
+    machine_code: Vec<u8>,
+    normal_termination_instructions: u64,
+    exceptional_termination_instructions: u64,
+}
+
+/// Links the reusable ADD wrapper to its two isolated execution exits.
+fn link_guest_add() -> Result<LinkedGuestAdd, OrchestratorError> {
+    let generated = generate_guest_add();
+    let links = generated
+        .link_metadata()
+        .ok_or_else(|| OrchestratorError::Link {
+            description: "ADD generator did not provide link metadata".to_owned(),
+        })?;
+    if links.normal_continuation_offset() != generated.machine_code().len() {
+        return Err(OrchestratorError::Link {
+            description: "ADD normal continuation does not follow its embedded core".to_owned(),
+        });
+    }
+    let core_call = instruction_at(generated.machine_code(), links.core_call_offset())?;
+    if core_call & 0x0000_0fff != 0x0000_00ef {
+        return Err(OrchestratorError::Link {
+            description: "ADD core-call link point is not jal ra".to_owned(),
+        });
+    }
+    if instruction_at(
+        generated.machine_code(),
+        links.exceptional_trampoline_offset(),
+    )? != 0x0000_006f
+    {
+        return Err(OrchestratorError::Link {
+            description: "ADD exceptional link point is not an unpatched jal zero, 0".to_owned(),
+        });
+    }
+
+    let normal_assembly = add_normal_exit_assembly();
+    let underflow_assembly = add_underflow_exit_assembly();
+    let normal_code = assemble(&normal_assembly, Arch::Rv64).map_err(assembly_error)?;
+    let underflow_code = assemble(&underflow_assembly, Arch::Rv64).map_err(assembly_error)?;
+    let normal_start = ENTRY_PC
+        + u64::try_from(links.normal_continuation_offset()).expect("ADD code length fits u64");
+    let underflow_start =
+        normal_start + u64::try_from(normal_code.len()).expect("normal exit length fits u64");
+    let trampoline_pc = ENTRY_PC
+        + u64::try_from(links.exceptional_trampoline_offset()).expect("ADD link offset fits u64");
+    let underflow_offset = relative_jal_offset(trampoline_pc, underflow_start)?;
+
+    let trampoline_source = "guest_add_underflow:\n    jal zero, 0\n";
+    let patched_trampoline = format!("guest_add_underflow:\n    jal zero, {underflow_offset}\n");
+    let wrapper_assembly = generated
+        .assembly()
+        .replace(trampoline_source, &patched_trampoline);
+    if wrapper_assembly == generated.assembly() {
+        return Err(OrchestratorError::Link {
+            description: "ADD assembly no longer exposes its underflow trampoline".to_owned(),
+        });
+    }
+
+    let mut machine_code = generated.machine_code().to_vec();
+    let trampoline = encode_jal_zero(underflow_offset)?;
+    let trampoline_offset = links.exceptional_trampoline_offset();
+    machine_code[trampoline_offset..trampoline_offset + 4]
+        .copy_from_slice(&trampoline.to_le_bytes());
+    machine_code.extend_from_slice(&normal_code);
+    machine_code.extend_from_slice(&underflow_code);
+    let assembly = format!("{wrapper_assembly}{normal_assembly}{underflow_assembly}");
+    if assemble(&assembly, Arch::Rv64).map_err(assembly_error)? != machine_code {
+        return Err(OrchestratorError::Link {
+            description: "linked ADD display assembly does not reproduce loaded machine code"
+                .to_owned(),
+        });
+    }
+    crate::rv64::memory::validate_generated_code(ENTRY_PC, machine_code.len())?;
+
+    Ok(LinkedGuestAdd {
+        assembly,
+        machine_code,
+        normal_termination_instructions: instruction_count(&normal_code)?,
+        exceptional_termination_instructions: instruction_count(&underflow_code)?,
+    })
+}
+
+fn add_normal_exit_assembly() -> String {
+    "guest_add_normal_exit:\n\
+        \x20   addi t1, s0, -2048\n\
+        \x20   addi t1, t1, -2048\n\
+        \x20   sd s1, 16(t1)\n\
+        \x20   sd zero, 8(t1)\n\
+        \x20   addi t0, zero, 1\n\
+        \x20   sd t0, 0(t1)\n\
+        \x20   jalr zero, -4(t1)\n"
+        .to_owned()
+}
+
+fn add_underflow_exit_assembly() -> String {
+    format!(
+        "guest_add_stack_underflow_exit:\n\
+         \x20   addi t1, s0, -2048\n\
+         \x20   addi t1, t1, -2048\n\
+         \x20   sd s1, 16(t1)\n\
+         \x20   addi t0, zero, {PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE}\n\
+         \x20   sd t0, 8(t1)\n\
+         \x20   addi t0, zero, 2\n\
+         \x20   sd t0, 0(t1)\n\
+         \x20   jalr zero, -4(t1)\n"
+    )
+}
+
+fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, OrchestratorError> {
+    machine_code
+        .get(offset..offset + 4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or_else(|| OrchestratorError::Link {
+            description: format!("ADD link offset {offset} is outside generated code"),
+        })
+}
+
+fn instruction_count(machine_code: &[u8]) -> Result<u64, OrchestratorError> {
+    if machine_code.len() % 4 != 0 {
+        return Err(OrchestratorError::Link {
+            description: "ADD termination code is not instruction aligned".to_owned(),
+        });
+    }
+    Ok(u64::try_from(machine_code.len() / 4).expect("instruction count fits u64"))
+}
+
+fn assembly_error(error: impl fmt::Debug) -> OrchestratorError {
+    OrchestratorError::Link {
+        description: format!("RV64 assembly failed: {error:?}"),
+    }
+}
+
+fn relative_jal_offset(from_pc: u64, target_pc: u64) -> Result<i64, OrchestratorError> {
+    let offset = i64::try_from(i128::from(target_pc) - i128::from(from_pc)).map_err(|_| {
+        OrchestratorError::Link {
+            description: "ADD JAL offset does not fit an i64".to_owned(),
+        }
+    })?;
+    encode_jal_zero(offset)?;
+    Ok(offset)
+}
+
+fn encode_jal_zero(offset: i64) -> Result<u32, OrchestratorError> {
+    const MIN_JAL_OFFSET: i64 = -(1 << 20);
+    const MAX_JAL_OFFSET: i64 = (1 << 20) - 2;
+    if offset & 1 != 0 || !(MIN_JAL_OFFSET..=MAX_JAL_OFFSET).contains(&offset) {
+        return Err(OrchestratorError::Link {
+            description: format!("ADD JAL offset {offset} is not representable"),
+        });
+    }
+    let immediate = offset as i32 as u32;
+    Ok(((immediate & 0x7fe) << 20) | ((immediate & 0x800) << 9) | (immediate & 0xff000) | 0x6f)
 }
 
 #[cfg(test)]
