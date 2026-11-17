@@ -103,6 +103,32 @@ fn evm_sub_matches_rv64() {
     }
 }
 
+#[test]
+fn arithmetic_runners_preserve_historical_instruction_metrics() {
+    let expected = (34, 8, 4, 9, 8, 4, 1, 0);
+    for opcode in [Opcode::Add, Opcode::Sub] {
+        let execution = Rv64Runner::new(opcode)
+            .and_then(|mut runner| runner.run(U256::from(5), U256::from(7)))
+            .expect("execute RV64 arithmetic routine");
+        let metrics = execution.metrics;
+        assert_eq!(
+            (
+                metrics.total,
+                metrics.loads,
+                metrics.stores,
+                metrics.arithmetic,
+                metrics.comparisons,
+                metrics.logical,
+                metrics.control_flow,
+                metrics.other,
+            ),
+            expected,
+            "{} instruction metrics changed",
+            opcode.name()
+        );
+    }
+}
+
 use Instruction::{Add, Push, Sub};
 
 fn run_evm_program(program: &[Instruction]) -> Result<U256, String> {

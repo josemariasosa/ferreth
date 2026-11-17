@@ -1,8 +1,8 @@
 //! Shared differential execution support for tests and the benchmark command.
 //!
-//! This module deliberately executes the generated RV64 machine code in rvemu
-//! and the EVM bytecode in revm.  It does not use the Rust limb helpers as a
-//! reference for either path.
+//! This module deliberately executes the generated RV64 machine code through
+//! the RV64 executor boundary and the EVM bytecode in revm.  It does not use
+//! the Rust limb helpers as a reference for either path.
 
 use asm_rs::{assemble, Arch};
 use revm::{
@@ -12,23 +12,17 @@ use revm::{
     },
     Evm,
 };
-use rvemu::{bus::DRAM_BASE, emulator::Emulator};
-use std::{env, fs, path::PathBuf, sync::Mutex};
 
-use crate::{Instruction, Opcode};
+use crate::{
+    rv64::executor::{IntegerRegister, Rv64Executor, RvemuExecutor},
+    Instruction, Opcode,
+};
 
 const HALT_INSTRUCTION: u32 = 0x0010_0073;
 const MAX_INSTRUCTIONS: usize = 256;
-const OPERAND_A: u64 = DRAM_BASE + 0x1000;
-const OPERAND_B: u64 = DRAM_BASE + 0x1020;
-const RESULT: u64 = DRAM_BASE + 0x1040;
-
-// rvemu writes its generated device-tree files relative to the process working
-// directory during `Emulator::new`. Construction is serialized while the
-// current directory is temporarily changed so those side effects stay in the
-// ignored translator/runs directory, including when integration tests run in
-// parallel.
-static RVEMU_INITIALIZATION_LOCK: Mutex<()> = Mutex::new(());
+const OPERAND_A: u64 = RvemuExecutor::DRAM_BASE + 0x1000;
+const OPERAND_B: u64 = RvemuExecutor::DRAM_BASE + 0x1020;
+const RESULT: u64 = RvemuExecutor::DRAM_BASE + 0x1040;
 
 pub const DEFAULT_RANDOM_SEED: u64 = 0x1234_5678_9abc_def0;
 
@@ -133,25 +127,31 @@ pub struct Rv64Execution {
 }
 
 pub struct Rv64Runner {
-    emulator: Emulator,
+    executor: RvemuExecutor,
     halt_pc: u64,
     machine_code_hash: u64,
     routine_instruction_words: u64,
+    routine_metrics: InstructionMetrics,
 }
 
 impl Rv64Runner {
     pub fn new(opcode: Opcode) -> Result<Self, String> {
         let program = assemble_generated(opcode)?;
-        let halt_pc = DRAM_BASE + program.len() as u64 - 4;
+        let halt_pc = RvemuExecutor::DRAM_BASE + program.len() as u64 - 4;
         let routine_len = program.len() - 4;
         let machine_code_hash = fnv1a64(&program[..routine_len]);
-        let mut emulator = new_emulator_in_artifact_directory()?;
-        emulator.initialize_dram(program);
+        let routine_metrics = metrics_for_instruction_words(&program[..routine_len]);
+        let mut executor = RvemuExecutor::new()
+            .map_err(|error| format!("could not initialize RV64 executor: {error}"))?;
+        executor
+            .load_code(&program)
+            .map_err(|error| format!("could not load RV64 machine code: {error}"))?;
         Ok(Self {
-            emulator,
+            executor,
             halt_pc,
             machine_code_hash,
             routine_instruction_words: (routine_len / 4) as u64,
+            routine_metrics,
         })
     }
 
@@ -170,66 +170,59 @@ impl Rv64Runner {
     /// or counted.
     pub fn run(&mut self, a: U256, b: U256) -> Result<Rv64Execution, String> {
         for (address, value) in [(OPERAND_A, a), (OPERAND_B, b)] {
-            for (index, limb) in to_limbs(value).into_iter().enumerate() {
-                self.emulator
-                    .cpu
-                    .bus
-                    .write(address + (index as u64 * 8), limb, 64)
-                    .map_err(|error| {
-                        format!("could not initialize RV64 operand memory: {error:?}")
-                    })?;
-            }
+            self.executor
+                .write_memory(address, &u256_to_little_endian_limbs(value))
+                .map_err(|error| format!("could not initialize RV64 operand memory: {error}"))?;
         }
 
-        self.emulator.cpu.xregs.write(1, self.halt_pc);
-        self.emulator.cpu.xregs.write(10, OPERAND_A);
-        self.emulator.cpu.xregs.write(11, OPERAND_B);
-        self.emulator.cpu.xregs.write(12, RESULT);
-        self.emulator.initialize_pc(DRAM_BASE);
+        self.executor
+            .write_register(IntegerRegister::RETURN_ADDRESS, self.halt_pc);
+        self.executor.write_register(
+            IntegerRegister::new(10).expect("a0 is a valid register"),
+            OPERAND_A,
+        );
+        self.executor.write_register(
+            IntegerRegister::new(11).expect("a1 is a valid register"),
+            OPERAND_B,
+        );
+        self.executor.write_register(
+            IntegerRegister::new(12).expect("a2 is a valid register"),
+            RESULT,
+        );
 
-        let mut metrics = InstructionMetrics::default();
-        let mut halted = false;
-        for _ in 0..MAX_INSTRUCTIONS {
-            if self.emulator.cpu.pc == self.halt_pc {
-                halted = true;
-                break;
-            }
-            // Read and decode the exact 32-bit word at the PC immediately
-            // before rvemu executes it. This accounts for assembler-expanded
-            // pseudoinstructions and follows actual control flow.
-            let instruction = self
-                .emulator
-                .cpu
-                .bus
-                .read(self.emulator.cpu.pc, 32)
-                .map_err(|error| format!("could not fetch RV64 instruction: {error:?}"))?
-                as u32;
-            self.emulator
-                .cpu
-                .execute()
-                .map_err(|error| format!("RV64 execution stopped before EBREAK: {error:?}"))?;
-            metrics.record(instruction);
-        }
-        if !halted {
+        let report = self
+            .executor
+            .execute(
+                RvemuExecutor::DRAM_BASE,
+                self.halt_pc,
+                MAX_INSTRUCTIONS as u64,
+            )
+            .map_err(|error| format!("RV64 execution stopped before EBREAK: {error}"))?;
+        if report.executed_instructions != self.routine_metrics.total {
             return Err(format!(
-                "RV64 execution did not return to EBREAK within {MAX_INSTRUCTIONS} instructions"
+                "RV64 execution reached EBREAK after {} instructions; expected {} from the generated routine",
+                report.executed_instructions, self.routine_metrics.total
             ));
         }
 
         let mut result_bytes = [0; 32];
+        let mut result_memory = [0; 32];
+        self.executor
+            .read_memory(RESULT, &mut result_memory)
+            .map_err(|error| format!("could not read RV64 result memory: {error}"))?;
         for index in 0..4 {
-            let limb = self
-                .emulator
-                .cpu
-                .bus
-                .read(RESULT + (index as u64 * 8), 64)
-                .map_err(|error| format!("could not read RV64 result memory: {error:?}"))?;
+            let start = index * 8;
+            let limb = u64::from_le_bytes(
+                result_memory[start..start + 8]
+                    .try_into()
+                    .expect("fixed-size result limb"),
+            );
             let start = 24 - (index * 8);
             result_bytes[start..start + 8].copy_from_slice(&limb.to_be_bytes());
         }
         Ok(Rv64Execution {
             result: U256::from_be_bytes(result_bytes),
-            metrics,
+            metrics: self.routine_metrics,
         })
     }
 }
@@ -271,41 +264,6 @@ impl ProgramRunner {
             }
         }
         stack.pop().ok_or_else(|| "empty result stack".to_owned())
-    }
-}
-
-fn new_emulator_in_artifact_directory() -> Result<Emulator, String> {
-    let _lock = RVEMU_INITIALIZATION_LOCK
-        .lock()
-        .map_err(|_| "RV64 emulator initialization lock was poisoned".to_owned())?;
-    let artifact_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runs");
-    fs::create_dir_all(&artifact_directory).map_err(|error| {
-        format!(
-            "could not create rvemu artifact directory {}: {error}",
-            artifact_directory.display()
-        )
-    })?;
-    let original_directory = env::current_dir()
-        .map_err(|error| format!("could not read process working directory: {error}"))?;
-    env::set_current_dir(&artifact_directory).map_err(|error| {
-        format!(
-            "could not enter rvemu artifact directory {}: {error}",
-            artifact_directory.display()
-        )
-    })?;
-    let restore = WorkingDirectoryRestore { original_directory };
-    let emulator = Emulator::new();
-    drop(restore);
-    Ok(emulator)
-}
-
-struct WorkingDirectoryRestore {
-    original_directory: PathBuf,
-}
-
-impl Drop for WorkingDirectoryRestore {
-    fn drop(&mut self) {
-        let _ = env::set_current_dir(&self.original_directory);
     }
 }
 
@@ -488,7 +446,7 @@ fn assemble_generated(opcode: Opcode) -> Result<Vec<u8>, String> {
             "assembled program does not end with EBREAK (found 0x{halt:08x})"
         ));
     }
-    if program.len() as u64 >= OPERAND_A - DRAM_BASE {
+    if program.len() as u64 >= OPERAND_A - RvemuExecutor::DRAM_BASE {
         return Err("assembled program overlaps the operand memory region".to_owned());
     }
     Ok(program)
@@ -500,6 +458,25 @@ fn to_limbs(value: U256) -> [u64; 4] {
         let start = 24 - index * 8;
         u64::from_be_bytes(bytes[start..start + 8].try_into().expect("8-byte limb"))
     })
+}
+
+fn u256_to_little_endian_limbs(value: U256) -> [u8; 32] {
+    let mut bytes = [0; 32];
+    for (index, limb) in to_limbs(value).into_iter().enumerate() {
+        let start = index * 8;
+        bytes[start..start + 8].copy_from_slice(&limb.to_le_bytes());
+    }
+    bytes
+}
+
+fn metrics_for_instruction_words(machine_code: &[u8]) -> InstructionMetrics {
+    let mut metrics = InstructionMetrics::default();
+    for word in machine_code.chunks_exact(4) {
+        metrics.record(u32::from_le_bytes(
+            word.try_into().expect("four-byte instruction word"),
+        ));
+    }
+    metrics
 }
 
 fn from_limbs(limbs: [u64; 4]) -> U256 {
