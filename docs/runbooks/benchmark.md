@@ -106,15 +106,26 @@ command:
 | `opcode_guest` | `PUSH1 0x05` | 10 | 7 | 17 |
 | `opcode_guest` | `ADD 0x05 0x03` | 42 | 7 | 49 |
 | `opcode_guest` | `SUB 0x05 0x03` | 42 | 7 | 49 |
+| `opcode_guest` | `POP [0x00]` | 3 | 7 | 10 |
+| `opcode_guest` | `DUP1 [0x00]` | 14 | 7 | 21 |
 | `program_guest` | `6005` | 10 | 7 | 17 |
 | `program_guest` | `60056003` | 20 | 7 | 27 |
 | `program_guest` | `6005600301` | 62 | 7 | 69 |
 | `program_guest` | `6005600303` | 62 | 7 | 69 |
 | `program_guest` | `600560030100` | 63 | 7 | 70 |
+| `program_guest` | `600550` | 13 | 7 | 20 |
+| `program_guest` | `600580` | 24 | 7 | 31 |
+| `program_guest` | `60058001` | 66 | 7 | 73 |
+| `program_guest` | `6005600350` | 23 | 7 | 30 |
+| `program_guest` | `60058050` | 27 | 7 | 34 |
 
 For `program_guest`, input strings are bytecode hex without a `0x` prefix.
 `600560030100` is the `PUSH1 5; PUSH1 3; ADD; STOP` program; explicit STOP
 adds one executed instruction compared with the same program without STOP.
+The added cases are `PUSH1 5; POP`, `PUSH1 5; DUP1`, `PUSH1 5; DUP1; ADD`,
+`PUSH1 5; PUSH1 3; POP`, and `PUSH1 5; DUP1; POP`, respectively. These extend
+only the guest report arrays; the arithmetic baseline schema, results, hashes,
+and instruction counts remain unchanged.
 
 ## Output interpretation
 
@@ -182,6 +193,8 @@ candidate as an approved baseline without explicit authorization.
       remain reproducible.
 - [ ] Confirm `6005600301` reports 69 instructions and explicit STOP in
       `600560030100` reports 70.
+- [ ] Confirm POP/DUP1 guest opcode totals are 10 and 21, and the added
+      program totals are 20, 31, 73, 30, and 34 in listed order.
 - [ ] Write reports to a temporary file; do not create or overwrite
       `runs/rv64-arithmetic.json` without approval.
 - [ ] Run all package tests with `cargo test -p ferreth-compiler`.

@@ -7,8 +7,9 @@ use revm::primitives::U256;
 use crate::{
     execution::{directed_cases, hex, random_u256, run_evm, InstructionMetrics, Rv64Runner},
     orchestrator::{
-        execute_guest_add, execute_guest_evm_bytecode, execute_guest_push1, execute_guest_sub,
-        OrchestratorError, OrchestratorResult, EXECUTOR_IDENTITY,
+        execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
+        execute_guest_push1, execute_guest_sub, OrchestratorError, OrchestratorResult,
+        EXECUTOR_IDENTITY,
     },
     rv64::guest::GuestExecutionStatus,
     Opcode,
@@ -105,6 +106,8 @@ pub fn run_guest_benchmark() -> Result<GuestBenchmarkReport, OrchestratorError> 
             "SUB 0x05 0x03",
             execute_guest_sub(U256::from(5), U256::from(3)),
         ),
+        ("POP [0x00]", execute_guest_pop()),
+        ("DUP1 [0x00]", execute_guest_dup1()),
     ]
     .into_iter()
     .map(|(name, result)| guest_measurement(name, result))
@@ -115,6 +118,11 @@ pub fn run_guest_benchmark() -> Result<GuestBenchmarkReport, OrchestratorError> 
         "6005600301",
         "6005600303",
         "600560030100",
+        "600550",
+        "600580",
+        "60058001",
+        "6005600350",
+        "60058050",
     ]
     .into_iter()
     .map(|bytecode| {
@@ -589,6 +597,8 @@ mod tests {
                 ("PUSH1 0x05", 10, 7, 17),
                 ("ADD 0x05 0x03", 42, 7, 49),
                 ("SUB 0x05 0x03", 42, 7, 49),
+                ("POP [0x00]", 3, 7, 10),
+                ("DUP1 [0x00]", 14, 7, 21),
             ]
         );
         let program_totals = first
@@ -604,6 +614,11 @@ mod tests {
                 ("6005600301", 69),
                 ("6005600303", 69),
                 ("600560030100", 70),
+                ("600550", 20),
+                ("600580", 31),
+                ("60058001", 73),
+                ("6005600350", 30),
+                ("60058050", 34),
             ]
         );
     }

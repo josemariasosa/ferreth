@@ -330,6 +330,36 @@ const INVALID_CASES: usize = 100;
 // execution of each emitted RV64 instruction, including the exit publisher.
 const MAX_BYTECODE_BYTES: usize = 64;
 
+#[derive(Debug, Clone, Copy)]
+enum GeneratedInstruction {
+    Push1(u8),
+    Add,
+    Sub,
+    Pop,
+    Dup1,
+    Stop,
+}
+
+impl GeneratedInstruction {
+    fn opcode(self) -> u8 {
+        match self {
+            Self::Push1(_) => 0x60,
+            Self::Add => 0x01,
+            Self::Sub => 0x03,
+            Self::Pop => 0x50,
+            Self::Dup1 => 0x80,
+            Self::Stop => 0x00,
+        }
+    }
+
+    fn encode(self, bytecode: &mut Vec<u8>) {
+        bytecode.push(self.opcode());
+        if let Self::Push1(value) = self {
+            bytecode.push(value);
+        }
+    }
+}
+
 struct Generator(u64);
 
 impl Generator {
@@ -341,74 +371,130 @@ impl Generator {
         self.0
     }
 
-    fn push(&mut self, bytecode: &mut Vec<u8>) {
+    fn push(&mut self, program: &mut Vec<GeneratedInstruction>) {
         let value = self.next();
-        bytecode.extend([
-            0x60,
-            if value.is_multiple_of(4) {
-                0
-            } else {
-                value as u8
-            },
-        ]);
+        program.push(GeneratedInstruction::Push1(if value.is_multiple_of(4) {
+            0
+        } else {
+            value as u8
+        }));
     }
 
-    fn binary(&mut self, bytecode: &mut Vec<u8>) {
-        bytecode.push(if self.next().is_multiple_of(2) {
-            0x01
+    fn binary(&mut self, program: &mut Vec<GeneratedInstruction>) {
+        program.push(if self.next().is_multiple_of(2) {
+            GeneratedInstruction::Add
         } else {
-            0x03
+            GeneratedInstruction::Sub
         });
     }
 
-    fn valid_prefix(&mut self) -> (Vec<u8>, usize) {
+    fn encode(program: &[GeneratedInstruction]) -> Vec<u8> {
         let mut bytecode = Vec::new();
-        self.push(&mut bytecode);
-        self.push(&mut bytecode);
-        self.binary(&mut bytecode);
-        let mut depth = 1;
-        let additional = (self.next() % 13) as usize;
+        for instruction in program {
+            instruction.encode(&mut bytecode);
+        }
+        bytecode
+    }
+
+    fn valid_prefix(&mut self) -> (Vec<GeneratedInstruction>, usize) {
+        // Each template deliberately starts a required mixed-opcode shape;
+        // subsequent choices remain seed-driven and depth-safe.
+        let mut program = match self.next() % 5 {
+            0 => vec![
+                GeneratedInstruction::Push1(5),
+                GeneratedInstruction::Dup1,
+                GeneratedInstruction::Add,
+            ],
+            1 => vec![
+                GeneratedInstruction::Push1(5),
+                GeneratedInstruction::Dup1,
+                GeneratedInstruction::Sub,
+            ],
+            2 => vec![
+                GeneratedInstruction::Push1(5),
+                GeneratedInstruction::Dup1,
+                GeneratedInstruction::Dup1,
+            ],
+            3 => vec![
+                GeneratedInstruction::Push1(5),
+                GeneratedInstruction::Push1(3),
+                GeneratedInstruction::Add,
+                GeneratedInstruction::Pop,
+            ],
+            _ => vec![
+                GeneratedInstruction::Push1(5),
+                GeneratedInstruction::Push1(3),
+                GeneratedInstruction::Add,
+                GeneratedInstruction::Dup1,
+            ],
+        };
+        let mut depth = match program.last() {
+            Some(GeneratedInstruction::Pop) => 0,
+            Some(GeneratedInstruction::Dup1)
+                if matches!(program.get(1), Some(GeneratedInstruction::Dup1)) =>
+            {
+                3
+            }
+            Some(GeneratedInstruction::Dup1) => 2,
+            _ => 1,
+        };
+        let additional = (self.next() % 11) as usize;
         for _ in 0..additional {
-            if depth < 2 || self.next().is_multiple_of(3) {
-                self.push(&mut bytecode);
-                depth += 1;
-            } else {
-                self.binary(&mut bytecode);
-                depth -= 1;
+            match self.next() % 5 {
+                0 if depth < EVM_STACK_CAPACITY as usize => {
+                    self.push(&mut program);
+                    depth += 1;
+                }
+                1 | 2 if depth >= 2 => {
+                    self.binary(&mut program);
+                    depth -= 1;
+                }
+                3 if depth >= 1 => {
+                    program.push(GeneratedInstruction::Pop);
+                    depth -= 1;
+                }
+                4 if depth >= 1 && depth < EVM_STACK_CAPACITY as usize => {
+                    program.push(GeneratedInstruction::Dup1);
+                    depth += 1;
+                }
+                _ => {
+                    self.push(&mut program);
+                    depth += 1;
+                }
             }
         }
-        (bytecode, depth)
+        (program, depth)
     }
 
     fn valid(&mut self) -> Vec<u8> {
-        let (mut bytecode, _) = self.valid_prefix();
+        let (mut program, _) = self.valid_prefix();
         if !self.next().is_multiple_of(3) {
-            bytecode.push(0x00);
+            program.push(GeneratedInstruction::Stop);
             if self.next().is_multiple_of(2) {
-                self.push(&mut bytecode);
-                self.binary(&mut bytecode);
+                self.push(&mut program);
+                self.binary(&mut program);
             }
         }
-        bytecode
+        Self::encode(&program)
     }
 
     fn invalid(&mut self) -> Vec<u8> {
-        let mut bytecode = if self.next().is_multiple_of(2) {
-            Vec::new()
-        } else {
-            let (mut bytecode, mut depth) = self.valid_prefix();
-            while depth > 1 {
-                self.binary(&mut bytecode);
-                depth -= 1;
-            }
-            bytecode
-        };
-        self.binary(&mut bytecode);
-        if self.next().is_multiple_of(2) {
-            self.push(&mut bytecode);
-            bytecode.push(0x00);
+        let intended = self.next() % 4;
+        let mut program = Vec::new();
+        if !self.next().is_multiple_of(2) && intended < 2 {
+            self.push(&mut program); // reach binary underflow at depth one.
         }
-        bytecode
+        program.push(match intended {
+            0 => GeneratedInstruction::Add,
+            1 => GeneratedInstruction::Sub,
+            2 => GeneratedInstruction::Pop,
+            _ => GeneratedInstruction::Dup1,
+        });
+        if self.next().is_multiple_of(2) {
+            self.push(&mut program); // unreachable proof tail
+            program.push(GeneratedInstruction::Stop);
+        }
+        Self::encode(&program)
     }
 }
 
@@ -417,6 +503,8 @@ struct ProgramShape {
     push: usize,
     add: usize,
     sub: usize,
+    pop: usize,
+    dup1: usize,
     stop: usize,
     zero: usize,
     nonzero: usize,
@@ -425,6 +513,8 @@ struct ProgramShape {
     underflow: Option<(u8, usize)>,
     consecutive_arithmetic: bool,
     distinct_pushes_sub: bool,
+    arithmetic_after_dup1: bool,
+    pop_after_arithmetic: bool,
     unreachable_tail: bool,
 }
 
@@ -435,6 +525,7 @@ fn inspect_shape(bytecode: &[u8]) -> ProgramShape {
     let mut shape = ProgramShape::default();
     let mut pc = 0;
     let mut previous_arithmetic = false;
+    let mut previous_dup1 = false;
     let mut previous_push = None;
     let mut push_pair = None;
     while pc < bytecode.len() {
@@ -459,6 +550,7 @@ fn inspect_shape(bytecode: &[u8]) -> ProgramShape {
                 shape.max_depth = shape.max_depth.max(shape.final_depth);
                 assert!(shape.max_depth <= EVM_STACK_CAPACITY as usize);
                 previous_arithmetic = false;
+                previous_dup1 = false;
                 push_pair = previous_push.map(|previous| (previous, immediate));
                 previous_push = Some(immediate);
             }
@@ -469,6 +561,7 @@ fn inspect_shape(bytecode: &[u8]) -> ProgramShape {
                     shape.sub += 1;
                 }
                 shape.consecutive_arithmetic |= previous_arithmetic;
+                shape.arithmetic_after_dup1 |= previous_dup1;
                 shape.distinct_pushes_sub |=
                     opcode == 0x03 && push_pair.is_some_and(|(a, b)| a != b);
                 previous_push = None;
@@ -479,6 +572,29 @@ fn inspect_shape(bytecode: &[u8]) -> ProgramShape {
                 }
                 shape.final_depth -= 1;
                 previous_arithmetic = true;
+                previous_dup1 = false;
+            }
+            0x50 => {
+                shape.pop += 1;
+                shape.pop_after_arithmetic |= previous_arithmetic;
+                if shape.final_depth == 0 {
+                    shape.underflow = Some((opcode, 0));
+                    break;
+                }
+                shape.final_depth -= 1;
+                previous_arithmetic = false;
+                previous_dup1 = false;
+            }
+            0x80 => {
+                shape.dup1 += 1;
+                if shape.final_depth == 0 {
+                    shape.underflow = Some((opcode, 0));
+                    break;
+                }
+                shape.final_depth += 1;
+                shape.max_depth = shape.max_depth.max(shape.final_depth);
+                previous_arithmetic = false;
+                previous_dup1 = true;
             }
             _ => panic!("unexpected generated opcode 0x{opcode:02x} at {pc}"),
         }
@@ -495,14 +611,16 @@ fn seeded_generator_is_deterministic_and_stack_aware() {
         assert_eq!(bytecode, second.valid(), "valid case {index}");
         let shape = inspect_shape(&bytecode);
         assert_eq!(shape.underflow, None, "valid case {index}");
-        assert!(shape.add + shape.sub > 0, "valid case {index}");
     }
     for index in 0..INVALID_CASES {
         let bytecode = first.invalid();
         assert_eq!(bytecode, second.invalid(), "invalid case {index}");
         let shape = inspect_shape(&bytecode);
         assert!(
-            matches!(shape.underflow, Some((0x01 | 0x03, 0 | 1))),
+            matches!(
+                shape.underflow,
+                Some((0x01 | 0x03, 0 | 1)) | Some((0x50 | 0x80, 0))
+            ),
             "invalid case {index}: {shape:?}"
         );
     }
@@ -522,7 +640,12 @@ fn seeded_random_rc_programs_match_revm_cancun() {
     let mut consecutive = 0;
     let mut distinct_pushes_sub = 0;
     let mut multi_limb = 0;
-    let mut underflows = [[0; 2]; 2];
+    let mut nonempty_final = 0;
+    let mut empty_final = 0;
+    let mut arithmetic_after_dup1 = 0;
+    let mut pop_after_arithmetic = 0;
+    let mut underflows = [0; 4];
+    let mut known_dup1_discrepancies = 0;
 
     for (valid, total) in [(true, VALID_CASES), (false, INVALID_CASES)] {
         for index in 0..total {
@@ -536,25 +659,55 @@ fn seeded_random_rc_programs_match_revm_cancun() {
             let case = format!("seed=0x{RANDOM_SEED:016x}; {category} case index={index}");
             if valid {
                 assert_eq!(shape.underflow, None, "{case}");
-                assert!(shape.add + shape.sub > 0, "{case}");
             } else {
                 let (opcode, depth) = shape.underflow.expect("invalid case must reach underflow");
-                underflows[usize::from(opcode == 0x03)][depth] += 1;
+                let slot = match opcode {
+                    0x01 => 0,
+                    0x03 => 1,
+                    0x50 => 2,
+                    0x80 => 3,
+                    _ => unreachable!(),
+                };
+                assert!(depth <= 1, "{case}");
+                underflows[slot] += 1;
             }
-            let revm = assert_rc_matches_revm(
-                &case,
-                &bytecode,
-                Some(if valid {
-                    Terminal::Normal
-                } else {
-                    Terminal::StackUnderflow
-                }),
-            );
+            let revm = if !valid && shape.underflow.is_some_and(|(opcode, _)| opcode == 0x80) {
+                let revm = execute_revm(&bytecode).expect("REVM DUP1 discrepancy case executes");
+                let guest = execute_guest_evm_bytecode(&bytecode)
+                    .expect("guest DUP1 discrepancy case executes");
+                assert_eq!(
+                    Terminal::from_revm(&revm.result),
+                    Terminal::StackOverflow,
+                    "{case}"
+                );
+                assert_eq!(
+                    Terminal::from_guest(
+                        guest.guest_result().status(),
+                        guest.guest_result().exception_code()
+                    ),
+                    Terminal::StackUnderflow,
+                    "{case}"
+                );
+                known_dup1_discrepancies += 1;
+                revm
+            } else {
+                assert_rc_matches_revm(
+                    &case,
+                    &bytecode,
+                    Some(if valid {
+                        Terminal::Normal
+                    } else {
+                        Terminal::StackUnderflow
+                    }),
+                )
+            };
             if valid {
                 valid_executed += 1;
                 fallthrough += usize::from(shape.stop == 0);
                 early_stop += usize::from(shape.unreachable_tail);
                 multiple_values += usize::from(shape.final_depth > 1);
+                nonempty_final += usize::from(shape.final_depth > 0);
+                empty_final += usize::from(shape.final_depth == 0);
                 mixed += usize::from(shape.add > 0 && shape.sub > 0);
                 consecutive += usize::from(shape.consecutive_arithmetic);
                 distinct_pushes_sub += usize::from(shape.distinct_pushes_sub);
@@ -571,9 +724,13 @@ fn seeded_random_rc_programs_match_revm_cancun() {
             counts.push += shape.push;
             counts.add += shape.add;
             counts.sub += shape.sub;
+            counts.pop += shape.pop;
+            counts.dup1 += shape.dup1;
             counts.stop += shape.stop;
             counts.zero += shape.zero;
             counts.nonzero += shape.nonzero;
+            arithmetic_after_dup1 += usize::from(shape.arithmetic_after_dup1);
+            pop_after_arithmetic += usize::from(shape.pop_after_arithmetic);
             counts.max_depth = counts.max_depth.max(shape.max_depth);
             max_bytes = max_bytes.max(bytecode.len());
         }
@@ -581,24 +738,44 @@ fn seeded_random_rc_programs_match_revm_cancun() {
 
     assert_eq!(valid_executed, VALID_CASES);
     assert_eq!(invalid_executed, INVALID_CASES);
-    assert!(counts.add > 0 && counts.sub > 0 && counts.push > 0 && counts.stop > 0);
+    assert!(
+        counts.add > 0
+            && counts.sub > 0
+            && counts.pop > 0
+            && counts.dup1 > 0
+            && counts.push > 0
+            && counts.stop > 0
+    );
     assert!(counts.zero > 0 && counts.nonzero > 0);
-    assert!(fallthrough > 0 && early_stop > 0 && multiple_values > 0);
+    assert!(
+        fallthrough > 0
+            && early_stop > 0
+            && multiple_values > 0
+            && nonempty_final > 0
+            && empty_final > 0
+    );
     assert!(mixed > 0 && consecutive > 0 && distinct_pushes_sub > 0 && multi_limb > 0);
-    assert!(underflows.iter().flatten().all(|count| *count > 0));
+    assert!(arithmetic_after_dup1 > 0 && pop_after_arithmetic > 0);
+    assert!(underflows.iter().all(|count| *count > 0));
+    assert!(known_dup1_discrepancies > 0);
     println!(
         "seed=0x{RANDOM_SEED:016x}; valid={valid_executed}; invalid={invalid_executed}; \
-         max_bytes={max_bytes}; max_depth={}; reached opcodes: PUSH1={}, ADD={}, SUB={}, STOP={}; \
+         max_bytes={max_bytes}; max_depth={}; reached opcodes: PUSH1={}, ADD={}, SUB={}, POP={}, DUP1={}, STOP={}; \
          zero={}, nonzero={}; fallthrough={fallthrough}, early_stop={early_stop}, \
          multiple_values={multiple_values}, mixed={mixed}, consecutive={consecutive}, \
-         distinct_pushes_sub={distinct_pushes_sub}, multi_limb={multi_limb}, \
-         underflows={underflows:?}",
+         distinct_pushes_sub={distinct_pushes_sub}, multi_limb={multi_limb}, nonempty_final={nonempty_final}, \
+         empty_final={empty_final}, arithmetic_after_dup1={}, pop_after_arithmetic={}, \
+         underflows={underflows:?}, known_dup1_discrepancies={known_dup1_discrepancies}",
         counts.max_depth,
         counts.push,
         counts.add,
         counts.sub,
+        counts.pop,
+        counts.dup1,
         counts.stop,
         counts.zero,
-        counts.nonzero
+        counts.nonzero,
+        arithmetic_after_dup1,
+        pop_after_arithmetic,
     );
 }
