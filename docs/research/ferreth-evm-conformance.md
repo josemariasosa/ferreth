@@ -208,6 +208,8 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 
 ### Priority 1: Executable EELS Cancun research spike
 
+**Status:** Completed — 2026-11-18
+
 **Objective:** Establish a minimal, reproducible Python execution experiment using the official Cancun EELS implementation to validate frame-level execution semantics.
 
 **Goals:**
@@ -224,6 +226,8 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 **Success criterion:** At least one successful and one exceptional EVM execution frame produce observable, reproducible results from the returned `Evm` object.
 
 ### Priority 2: Direct REVM frame-level execution
+
+Direct REVM frame-level execution
 
 **Objective:** Investigate and validate a reproducible frame-equivalent execution path using Ferreth's pinned REVM 43.0.3 version, independent of transaction intrinsic gas.
 
@@ -295,128 +299,316 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 
 ## Research findings 🔎
 
-### Regression requirement: Exceptional halt consumes remaining frame gas
+**Research date:** 2026-11-18
 
-**Source:** Executed EELS Cancun experiment, 18 November 2026.
+**Scope:** Cancun execution-frame semantics and incremental Ferreth conformance.
+
+**Status:** Research completed for Priorities 1 and 2. Implementation decisions remain subject to maintainer review.
+
+### Experimental references
+
+The following executable research utilities provide the supporting evidence for these findings:
+
+- [EELS Cancun — Frame Execution Research](../../research/eels-cancun/README.md)
+- [REVM Cancun — Direct Frame Execution Research](../../research/revm-frame/README.md)
+
+The individual research READMEs contain environment configuration, source revisions, reproducible commands, experimental results, and limitations.
+
+This section consolidates findings relevant to Ferreth's architecture, implementation, and conformance requirements.
+
+### RF-001 — Independent frame-level execution references
+
+**Evidence:** Experimentally verified.
+
+Direct execution of isolated Cancun EVM frames has been successfully established using:
+
+- EELS `process_message()`.
+- REVM `Interpreter::run_plain()`.
+
+Both runners accept explicit bytecode and initial frame gas without transaction processing or intrinsic gas accounting.
+
+Across 18 shared experimental vectors:
+
+- 10 successful executions produced identical final stacks and remaining gas.
+- 8 exceptional executions agreed on exceptional termination.
+- Differences were observed in raw gas accounting, error classification, exceptional stack contents, and terminal program counters.
+
+EELS experiments also confirmed that message gas determines the execution budget for the tested direct execution path, independently of transaction environment gas.
+
+**Ferreth implications:**
+
+- Maintain frame-level execution as the comparison boundary for ADR-002.
+- Preserve existing transaction-based REVM differential tests.
+- Use EELS as an independent semantic reference.
+- Do not conflate transaction gas, EVM frame gas, and RV64 instruction counts.
+
+**Status:** Research complete.
+
+### RF-002 — Exceptional halts consume remaining frame gas
+
+**Evidence:** Experimentally verified in EELS; REVM raw execution verified experimentally and settlement behavior verified through source inspection.
+
+Regression vector:
 
 - Bytecode: `0x60020100`
 - Instructions: `PUSH1 2; ADD; STOP`
 - Initial frame gas: `20`
-- Transaction environment gas: `100000`
-- Observed remaining frame gas: `0`
-- Observed error: `StackUnderflowError`
-- Observed PC: `2`
-- Observed stack: `[]`
-
-**Required Ferreth regression test following ADR-002 implementation:**
-
-- Assert exceptional frame termination.
-- Assert that remaining frame gas is zero, even when sufficient gas exists to pay the failing opcode's ordinary cost.
-- Assert that guest execution reports stack underflow.
-- Do not require the exceptional terminal stack to match EELS's internal stack mutations.
-
-Proposed test name:
-
-`stack_underflow_consumes_remaining_frame_gas`
-
-**Status:** Pending ADR-002 implementation.
-
-### Direct REVM interpreter: raw exceptional halt observations
-
-**Experiment date:** 2026-11-18
-
-**Versions:** REVM 43.0.3, revm-interpreter 43.0.2.
-
-- Bytecode: `0x60020100`
-- Instructions: `PUSH1 2; ADD; STOP`
-- Initial frame gas: `20`
+- EELS transaction environment gas: `100000`
 
 | Observation | EELS Cancun | Direct REVM Cancun |
 |---|---:|---:|
-| Remaining gas | 0 | 14 |
-| Gas consumed | 20 | 6 |
+| Raw remaining gas | 0 | 14 |
+| Raw consumed gas | 20 | 6 |
 | Terminal stack | `[]` | `[2]` |
+| Terminal PC | 2 | 3 |
 | Error | StackUnderflowError | StackUnderflow |
 
-The direct REVM interpreter charges the static ADD cost before detecting stack underflow but retains the remaining gas in its raw interpreter result.
+The difference arises from distinct execution boundaries.
 
-EELS consumes all remaining frame gas when handling the exceptional halt.
+EELS performs exceptional-halt gas settlement within `process_message()`.
 
-This confirms that raw REVM interpreter results cannot be compared directly against EELS frame results without considering exceptional-halt gas semantics.
+REVM's direct interpreter charges static opcode gas but may preserve residual gas for exceptional results other than OutOfGas.
 
-**Pending investigation:** Identify where REVM applies exceptional-halt gas accounting at a higher execution layer before defining a normalization policy.
+Source inspection of REVM confirmed:
 
-**Ferreth implication:** Preserve the regression requirement that exceptional halts consume all remaining frame gas. Do not derive this behavior exclusively from raw REVM interpreter gas observations.
+- `Interpreter::halt()` explicitly consumes remaining gas for OutOfGas.
+- `handle_reservoir_remaining_gas()` consumes the remaining regular gas of exceptionally halted child frames.
+- `last_frame_result()` uses the same settlement function for the initial frame.
 
-### Research finding: REVM exceptional-halt gas settlement
-
-**Date:** 2026-11-18
-
-**Verified source versions:**
+Verified source versions:
 
 - `revm`: 43.0.3
 - `revm-interpreter`: 43.0.2
 - `revm-handler`: 43.0.3
 
-#### Source evidence
+The settled REVM remaining gas of zero is source-derived, not directly observed through execution of the complete handler pipeline.
 
-`revm-interpreter/src/interpreter.rs` — `Interpreter::halt()`:
+**Ferreth requirements:**
 
-The interpreter explicitly consumes all remaining gas when the instruction result is `OutOfGas`. Other exceptional results may preserve residual gas in the raw interpreter result.
+- Exceptional frame termination must consume all remaining frame gas.
+- Successful execution must preserve unused frame gas.
+- REVERT must remain distinct from exceptional termination.
+- Raw REVM interpreter gas must be normalized when comparing exceptional frame outcomes.
+- Later-fork state-gas and reservoir accounting must not be introduced into Cancun semantics.
 
-`revm-handler/src/frame.rs` — `handle_reservoir_remaining_gas()`:
+Normalization must apply specifically to exceptional halts, not to every unsuccessful result.
 
-- Exceptional halts consume the child frame's remaining regular gas through `child_gas.spend_all()`.
-- Unused regular gas returns to the parent only on successful execution or revert.
+**Required regression test:**
 
-`revm-handler/src/handler.rs` — `last_frame_result()`:
+`stack_underflow_consumes_remaining_frame_gas`
 
-The initial frame is settled into transaction-level gas using the same `handle_reservoir_remaining_gas()` function.
+Assertions:
 
-#### Experimental evidence
+- Bytecode: `0x60020100`.
+- Initial frame gas: `20`.
+- Exceptional frame termination.
+- Remaining frame gas: `0`.
+- Guest diagnostic: `StackUnderflow`.
 
-Bytecode: `0x60020100` (`PUSH1 2; ADD; STOP`).
+Do not require the exceptional terminal stack to reproduce reference-interpreter mutations.
 
-Initial frame gas: `20`.
+**Architectural decision pending:** Define which Ferreth execution boundary owns exceptional-halt gas settlement during ADR-002 review.
 
-| Observation | EELS Cancun | Direct REVM |
-|---|---:|---:|
-| Raw remaining gas | 0 | 14 |
-| Raw consumed gas | 20 | 6 |
-| Terminal stack | `[]` | `[2]` |
-| Error | StackUnderflowError | StackUnderflow |
-| Terminal PC | 2 | 3 |
+**Status:** Research complete; implementation pending ADR-002.
 
-The REVM handler source establishes that the residual 14 units are consumed during exceptional-halt gas settlement.
+### RF-003 — Error precedence and classification are implementation-specific diagnostics
 
-The settled REVM gas value of zero is source-derived; this experiment directly executed only the interpreter, not the complete handler pipeline.
+**Evidence:** Experimentally verified in EELS and REVM.
 
-#### Conformance implications
+EELS and REVM may validate gas availability and stack operands in different orders.
 
-Raw interpreter gas and settled execution-frame gas are distinct observations.
+Empty-stack ADD (`0x01`):
 
-For Cancun conformance comparisons:
+| Initial frame gas | EELS | REVM |
+|---:|---|---|
+| 0 | StackUnderflowError | OutOfGas |
+| 2 | StackUnderflowError | OutOfGas |
+| 3 | StackUnderflowError | StackUnderflow |
 
-- Successful execution: compare remaining gas and final stack directly.
-- Revert: preserve remaining gas according to revert semantics.
-- Exceptional halt: normalize remaining frame gas to zero.
-- Preserve raw gas, exceptional stack contents, terminal PC, and error classification as diagnostic observations.
+Empty-stack DUP1 (`0x80`) with initial frame gas `3`:
 
-Normalization must apply specifically to exceptional halts, not indiscriminately to every unsuccessful result.
+| Implementation | Diagnostic |
+|---|---|
+| EELS | StackUnderflowError |
+| REVM | StackOverflow |
 
-The research runner should preserve raw REVM observations.
+All cases terminate exceptionally.
 
-Later-fork state-gas and reservoir accounting are outside the scope of this Cancun experiment.
+EELS ADD extracts operands before charging its ordinary opcode gas. REVM charges static gas before dispatching the opcode handler.
 
-#### ADR-002 implications
+The observed diagnostic differences do not independently establish consensus-semantic disagreement.
 
-Ferreth must expose settled execution-frame gas consistent with Cancun semantics.
+**Ferreth requirements:**
 
-The regression case `0x60020100` with initial gas `20` must terminate exceptionally with zero remaining frame gas.
+- Preserve meaningful guest error classifications.
+- Define a deterministic error-precedence policy.
+- Distinguish semantic termination from diagnostic enum equality.
+- Retain the existing empty-stack DUP1 discrepancy as regression coverage.
 
-Whether gas settlement occurs inside generated RV64 code or at another explicitly defined architectural boundary requires maintainer review as part of ADR-002 approval.
+**Architectural decision pending:** Review ADR-002's proposed ordering of gas checks and stack validation.
 
-This finding does not modify or approve ADR-002.
+**Status:** Research complete; diagnostic policy review pending.
+
+### RF-004 — Exceptional terminal stacks are not portable conformance results
+
+**Evidence:** Experimentally verified.
+
+| Bytecode | Initial gas | EELS stack | REVM stack |
+|---|---:|---|---|
+| `60020100` | 20 | `[]` | `[2]` |
+| `600260030100` | 8 | `[]` | `[2, 3]` |
+
+EELS may mutate the stack before detecting an exceptional condition.
+
+REVM preserves operands in these observed cases.
+
+These differences reflect internal execution ordering rather than successful EVM computation results.
+
+**Ferreth requirements:**
+
+- Compare final stack contents for successful execution.
+- Preserve exceptional terminal stack observations for diagnostics.
+- Do not require exceptional terminal stacks to match independent reference implementations.
+
+Ferreth may preserve stronger internal stack invariants without introducing a consensus-semantic discrepancy.
+
+**Status:** Research complete; apply to differential test policy.
+
+### RF-005 — Truncated PUSH immediates are zero-padded
+
+**Evidence:** Experimentally verified in EELS and REVM.
+
+Regression vector:
+
+- Bytecode: `0x60`
+- Instruction: PUSH1 with a missing immediate.
+- Initial frame gas: `3`.
+
+Both implementations produce:
+
+- Successful completion.
+- Final stack: `[0]`.
+- Remaining gas: `0`.
+
+Ferreth's current decoder rejects truncated PUSH immediates.
+
+This represents an implementation discrepancy rather than an implementation-specific diagnostic difference.
+
+**Ferreth requirements:**
+
+- Correct truncated PUSH1 decoding to match Cancun zero-padding semantics.
+- Preserve the distinction between original bytecode length and logical immediate width.
+- Add focused regression coverage.
+- Extend the same zero-padding semantics to wider PUSH instructions when supported.
+
+Proposed regression test:
+
+`truncated_push1_zero_pads_missing_immediate`
+
+**Status:** Pending Priority 3 conformance correction.
+
+### RF-006 — Terminal program counters may differ across execution engines
+
+**Evidence:** Experimentally verified.
+
+REVM advances its instruction pointer before charging static gas and dispatching the instruction handler.
+
+Consequently, exceptional terminal PC values may differ from EELS.
+
+Representative observations:
+
+| Bytecode | Initial gas | EELS PC | REVM PC |
+|---|---:|---:|---:|
+| `01` | 0 | 0 | 1 |
+| `60020100` | 20 | 2 | 3 |
+| `600260030100` | 8 | 4 | 5 |
+| `5a00` | 1 | 0 | 1 |
+| `60` | 3 | 2 | 3 |
+
+The truncated PUSH1 case also demonstrates that terminal PC differences can occur after successful execution.
+
+REVM's analyzed bytecode padding and implicit STOP execution are a possible explanation for the truncated PUSH1 PC difference. This explanation remains unverified.
+
+**Ferreth requirements:**
+
+- Retain terminal PC observations for diagnostics.
+- Do not require identical terminal PC values across execution engines.
+- Distinguish terminal interpreter PC from the consensus-relevant behavior of executing the PC opcode.
+
+This finding does not relax the future requirement to implement the PC opcode correctly.
+
+**Status:** Research complete for the comparison policy; truncated PUSH1 PC mechanism remains unverified.
+
+### RF-007 — GAS charges before observing remaining frame gas
+
+**Evidence:** Experimentally verified in EELS and REVM.
+
+Both implementations produced identical successful stack and gas results:
+
+| Bytecode | Initial gas | Final stack | Remaining gas |
+|---|---:|---|---:|
+| `5a00` | 10 | `[8]` | 8 |
+| `5a5a00` | 10 | `[8, 6]` | 6 |
+| `5a00` | 2 | `[0]` | 0 |
+
+Both implementations terminate exceptionally with zero remaining gas when executing GAS with an initial budget of zero or one.
+
+**Ferreth requirements:**
+
+- GAS must cost exactly two gas units under Cancun.
+- GAS must charge its cost before observing remaining frame gas.
+- The value pushed onto the EVM stack must reflect post-charge gas.
+- Repeated GAS instructions must observe the decreasing frame budget.
+- Execution with exactly two available gas units must succeed.
+- Execution with fewer than two available gas units must terminate exceptionally.
+
+Proposed regression tests:
+
+- `gas_pushes_remaining_gas_after_charge`
+- `repeated_gas_observes_decreasing_budget`
+- `gas_succeeds_at_exact_cost_boundary`
+- `gas_fails_below_cost_boundary`
+
+**Status:** Pending ADR-002 implementation and GAS opcode support.
+
+### Consolidated conformance policy
+
+The experimental evidence supports the following comparison policy for the currently investigated Cancun execution model.
+
+| Observation | Successful execution | Exceptional halt |
+|---|---|---|
+| Termination classification | Required | Required |
+| Settled remaining frame gas | Required | Required |
+| Final stack contents | Required | Diagnostic |
+| Exact error classification | Not applicable | Diagnostic |
+| Terminal program counter | Diagnostic | Diagnostic |
+| Raw interpreter gas | Useful | Diagnostic |
+
+REVERT must be treated as a distinct termination category that preserves unused frame gas. Its behavior was not experimentally validated in these research spikes.
+
+Implementation-specific diagnostics may still be asserted in Ferreth's own regression tests when they represent an explicitly defined guest contract.
+
+### Implementation traceability
+
+| Finding | Target | Status |
+|---|---|---|
+| RF-001 | Frame-level differential testing | Research complete |
+| RF-002 | ADR-002 and exceptional-halt regression | Pending Priority 4 |
+| RF-003 | Differential test policy and error precedence | Pending Priorities 3–4 |
+| RF-004 | Differential test assertions | Pending Priority 3 |
+| RF-005 | Decoder correction and regression | Pending Priority 3 |
+| RF-006 | Diagnostic comparison policy | Pending Priority 3 |
+| RF-007 | GAS implementation and boundary tests | Pending Priority 4 |
+
+### Research completion
+
+Priorities 1 and 2 have successfully established independent, executable Cancun reference paths.
+
+The experiments provide sufficient evidence to proceed with Priority 3: focused conformance corrections.
+
+Outstanding research limitations remain documented in the individual runner READMEs.
+
+These findings constitute research evidence and proposed implementation requirements. They do not modify or approve ADR-002.
 
 ---
 
