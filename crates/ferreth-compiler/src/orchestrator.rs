@@ -13,14 +13,14 @@ use revm::primitives::U256;
 use crate::{
     compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},
     rv64::{
-        add::generate_guest_add,
+        codegen::GeneratedRv64,
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
             initialize_guest_state, read_guest_result, write_evm_word, GuestInitializationError,
             GuestMemoryError, GuestResult, GuestResultError,
         },
         memory::{LayoutError, ENTRY_PC, EVM_STACK_CAPACITY, EVM_STACK_REGION, EXIT_PC},
-        sub::generate_guest_sub,
+        opcodes::{add::generate_guest_add, sub::generate_guest_sub},
     },
 };
 
@@ -403,7 +403,7 @@ fn link_guest_sub() -> Result<LinkedGuestArithmetic, OrchestratorError> {
 
 /// Links a binary arithmetic wrapper to normal and stack-underflow publishers.
 fn link_guest_arithmetic(
-    generated: crate::rv64::push::GeneratedRv64,
+    generated: GeneratedRv64,
     operation: &str,
     underflow_label: &str,
     normal_exit_label: &str,

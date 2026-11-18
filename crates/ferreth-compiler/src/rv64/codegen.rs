@@ -6,8 +6,6 @@
 //! successful push jumps over that trampoline and falls through into the next
 //! generated guest operation.
 
-use asm_rs::{assemble, Arch};
-
 /// Generated RV64 code and the assembly from which its bytes were assembled.
 ///
 /// Keeping the display assembly and machine code together makes inspection
@@ -58,13 +56,11 @@ impl GeneratedRv64 {
 
     /// Machine-code instruction words in address order.
     pub fn instruction_words(&self) -> impl Iterator<Item = u32> + '_ {
-        self.machine_code.chunks_exact(4).map(|bytes| {
-            u32::from_le_bytes(
-                bytes
-                    .try_into()
-                    .expect("generated RV64 instructions are four bytes"),
-            )
-        })
+        self.machine_code
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
     }
 
     /// Optional link information for an opcode body with an embedded core.

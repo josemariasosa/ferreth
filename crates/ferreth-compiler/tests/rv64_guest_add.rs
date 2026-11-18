@@ -2,10 +2,10 @@ use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     add_u256,
     rv64::{
-        add::generate_guest_add,
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{initialize_guest_state, read_evm_word, write_evm_word},
         memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},
+        opcodes::add::generate_guest_add,
     },
 };
 use revm::primitives::U256;

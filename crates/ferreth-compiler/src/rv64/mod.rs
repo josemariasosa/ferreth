@@ -1,11 +1,7 @@
 //! RV64 code generation, guest runtime, and execution infrastructure.
 
-pub mod add;
 pub mod codegen;
-pub mod dup;
 pub mod executor;
 pub mod guest;
 pub mod memory;
-pub mod pop;
-pub mod push;
-pub mod sub;
+pub mod opcodes;

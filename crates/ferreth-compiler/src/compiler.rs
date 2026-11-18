@@ -9,12 +9,12 @@ use std::fmt;
 use asm_rs::{assemble, Arch};
 
 use crate::rv64::{
-    add::generate_guest_add,
-    dup::generate_guest_dup1,
+    codegen::{GeneratedRv64, GeneratedRv64LinkMetadata},
     memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
-    pop::generate_guest_pop,
-    push::generate_guest_push1,
-    sub::generate_guest_sub,
+    opcodes::{
+        add::generate_guest_add, dup::generate_guest_dup1, pop::generate_guest_pop,
+        push::generate_guest_push1, sub::generate_guest_sub,
+    },
 };
 use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
@@ -395,22 +395,22 @@ fn compile_supported_program(
 
 enum GeneratedOperation {
     Push1 {
-        code: crate::rv64::push::GeneratedRv64,
+        code: GeneratedRv64,
     },
     Add {
-        code: crate::rv64::push::GeneratedRv64,
-        links: crate::rv64::push::GeneratedRv64LinkMetadata,
+        code: GeneratedRv64,
+        links: GeneratedRv64LinkMetadata,
     },
     Sub {
-        code: crate::rv64::push::GeneratedRv64,
-        links: crate::rv64::push::GeneratedRv64LinkMetadata,
+        code: GeneratedRv64,
+        links: GeneratedRv64LinkMetadata,
     },
     Pop {
-        code: crate::rv64::push::GeneratedRv64,
+        code: GeneratedRv64,
         trampoline_offset: usize,
     },
     Dup1 {
-        code: crate::rv64::push::GeneratedRv64,
+        code: GeneratedRv64,
         underflow_trampoline_offset: usize,
         overflow_trampoline_offset: usize,
     },

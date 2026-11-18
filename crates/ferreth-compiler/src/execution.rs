@@ -426,7 +426,7 @@ pub fn directed_cases() -> Vec<OperandCase> {
 
 pub fn random_u256(state: &mut u64) -> U256 {
     let mut bytes = [0; 32];
-    for chunk in bytes.chunks_exact_mut(8) {
+    for chunk in bytes.as_chunks_mut::<8>().0 {
         chunk.copy_from_slice(&next_random(state).to_be_bytes());
     }
     U256::from_be_bytes(bytes)
@@ -489,10 +489,8 @@ fn u256_to_little_endian_limbs(value: U256) -> [u8; 32] {
 
 fn metrics_for_instruction_words(machine_code: &[u8]) -> InstructionMetrics {
     let mut metrics = InstructionMetrics::default();
-    for word in machine_code.chunks_exact(4) {
-        metrics.record(u32::from_le_bytes(
-            word.try_into().expect("four-byte instruction word"),
-        ));
+    for word in machine_code.as_chunks::<4>().0 {
+        metrics.record(u32::from_le_bytes(*word));
     }
     metrics
 }

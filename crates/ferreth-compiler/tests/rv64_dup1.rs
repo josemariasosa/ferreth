@@ -138,7 +138,7 @@ fn rc_ro_and_generator_share_the_linked_rv64_behavior() {
     assert_eq!(isolated.guest_result().stack(), &[U256::ZERO, U256::ZERO]);
     assert_eq!(compiled.guest_result().stack(), &[U256::ZERO, U256::ZERO]);
 
-    let generated = ferreth_compiler::rv64::dup::generate_guest_dup1();
+    let generated = ferreth_compiler::rv64::opcodes::dup::generate_guest_dup1();
     assert_eq!(
         assemble(generated.assembly(), Arch::Rv64).expect("reassemble DUP1"),
         generated.machine_code()

@@ -1,3 +1,7 @@
+use asm_rs::{assemble, Arch};
+
+use crate::rv64::codegen::GeneratedRv64;
+
 /// Generates one stack-aware RV64 implementation of EVM `PUSH1`.
 ///
 /// `s1` is checked against the ABI stack limit before any stack store or stack

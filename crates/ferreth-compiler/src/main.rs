@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use ferreth_compiler::{
     benchmark::{run_benchmark, run_guest_benchmark, BenchOptions},
     decode,
@@ -7,10 +9,9 @@ use ferreth_compiler::{
         execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
         execute_guest_push1, execute_guest_push1_sequence, execute_guest_sub,
     },
-    rv64::push::generate_guest_push1,
+    rv64::opcodes::push::generate_guest_push1,
     Opcode,
 };
-use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -185,11 +186,8 @@ fn execute(args: &[String]) -> ExitCode {
                     println!("PUSH1 {immediate} complete linked executable program:");
                     print!("{}", result.assembly());
                     println!("Machine-code words:");
-                    for word in result.machine_code().chunks_exact(4) {
-                        println!(
-                            "  0x{:08x}",
-                            u32::from_le_bytes(word.try_into().expect("word"))
-                        );
+                    for word in result.machine_code().as_chunks::<4>().0 {
+                        println!("  0x{:08x}", u32::from_le_bytes(*word));
                     }
                     println!("Final stack: {:?}", result.guest_result().stack());
                     println!(

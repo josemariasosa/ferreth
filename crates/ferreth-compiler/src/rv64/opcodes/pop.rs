@@ -6,7 +6,7 @@
 
 use asm_rs::{assemble, Arch};
 
-use super::push::GeneratedRv64;
+use crate::rv64::codegen::GeneratedRv64;
 
 /// Generates one stack-aware RV64 implementation of EVM `POP`.
 ///
