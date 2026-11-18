@@ -9,10 +9,10 @@ use ferreth_compiler::{
         execute_guest_push1_sequence, execute_guest_push1_sequence_with_initial_stack,
     },
     rv64::{
-        add::generate_guest_add,
         guest::GuestExecutionStatus,
         memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION},
-        sub::generate_guest_sub,
+        opcodes::add::generate_guest_add,
+        opcodes::sub::generate_guest_sub,
     },
 };
 use revm::primitives::U256;

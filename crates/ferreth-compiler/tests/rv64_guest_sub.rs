@@ -5,7 +5,7 @@ use ferreth_compiler::{
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{initialize_guest_state, read_evm_word, write_evm_word},
         memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},
-        sub::generate_guest_sub,
+        opcodes::sub::generate_guest_sub,
     },
     Opcode,
 };

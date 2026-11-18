@@ -6,9 +6,8 @@
 
 use asm_rs::{assemble, Arch};
 
-use crate::{rv64::push::GeneratedRv64LinkMetadata, Opcode};
-
-use super::push::GeneratedRv64;
+use crate::rv64::codegen::{GeneratedRv64, GeneratedRv64LinkMetadata};
+use crate::Opcode;
 
 /// Generates one stack-aware RV64 implementation of EVM `ADD`.
 ///

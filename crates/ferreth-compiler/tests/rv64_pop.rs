@@ -4,7 +4,9 @@ use ferreth_compiler::{
         execute_guest_evm_bytecode, execute_guest_evm_bytecode_with_initial_stack,
         execute_guest_pop_with_initial_stack,
     },
-    rv64::{guest::GuestExecutionStatus, memory::EVM_STACK_REGION, pop::generate_guest_pop},
+    rv64::{
+        guest::GuestExecutionStatus, memory::EVM_STACK_REGION, opcodes::pop::generate_guest_pop,
+    },
 };
 use revm::primitives::U256;
 

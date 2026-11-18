@@ -3,7 +3,7 @@ use ferreth_compiler::rv64::{
     executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::initialize_guest_state,
     memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},
-    push::generate_guest_push1,
+    opcodes::push::generate_guest_push1,
 };
 
 const NATIVE_SP_SENTINEL: u64 = 0xbfff_f000;
