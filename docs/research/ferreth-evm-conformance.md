@@ -291,6 +291,32 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 
 **Success criterion:** Conformance coverage grows alongside compiler functionality without unnecessarily increasing development complexity.
 
+### Regression requirement: Exceptional halt consumes remaining frame gas
+
+**Source:** Executed EELS Cancun experiment, 18 November 2026.
+
+- Bytecode: `0x60020100`
+- Instructions: `PUSH1 2; ADD; STOP`
+- Initial frame gas: `20`
+- Transaction environment gas: `100000`
+- Observed remaining frame gas: `0`
+- Observed error: `StackUnderflowError`
+- Observed PC: `2`
+- Observed stack: `[]`
+
+**Required Ferreth regression test following ADR-002 implementation:**
+
+- Assert exceptional frame termination.
+- Assert that remaining frame gas is zero, even when sufficient gas exists to pay the failing opcode's ordinary cost.
+- Assert that guest execution reports stack underflow.
+- Do not require the exceptional terminal stack to match EELS's internal stack mutations.
+
+Proposed test name:
+
+`stack_underflow_consumes_remaining_frame_gas`
+
+**Status:** Pending ADR-002 implementation.
+
 ## Final assessment
 
 The prior research should not be used unchanged to plan implementation. The EELS frame path and EEST migration claims are now grounded in primary sources; the REVM API is source-verified but not executed; historical VMTests remain unverified at the concrete-fixture level. Ferreth's existing REVM differential suite remains useful, but it compares transaction-driven execution and internal diagnostics, not the proposed frame-gas contract.
