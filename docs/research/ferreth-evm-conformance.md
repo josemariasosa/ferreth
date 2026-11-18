@@ -291,6 +291,10 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 
 **Success criterion:** Conformance coverage grows alongside compiler functionality without unnecessarily increasing development complexity.
 
+---
+
+## Research findings 🔎
+
 ### Regression requirement: Exceptional halt consumes remaining frame gas
 
 **Source:** Executed EELS Cancun experiment, 18 November 2026.
@@ -316,6 +320,105 @@ Proposed test name:
 `stack_underflow_consumes_remaining_frame_gas`
 
 **Status:** Pending ADR-002 implementation.
+
+### Direct REVM interpreter: raw exceptional halt observations
+
+**Experiment date:** 2026-11-18
+
+**Versions:** REVM 43.0.3, revm-interpreter 43.0.2.
+
+- Bytecode: `0x60020100`
+- Instructions: `PUSH1 2; ADD; STOP`
+- Initial frame gas: `20`
+
+| Observation | EELS Cancun | Direct REVM Cancun |
+|---|---:|---:|
+| Remaining gas | 0 | 14 |
+| Gas consumed | 20 | 6 |
+| Terminal stack | `[]` | `[2]` |
+| Error | StackUnderflowError | StackUnderflow |
+
+The direct REVM interpreter charges the static ADD cost before detecting stack underflow but retains the remaining gas in its raw interpreter result.
+
+EELS consumes all remaining frame gas when handling the exceptional halt.
+
+This confirms that raw REVM interpreter results cannot be compared directly against EELS frame results without considering exceptional-halt gas semantics.
+
+**Pending investigation:** Identify where REVM applies exceptional-halt gas accounting at a higher execution layer before defining a normalization policy.
+
+**Ferreth implication:** Preserve the regression requirement that exceptional halts consume all remaining frame gas. Do not derive this behavior exclusively from raw REVM interpreter gas observations.
+
+### Research finding: REVM exceptional-halt gas settlement
+
+**Date:** 2026-11-18
+
+**Verified source versions:**
+
+- `revm`: 43.0.3
+- `revm-interpreter`: 43.0.2
+- `revm-handler`: 43.0.3
+
+#### Source evidence
+
+`revm-interpreter/src/interpreter.rs` — `Interpreter::halt()`:
+
+The interpreter explicitly consumes all remaining gas when the instruction result is `OutOfGas`. Other exceptional results may preserve residual gas in the raw interpreter result.
+
+`revm-handler/src/frame.rs` — `handle_reservoir_remaining_gas()`:
+
+- Exceptional halts consume the child frame's remaining regular gas through `child_gas.spend_all()`.
+- Unused regular gas returns to the parent only on successful execution or revert.
+
+`revm-handler/src/handler.rs` — `last_frame_result()`:
+
+The initial frame is settled into transaction-level gas using the same `handle_reservoir_remaining_gas()` function.
+
+#### Experimental evidence
+
+Bytecode: `0x60020100` (`PUSH1 2; ADD; STOP`).
+
+Initial frame gas: `20`.
+
+| Observation | EELS Cancun | Direct REVM |
+|---|---:|---:|
+| Raw remaining gas | 0 | 14 |
+| Raw consumed gas | 20 | 6 |
+| Terminal stack | `[]` | `[2]` |
+| Error | StackUnderflowError | StackUnderflow |
+| Terminal PC | 2 | 3 |
+
+The REVM handler source establishes that the residual 14 units are consumed during exceptional-halt gas settlement.
+
+The settled REVM gas value of zero is source-derived; this experiment directly executed only the interpreter, not the complete handler pipeline.
+
+#### Conformance implications
+
+Raw interpreter gas and settled execution-frame gas are distinct observations.
+
+For Cancun conformance comparisons:
+
+- Successful execution: compare remaining gas and final stack directly.
+- Revert: preserve remaining gas according to revert semantics.
+- Exceptional halt: normalize remaining frame gas to zero.
+- Preserve raw gas, exceptional stack contents, terminal PC, and error classification as diagnostic observations.
+
+Normalization must apply specifically to exceptional halts, not indiscriminately to every unsuccessful result.
+
+The research runner should preserve raw REVM observations.
+
+Later-fork state-gas and reservoir accounting are outside the scope of this Cancun experiment.
+
+#### ADR-002 implications
+
+Ferreth must expose settled execution-frame gas consistent with Cancun semantics.
+
+The regression case `0x60020100` with initial gas `20` must terminate exceptionally with zero remaining frame gas.
+
+Whether gas settlement occurs inside generated RV64 code or at another explicitly defined architectural boundary requires maintainer review as part of ADR-002 approval.
+
+This finding does not modify or approve ADR-002.
+
+---
 
 ## Final assessment
 

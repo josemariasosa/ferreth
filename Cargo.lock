@@ -2367,6 +2367,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "revm-frame"
+version = "0.1.0"
+dependencies = [
+ "revm",
+]
+
+[[package]]
 name = "revm-handler"
 version = "43.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
