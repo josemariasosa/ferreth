@@ -1,7 +1,5 @@
 use ferreth_compiler::{
-    compiler::{
-        PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE, PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
-    },
+    compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
     orchestrator::execute_guest_evm_bytecode,
     rv64::{guest::GuestExecutionStatus, memory::EVM_STACK_CAPACITY},
 };
@@ -37,43 +35,11 @@ impl<CTX> Inspector<CTX> for StackInspector {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Terminal {
-    Normal,
-    StackUnderflow,
-    StackOverflow,
-    Other(String),
-}
-
-impl Terminal {
-    fn from_revm(result: &ExecutionResult) -> Self {
-        match result {
-            ExecutionResult::Success { .. } => Self::Normal,
-            ExecutionResult::Halt {
-                reason: HaltReason::StackUnderflow,
-                ..
-            } => Self::StackUnderflow,
-            ExecutionResult::Halt {
-                reason: HaltReason::StackOverflow,
-                ..
-            } => Self::StackOverflow,
-            other => Self::Other(format!("REVM {other:?}")),
-        }
-    }
-
-    fn from_guest(status: GuestExecutionStatus, exception_code: u64) -> Self {
-        match (status, exception_code) {
-            (GuestExecutionStatus::Normal, 0) => Self::Normal,
-            (GuestExecutionStatus::GuestException, PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE) => {
-                Self::StackUnderflow
-            }
-            (GuestExecutionStatus::GuestException, PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE) => {
-                Self::StackOverflow
-            }
-            (status, code) => Self::Other(format!("guest {status:?}, exception_code={code}")),
-        }
-    }
-}
+const EXPECTED_NORMAL: (GuestExecutionStatus, u64) = (GuestExecutionStatus::Normal, 0);
+const EXPECTED_STACK_UNDERFLOW: (GuestExecutionStatus, u64) = (
+    GuestExecutionStatus::GuestException,
+    PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
+);
 
 #[derive(Debug)]
 struct RevmExecution {
@@ -132,7 +98,7 @@ fn bytecode_hex(bytecode: &[u8]) -> String {
 fn assert_rc_matches_revm(
     case_name: &str,
     bytecode: &[u8],
-    expected: Option<Terminal>,
+    expected_guest: (GuestExecutionStatus, u64),
 ) -> RevmExecution {
     let revm = execute_revm(bytecode).unwrap_or_else(|error| {
         panic!(
@@ -143,40 +109,47 @@ fn assert_rc_matches_revm(
             bytecode_hex(bytecode)
         )
     });
-    let revm_terminal = Terminal::from_revm(&revm.result);
     let revm_stack = revm.stack.as_deref();
     let guest = execute_guest_evm_bytecode(bytecode).unwrap_or_else(|error| {
         panic!(
-            "{case_name}; bytecode=0x{}; REVM terminal={revm_terminal:?}; \
+            "{case_name}; bytecode=0x{}; REVM result={:?}; \
              Ferreth terminal=<compile/execution error>; REVM stack={}; \
              Ferreth stack=<not available>; first differing stack index=<not available>; \
              compiler/executor error={error}",
             bytecode_hex(bytecode),
+            revm.result,
             revm_stack
                 .map(format_stack)
                 .unwrap_or_else(|| "<not observed>".to_owned()),
         )
     });
     let guest_result = guest.guest_result();
-    let guest_terminal = Terminal::from_guest(guest_result.status(), guest_result.exception_code());
+    let guest_terminal = (guest_result.status(), guest_result.exception_code());
     let guest_stack = guest_result.stack();
 
-    let differing_index = match (&revm_terminal, &guest_terminal) {
-        // REVM short-circuits empty deployed bytecode before creating an
-        // interpreter, so there is no reference operand stack to read.
-        (Terminal::Normal, Terminal::Normal) if bytecode.is_empty() && revm_stack.is_none() => None,
-        (Terminal::Normal, Terminal::Normal) => {
-            revm_stack.and_then(|stack| first_differing_index(stack, guest_stack))
-        }
-        _ => None,
+    let revm_termination_matches = matches!(
+        (expected_guest.0, &revm.result),
+        (
+            GuestExecutionStatus::Normal,
+            ExecutionResult::Success { .. }
+        ) | (
+            GuestExecutionStatus::GuestException,
+            ExecutionResult::Halt { .. }
+        )
+    );
+    let both_succeeded =
+        matches!(revm.result, ExecutionResult::Success { .. }) && guest_terminal == EXPECTED_NORMAL;
+    let differing_index = if both_succeeded {
+        // REVM skips interpreter creation for empty deployed bytecode.
+        let expected_stack = revm_stack.or_else(|| bytecode.is_empty().then_some(&[]));
+        expected_stack.and_then(|stack| first_differing_index(stack, guest_stack))
+    } else {
+        None
     };
 
-    let missing_stack =
-        revm_terminal == Terminal::Normal && revm_stack.is_none() && !bytecode.is_empty();
-    if revm_terminal != guest_terminal
-        || expected
-            .as_ref()
-            .is_some_and(|expected| *expected != revm_terminal)
+    let missing_stack = both_succeeded && revm_stack.is_none() && !bytecode.is_empty();
+    if !revm_termination_matches
+        || guest_terminal != expected_guest
         || differing_index.is_some()
         || missing_stack
     {
@@ -188,15 +161,12 @@ fn assert_rc_matches_revm(
             .unwrap_or_else(|| "<none or not comparable>".to_owned());
         panic!(
             "{case_name}: RC-to-REVM mismatch; bytecode=0x{}; \
-             expected terminal={expected:?}; REVM terminal={revm_terminal:?}; \
-             Ferreth terminal={guest_terminal:?}; \
-             REVM result={:?}; Ferreth status={:?}, exception_code={}; \
+             expected Ferreth (status, exception code)={expected_guest:?}; \
+             REVM result={:?}; Ferreth (status, exception code)={guest_terminal:?}; \
              REVM stack={revm_stack}; Ferreth stack={}; \
              first differing stack index={first_difference}",
             bytecode_hex(bytecode),
             revm.result,
-            guest_result.status(),
-            guest_result.exception_code(),
             format_stack(guest_stack),
         );
     }
@@ -210,6 +180,7 @@ fn directed_rc_programs_match_revm_cancun() {
         ("STOP only", vec![0x00]),
         ("PUSH1 followed by STOP", vec![0x60, 0x05, 0x00]),
         ("PUSH1 without explicit STOP", vec![0x60, 0x05]),
+        ("truncated PUSH1", vec![0x60]),
         ("multiple PUSH1 instructions", vec![0x60, 0x05, 0x60, 0x03]),
         (
             "STOP followed by unreachable bytecode",
@@ -282,6 +253,13 @@ fn directed_rc_programs_match_revm_cancun() {
             "DUP1 after STOP is unreachable",
             vec![0x60, 0x05, 0x00, 0x80],
         ),
+        ("STOP makes POP unreachable", vec![0x60, 0x05, 0x00, 0x50]),
+    ];
+    for (name, bytecode) in cases {
+        assert_rc_matches_revm(name, &bytecode, EXPECTED_NORMAL);
+    }
+
+    let underflow_cases = [
         ("POP with empty stack", vec![0x50]),
         (
             "POP underflows after one successful POP",
@@ -291,15 +269,14 @@ fn directed_rc_programs_match_revm_cancun() {
             "POP then ADD underflows",
             vec![0x60, 0x05, 0x60, 0x03, 0x50, 0x01],
         ),
-        ("STOP makes POP unreachable", vec![0x60, 0x05, 0x00, 0x50]),
         ("ADD with empty stack", vec![0x01]),
         ("ADD with one operand", vec![0x60, 0x01, 0x01]),
         ("SUB with empty stack", vec![0x03]),
         ("SUB with one operand", vec![0x60, 0x01, 0x03]),
     ];
 
-    for (name, bytecode) in cases {
-        assert_rc_matches_revm(name, &bytecode, None);
+    for (name, bytecode) in underflow_cases {
+        assert_rc_matches_revm(name, &bytecode, EXPECTED_STACK_UNDERFLOW);
     }
 }
 
@@ -311,13 +288,23 @@ fn revm_43_dup1_empty_stack_reports_stack_overflow_not_underflow() {
 
     // REVM 43 currently classifies this as StackOverflow; Ferreth follows the
     // EVM stack precondition and publishes StackUnderflow.
-    assert_eq!(Terminal::from_revm(&revm.result), Terminal::StackOverflow);
+    assert!(
+        matches!(
+            revm.result,
+            ExecutionResult::Halt {
+                reason: HaltReason::StackOverflow,
+                ..
+            }
+        ),
+        "unexpected REVM result: {:?}",
+        revm.result
+    );
     assert_eq!(
-        Terminal::from_guest(
+        (
             guest.guest_result().status(),
             guest.guest_result().exception_code()
         ),
-        Terminal::StackUnderflow
+        EXPECTED_STACK_UNDERFLOW
     );
 }
 
@@ -645,7 +632,6 @@ fn seeded_random_rc_programs_match_revm_cancun() {
     let mut arithmetic_after_dup1 = 0;
     let mut pop_after_arithmetic = 0;
     let mut underflows = [0; 4];
-    let mut known_dup1_discrepancies = 0;
 
     for (valid, total) in [(true, VALID_CASES), (false, INVALID_CASES)] {
         for index in 0..total {
@@ -671,36 +657,15 @@ fn seeded_random_rc_programs_match_revm_cancun() {
                 assert!(depth <= 1, "{case}");
                 underflows[slot] += 1;
             }
-            let revm = if !valid && shape.underflow.is_some_and(|(opcode, _)| opcode == 0x80) {
-                let revm = execute_revm(&bytecode).expect("REVM DUP1 discrepancy case executes");
-                let guest = execute_guest_evm_bytecode(&bytecode)
-                    .expect("guest DUP1 discrepancy case executes");
-                assert_eq!(
-                    Terminal::from_revm(&revm.result),
-                    Terminal::StackOverflow,
-                    "{case}"
-                );
-                assert_eq!(
-                    Terminal::from_guest(
-                        guest.guest_result().status(),
-                        guest.guest_result().exception_code()
-                    ),
-                    Terminal::StackUnderflow,
-                    "{case}"
-                );
-                known_dup1_discrepancies += 1;
-                revm
-            } else {
-                assert_rc_matches_revm(
-                    &case,
-                    &bytecode,
-                    Some(if valid {
-                        Terminal::Normal
-                    } else {
-                        Terminal::StackUnderflow
-                    }),
-                )
-            };
+            let revm = assert_rc_matches_revm(
+                &case,
+                &bytecode,
+                if valid {
+                    EXPECTED_NORMAL
+                } else {
+                    EXPECTED_STACK_UNDERFLOW
+                },
+            );
             if valid {
                 valid_executed += 1;
                 fallthrough += usize::from(shape.stop == 0);
@@ -757,7 +722,6 @@ fn seeded_random_rc_programs_match_revm_cancun() {
     assert!(mixed > 0 && consecutive > 0 && distinct_pushes_sub > 0 && multi_limb > 0);
     assert!(arithmetic_after_dup1 > 0 && pop_after_arithmetic > 0);
     assert!(underflows.iter().all(|count| *count > 0));
-    assert!(known_dup1_discrepancies > 0);
     println!(
         "seed=0x{RANDOM_SEED:016x}; valid={valid_executed}; invalid={invalid_executed}; \
          max_bytes={max_bytes}; max_depth={}; reached opcodes: PUSH1={}, ADD={}, SUB={}, POP={}, DUP1={}, STOP={}; \
@@ -765,7 +729,7 @@ fn seeded_random_rc_programs_match_revm_cancun() {
          multiple_values={multiple_values}, mixed={mixed}, consecutive={consecutive}, \
          distinct_pushes_sub={distinct_pushes_sub}, multi_limb={multi_limb}, nonempty_final={nonempty_final}, \
          empty_final={empty_final}, arithmetic_after_dup1={}, pop_after_arithmetic={}, \
-         underflows={underflows:?}, known_dup1_discrepancies={known_dup1_discrepancies}",
+         underflows={underflows:?}",
         counts.max_depth,
         counts.push,
         counts.add,

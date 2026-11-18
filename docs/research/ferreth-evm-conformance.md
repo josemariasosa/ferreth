@@ -4,21 +4,21 @@
 
 **Fork under test:** Cancun
 
-**Status:** Non-normative research; no architecture or implementation decision
+**Status:** Non-normative research with verification records through Priority 3
 
 **Scope:** Ferreth's six implemented opcodes (`STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1`) and possible `GAS` support.
 
 ## Executive summary
 
-The useful near-term outcome is not a new fixture framework. Keep the existing REVM differential tests for fast iteration, and consider a small set of Cancun vectors with explicit provenance. EELS has a real Cancun frame entry point that exposes stack, gas and error, but its context construction and execution have not been run here. A direct REVM interpreter API is source-verified, but no frame runner has been compiled or executed.
+Priorities 1 and 2 established executable Cancun frame references in [EELS](../../research/eels-cancun/README.md) and [REVM](../../research/revm-frame/README.md). Priority 3 corrected truncated PUSH decoding and updated the existing transaction-based differential tests to compare termination and successful stacks. The independent frame runs provide evidence for future gas work.
 
 The original research contained several important overstatements:
 
 1. **EEST did move.** The `ethereum/execution-spec-tests` repository was archived read-only on 2 July 2026. Its README says code was migrated to `ethereum/execution-specs` and fixture releases are now published there. This is a repository and release move, not evidence that every old fixture family has already been migrated.
-2. **The EELS `process_message` API is real, but not a ready-made bytecode runner.** At the current `execution-specs` revision it is `process_message(message: Message) -> Evm`, in the Cancun interpreter module. It seeds an empty stack and the message's frame gas, then returns the internal EVM object. Constructing the required environment and transaction state remains necessary; no end-to-end Python experiment succeeded here.
+2. **EELS `process_message` requires a message environment.** At the pinned `execution-specs` revision it is `process_message(message: Message) -> Evm`, in the Cancun interpreter module. It seeds an empty stack and the message's frame gas, then returns the internal EVM object. The [Priority 1 runner](../../research/eels-cancun/README.md) constructs the required environment and transaction state and records end-to-end results.
 3. **Stack-operation ordering differs between EELS and REVM.** Cancun EELS often pops operands before charging (e.g. ADD, SUB, POP), while REVM's interpreter charges the static opcode gas before dispatching its handler. Both treat exceptional halt as a failed frame; internal error labels and partial stack observations can differ. These differences are not, by themselves, externally observable consensus disagreements.
 4. **The known empty-stack DUP1 label difference reproduces.** Ferreth's existing REVM 43 integration test reports REVM `StackOverflow` and guest `StackUnderflow`. Cancun EELS checks the missing DUP operand and raises `StackUnderflowError`. REVM's DUP handler maps a failed stack duplication to `StackOverflow`. This is a diagnostic taxonomy mismatch; do not make enum-name equality the conformance criterion.
-5. **Current Ferreth behavior matters.** The compiler supports the six opcodes, but not GAS; the decoder rejects truncated PUSH1 immediates while Cancun EELS zero-pads a truncated immediate. Existing REVM tests execute through a transaction with a 1,000,000 gas limit and inspect the stack; they are not frame-gas comparisons.
+5. **Ferreth zero-pads truncated PUSH immediates.** The decoder applies this rule to PUSH1–PUSH32, and the RV64 compiler lowers PUSH1. The REVM differential tests execute through a transaction with a 1,000,000 gas limit and compare termination and successful stacks.
 6. **Historical VMTests need a provenance caveat.** The `ethereum/tests` repository is not archived, but the old VM Tests wiki is from 2015, and the current `develop` branch does not expose the historical top-level `VMTests`/`VMTest` paths. The wiki describes execution gas and remaining gas, but not an initial or expected final stack. No specific current JSON fixture was verified.
 
 These are research findings, not changes to [ADR-001](../adr/001-evm-guest-state-abi.md) or [ADR-002](../adr/002-cancun-evm-gas-metering.md). ADR-002 remains **Proposed** and its frame-budget / error-precedence decisions need review against the source-order evidence below.
@@ -28,8 +28,8 @@ These are research findings, not changes to [ADR-001](../adr/001-evm-guest-state
 Repository observations:
 
 - [compiler.rs](../../crates/ferreth-compiler/src/compiler.rs) compiles `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, and `DUP1`. It stops decoding at `STOP`. Reaching the end of bytecode completes normally. The decoder recognizes PUSH1–PUSH32, but the compiler rejects all PUSH widths other than PUSH1.
-- [lib.rs](../../crates/ferreth-compiler/src/lib.rs) rejects truncated PUSH immediates with `DecodeError::TruncatedPush`. That differs from Cancun EELS `buffer_read`, which right-pads the requested bytes with zero. This is an implementation discrepancy to track; it is not silently resolved by this research.
-- [dup.rs](../../crates/ferreth-compiler/src/rv64/dup.rs) checks underflow before capacity and leaves the stack unchanged on either error. [guest.rs](../../crates/ferreth-compiler/src/rv64/guest.rs) defines the 1024-word stack and its guest-side stack validation.
+- The [decoder](../../crates/ferreth-compiler/src/lib.rs) right-pads truncated PUSH immediates with zeros and retains `DecodeError::TruncatedPush` for source compatibility. The [static disassembler](../../crates/ferreth-compiler/src/disassembler.rs) reports the physical bytes and the number of missing bytes.
+- [dup.rs](../../crates/ferreth-compiler/src/rv64/opcodes/dup.rs) checks underflow before capacity and leaves the stack unchanged on either error. [guest.rs](../../crates/ferreth-compiler/src/rv64/guest.rs) defines the 1024-word stack and its guest-side stack validation.
 - [rc_revm_conformance.rs](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs) runs REVM with `SpecId::CANCUN`, through `inspect_tx`, with transaction gas limit 1,000,000. Its inspector captures the interpreter stack after instructions. It contains an explicit test for the empty-stack DUP1 diagnostic mismatch.
 - [execution.rs](../../crates/ferreth-compiler/src/execution.rs) also uses Cancun REVM, but its transaction path returns call output rather than frame stack/gas.
 - [Cargo.lock](../../Cargo.lock) resolves `revm` 43.0.3 and `revm-interpreter` 43.0.2. The compiler crate depends directly on `revm` 43.0.3; it does not declare a separate direct `revm-interpreter` dependency.
@@ -37,7 +37,7 @@ Repository observations:
 
 The current guest ABI has status, provisional exception code and final stack pointer; gas is not part of the ABI. GAS and gas metering are not implemented. ADR-001 is Accepted; ADR-002 is Proposed. This report does not authorize implementation or change either ADR.
 
-The truncated-PUSH mismatch is material for bytecode semantics, but it does not mean every legacy fixture is appropriate. The outstanding gas-order observations also challenge ADR-002's stated assumption that all opcode gas checks precede stack handling; this is evidence for review, not an instruction to edit the frozen ADR.
+The gas-order observations in RF-003 remain relevant to review of ADR-002's proposed ordering of gas checks and stack validation.
 
 ## 2. Cancun EELS frame feasibility
 
@@ -56,7 +56,7 @@ It is a source-level execution function, not a convenience API accepting `(bytec
 The relevant frame behavior is visible in the function body:
 
 - `Evm.stack` starts as `[]`; `Evm.gas_left` starts at `message.gas`; bytecode is `message.code`.
-- It snapshots transaction state even for simple arithmetic, so supplying only code and gas is insufficient. The Python `BlockState`, `TransactionState`, `BlockEnvironment`, `TransactionEnvironment` and `Message` dataclasses can be constructed directly, but a valid pre-state/context still needs to be supplied. The exact minimal setup was not executed.
+- It snapshots transaction state even for simple arithmetic. The [Priority 1 runner](../../research/eels-cancun/README.md) supplies a synthetic environment and empty pre-state.
 - A normal message target should be non-empty and should not select a precompile. Set `should_transfer_value=False`; stack-only opcodes do not otherwise need state reads, but `process_message` still uses the transaction state for snapshot/rollback.
 - The loop runs while `evm.running` and `evm.pc < len(evm.code)`. Falling off the end is normal completion. Explicit STOP sets `running=False`.
 - The returned `Evm` exposes `stack`, `gas_left`, `error`, `pc`, `output` and other frame fields. `process_message_call` instead returns `MessageCallOutput` without the final stack; it is the wrong return type for this comparison.
@@ -77,14 +77,13 @@ The Cancun implementation sources are [`arithmetic.py`](https://github.com/ether
 
 This order is material to diagnostic experiments, not to the final classification of a failed frame alone. For example, an empty-stack ADD at budget 0 underflows before EELS checks gas; REVM charges static gas before invoking ADD and reports OOG. Both are exceptional halts, and the terminal gas is consumed. For ADD with operands but insufficient gas, EELS pops before `charge_gas`; the returned exceptional `Evm.stack` may therefore be partially changed. Such terminal stack values are not normal externally observable EVM results and should be treated as diagnostics.
 
-For a successful frame, `GAS; GAS; STOP` with frame budget 10 should push 8 then 6 and finish with 6 gas. This is source-derived, not an observed experiment. `GAS` with less than 2 gas is OOG before a value is pushed. The Cancun `stack.push` limit is 1024; `DUP1` at capacity fails on the push after its gas charge.
+For a successful frame, `GAS; GAS; STOP` with frame budget 10 pushes 8 then 6 and finishes with 6 gas, as observed by the [EELS runner](../../research/eels-cancun/README.md#5-gas-opcode). Source inspection shows how the gas check precedes the push and how `DUP1` at capacity fails on the push after its gas charge.
 
 ### Installation and experiment status
 
 The pinned repository `pyproject.toml` identifies the package as `ethereum-execution`, requires Python >=3.11, and lists its runtime dependencies. Its README says Python 3.11–3.14 are supported (3.12 recommended) and uses `uv sync`; the `ethereum-spec-evm` CLI is supplied by the `ethereum-execution-testing` workspace package and runs transitions/state tests, not arbitrary frames. EEST tooling is in the repository's test dependency group, not a lightweight, preconfigured Ferreth runner. A reproducible run should pin the repository SHA above, record Python and lockfile, and use the repository's supported environment tooling.
 
-**Experiment attempted:** `python3 -c 'import ethereum; print(ethereum.__file__)'`
-**Observed:** `ModuleNotFoundError: No module named 'ethereum'`. No dependencies were installed and no Ferreth files or manifests were changed. Therefore no EELS outputs are claimed. The exact state/environment construction remains unverified at runtime.
+The initial source-review environment returned `ModuleNotFoundError: No module named 'ethereum'` for `python3 -c 'import ethereum; print(ethereum.__file__)'`. The later [Priority 1 experiment](../../research/eels-cancun/README.md) used a locked Python environment and recorded successful and exceptional executions.
 
 ## 3. EEST: current repository and fixture fit
 
@@ -115,7 +114,7 @@ No concrete current JSON VMTest, Cancun fork annotation, or per-case generator p
 
 ### Existing harness
 
-Ferreth's conformance test builds a Cancun REVM context and calls `inspect_tx` on a transaction with a 1,000,000 gas limit. Its `StackInspector` saves stack contents at interpreter initialization and after successful steps. This is useful whole-program differential testing, but it does not supply Ferreth with a matching EVM frame budget or compare final frame gas. Subtracting 21,000 from the transaction gas limit/receipt is not generally a frame-equivalence proof: transaction calldata, access lists, creation, execution setup, refunds and fork-specific accounting can affect transaction-level figures.
+Ferreth's conformance test builds a Cancun REVM context and calls `inspect_tx` on a transaction with a 1,000,000 gas limit. Its `StackInspector` saves stack contents at interpreter initialization and on `step_end`. The differential checks cover termination and successful stacks. A frame-gas comparison needs a matching EVM frame budget. Transaction calldata, access lists, creation, execution setup, refunds and fork-specific accounting can affect transaction-level figures.
 
 A carefully constrained transaction might be normalized if its envelope, intrinsic costs, call forwarding and pre-op gas are all controlled and verified. That is not what the current harness does, and no such normalization was established here. Transaction results do not publish the final EVM stack; the current inspector obtains stack observations separately.
 
@@ -123,7 +122,7 @@ A carefully constrained transaction might be normalized if its envelope, intrins
 
 The `revm-interpreter` 43.0.2 source resolved by Ferreth's lockfile exposes a low-level interpreter. `Interpreter::new` takes `SharedMemory`, `ExtBytecode`, `InputsImpl`, static flag, `SpecId` and explicit `gas_limit: u64`. `Interpreter` exposes its stack and gas fields; the stack can be seeded using its stack API. `run_plain(instruction_table, gas_table, host)` returns an `InterpreterAction`, whose return variant contains an `InterpreterResult` with `InstructionResult` and gas.
 
-This establishes that direct interpreter execution is possible in principle without transaction intrinsic gas. It is not yet a validated Ferreth runner: it still requires correct `ExtBytecode`, input, gas/instruction tables and a `Host`; construction and result extraction have not been compiled or exercised in a scratch program. The exact source is [`interpreter.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/interpreter.rs), [`interpreter_types.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/interpreter_types.rs) and [`instructions/stack.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/instructions/stack.rs).
+The [Priority 2 runner](../../research/revm-frame/README.md) compiled and exercised this API with explicit Cancun frame gas and a synthetic host. The pinned source paths are [`interpreter.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/interpreter.rs), [`interpreter_types.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/interpreter_types.rs) and [`instructions/stack.rs`](https://docs.rs/crate/revm-interpreter/43.0.2/source/src/instructions/stack.rs).
 
 REVM's `Interpreter::step` debits static opcode gas before calling the instruction. In the 43.0.2 `DUP1` handler, `stack.dup(N) == false` becomes `InstructionResult::StackOverflow`. The stack API's boolean cannot distinguish a missing source item from a full destination stack, explaining the reported empty-stack label. REVM source's `Interpreter::halt` spends all gas for OOG, but not for every other halt result; a direct-runner comparison must normalize exceptional-frame remaining gas rather than assume the raw interpreter result is already identical to EELS's `process_message` return.
 
@@ -145,18 +144,18 @@ The EVM semantic assertion should be **normal completion versus exceptional halt
 | Approach | Effort / CI / dependencies | Independence and observable fit | Assessment |
 |---|---|---|---|
 | A. Static, source-attributed vectors | Low; Rust-only and fast; no new dependencies | Independent if derivation/source is recorded; can assert Ferreth's stack/status | Best immediate candidate |
-| B. Live EELS runner | Medium; Python plus pinned EELS environment; keep out of per-PR CI initially | Independent Cancun implementation; frame stack/gas/error exposed | Worth one isolated feasibility experiment; context setup is unproven |
+| B. Live EELS runner | Medium; Python plus pinned EELS environment; keep out of per-PR CI initially | Independent Cancun implementation; frame stack/gas/error exposed | Validated in the isolated Priority 1 experiment |
 | C. EEST fixtures | Medium/high adapter effort; large release assets and state/transaction machinery | Official test ecosystem, but generally no internal final stack | Inspect one case; do not build a general importer now |
 | C2. Historical VMTests | Low to inspect; variable adapter effort; JSON itself is lightweight | VM gas budget helps, but fork and expected-result provenance need case-by-case validation | Research-only until an actual fixture is pinned |
 | D. Hybrid | Low initial cost; REVM remains routine CI, small Rust vectors; optional EELS check | Balances speed and an independent semantic anchor; grows with observable opcode support | Recommended direction to evaluate |
 
-**Research recommendation:** keep REVM as the routine differential reference. Before adding a parser, Python runtime dependency, or EEST CI job, build a small deterministic vector set for behavior Ferreth actually observes. Independently derive cases from pinned Cancun semantics and cross-check with EELS once its frame setup is executable. A candidate is not independent merely because its result matches REVM.
+**Research recommendation:** keep REVM as the routine differential reference. Before adding a parser, Python runtime dependency, or EEST CI job, build a small deterministic vector set for behavior Ferreth actually observes. Derive cases from pinned Cancun semantics and cross-check with the EELS frame runner.
 
-### Candidate experiments
+### Experiment follow-up
 
-1. **EELS frame smoke test — worth doing next.** Pin the commit above and Python environment; construct Cancun block/transaction/message state with an empty initial stack and run: `STOP` (`0x00`, gas 0); `PUSH1 2; STOP` (`0x600200`, gas 3); `SUB` (`0x600260030300`, gas 20); `ADD` (`0x01`, budgets 0, 2 and 3); `GAS; STOP` (`0x5a00`, gas 10); repeated GAS (`0x5a5a00`, gas 10); and empty-stack `DUP1` (`0x80`, gas 3). Capture exact setup and `stack`, `gas_left`, `error`, `pc`. Expected successful observations are `[2]`/0 gas for PUSH1, `[1]`/11 gas for SUB and `[8]`/8 gas for GAS; exceptional cases should return a specific `error` and zero terminal gas. Do not assert exceptional stack state across implementations. Success means deterministic successful and exceptional results from returned `Evm`; failure must record the setup blocker. No EELS run has yet occurred.
-2. **REVM direct frame — worth doing after the EELS smoke test.** Using locked REVM 43.0.3 / interpreter 43.0.2, instantiate `Interpreter` with Cancun, explicit budget and bytecode; seed a stack for a successful arithmetic vector; run to `InterpreterAction::Return`. Test `STOP` with 0 gas; empty-stack ADD at 0, 2 and 3; `GAS; GAS; STOP` (`0x5a5a00`) at 10; `PUSH1 2; PUSH1 3; ADD; STOP` (`0x600260030100`) at 8 and 9; empty-stack DUP1 (`0x80`) with sufficient gas. Record `InstructionResult`, raw interpreter gas and stack. For exceptional cases, compare semantic halt and normalized frame gas, not raw intermediate stack. Success means the exact call path compiles and returns these values without transaction execution. Not executed here.
-3. **DUP1 semantic classification — partly resolved.** Current Ferreth/REVM transaction test is executed; Cancun source shows EELS underflow versus REVM overflow diagnostic. A direct EELS/REVM frame run should still confirm whether raw intermediate gas/stack differences normalize to the same external exceptional result. Do not file an upstream correctness issue based only on the name.
+1. **EELS frame smoke test — completed.** The [Priority 1 experiment](../../research/eels-cancun/README.md) records the pinned environment and the observed stack, gas, error, and PC for successful and exceptional frames.
+2. **REVM direct frame — completed.** The [Priority 2 experiment](../../research/revm-frame/README.md) records the direct interpreter results and the evidence for exceptional-frame gas settlement.
+3. **DUP1 semantic classification — verified.** The [independent frame runs](../../research/revm-frame/README.md#2-empty-stack-dup1) confirm exceptional termination with different labels. Priority 3 preserves the dedicated Ferreth/REVM diagnostic regression and compares semantic termination in the general differential harness.
 4. **One EEST fixture — defer until an observable output fits.** Inspect a specific Cancun fixture from `tests@v21.0.2`, including schema and exact asserted fields. The release asset is large; first use manifest/source metadata or a selected small fixture. Success means identifying an assertion Ferreth can make without full transaction/state semantics. A negative result is useful.
 5. **One historical VMTest — defer until provenance is located.** Find an actual JSON case and record fixture release, fork, generator and exact schema. Compare its initial and remaining VM gas and output against Cancun rules. Do not claim final stack coverage if it is absent.
 6. **Repeated GAS — after gas support exists.** For budget 10, test `GAS; GAS; STOP` expecting stack `[8, 6]` and 6 remaining; then test budgets below and at charge boundaries. Keep EVM gas separate from RV64 instruction counts.
@@ -173,27 +172,25 @@ The EVM semantic assertion should be **normal completion versus exceptional halt
 - Historical VM Tests wiki schema inspected; current `ethereum/tests` repository metadata and historical top-level paths checked. No actual current VMTest JSON was located.
 - REVM 43.0.2 interpreter and stack handler source inspected; lockfile resolves revm 43.0.3 / revm-interpreter 43.0.2.
 - Focused existing REVM/Ferreth DUP1 regression test executed successfully. It confirms the test's expected labels, not consensus equivalence or frame gas.
+- The [EELS](../../research/eels-cancun/README.md) and [REVM](../../research/revm-frame/README.md) experiments ran Cancun frames independently. The runner READMEs contain the observed results and limits.
 
 ### Claim audit
 
 | Claim | Classification | Evidence / limit |
 |---|---|---|
-| Cancun EELS exposes `process_message(Message) -> Evm`, empty-stack initialization, frame gas and returned stack/error fields | **Verified** | Pinned Cancun source inspected; not executed here |
-| A minimal EELS frame can be constructed and run with a small dummy state | **Implementation-dependent** | Required structures are known; no runnable setup was produced |
+| Cancun EELS exposes `process_message(Message) -> Evm`, empty-stack initialization, frame gas and returned stack/error fields | **Verified** | Pinned source inspected and the Priority 1 runner exercised the API |
+| A minimal EELS frame can be constructed and run with a small dummy state | **Experimentally verified** | Priority 1 ran with a synthetic environment and empty pre-state |
 | EEST code and fixture-release ownership moved to `execution-specs` | **Verified** | Archived repository README and current release metadata |
 | Every historical VMTest family has migrated or has Cancun-compatible fixtures | **Incorrect / unsupported** | Current migration issue remains an open draft; no concrete fixture was verified |
-| REVM 43.0.2 has a direct interpreter with explicit initial gas and inspectable result | **Verified at source level** | Constructor and `run_plain` inspected; no frame runner compiled |
+| REVM 43.0.2 has a direct interpreter with explicit initial gas and inspectable result | **Experimentally verified** | Priority 2 compiled and ran the direct interpreter |
 | Existing transaction gas can be normalized by subtracting 21,000 | **Incorrect as a general rule** | Depends on transaction shape and frame forwarding; current harness does not capture an equivalent frame budget |
 | Empty-stack DUP1's REVM StackOverflow label is an EVM semantic mismatch | **Incorrect framing** | Test/source confirms different diagnostic; both are exceptional halts |
 | A tiny set of independent source-attributed vectors is a useful near-term increment | **Proposal** | Engineering recommendation, not an accepted decision |
 
 ### Not verified or not executed
 
-- EELS Python frame execution; active Python environment lacks the `ethereum` module.
-- REVM direct-frame invocation and gas/stack extraction in an executable Ferreth runner.
 - Current per-case historical VMTests inventory, expected-result generator provenance, or Cancun annotation.
 - Any released EEST fixture downloaded or executed; the inspected v21.0.2 fixture archive is approximately 939 MB.
-- EELS/REVM `GAS` numeric outputs in a running experiment. Numerical expectations above are derived from Cancun source, not measurements.
 
 ### Primary sources
 
@@ -227,7 +224,7 @@ The following ordered plan establishes a practical path to Ferreth's incremental
 
 ### Priority 2: Direct REVM frame-level execution
 
-Direct REVM frame-level execution
+**Status:** Completed. See the [direct REVM experiment](../../research/revm-frame/README.md).
 
 **Objective:** Investigate and validate a reproducible frame-equivalent execution path using Ferreth's pinned REVM 43.0.3 version, independent of transaction intrinsic gas.
 
@@ -244,6 +241,8 @@ Direct REVM frame-level execution
 
 ### Priority 3: Focused conformance corrections
 
+**Status:** Implemented and verified. The locked workspace suite passed 135 tests. See RF-003 through RF-006 for regression and audit evidence.
+
 **Objective:** Address currently identified discrepancies before introducing the gas-metering implementation.
 
 **Goals:**
@@ -252,7 +251,7 @@ Direct REVM frame-level execution
 - Document the boundary between consensus-relevant semantic failures and implementation-specific diagnostic labels.
 - Retain the known empty-stack DUP1 label discrepancy (StackUnderflow vs. StackOverflow) as a regression diagnostic case without treating enum-name differences as automatic semantic mismatches.
 
-**Scope:** Compiler, decoder, and test suite only.
+**Scope:** Decoder and existing conformance tests, with a verification record in this document.
 
 **Success criterion:** Supported opcode behavior agrees with Cancun semantics, and the differential harness reliably distinguishes semantic failures from diagnostic differences.
 
@@ -303,7 +302,7 @@ Direct REVM frame-level execution
 
 **Scope:** Cancun execution-frame semantics and incremental Ferreth conformance.
 
-**Status:** Research completed for Priorities 1 and 2. Implementation decisions remain subject to maintainer review.
+**Status:** Priorities 1 and 2 research and Priority 3 corrections are complete. Priority 4 architectural decisions remain subject to maintainer review.
 
 ### Experimental references
 
@@ -447,7 +446,7 @@ The observed diagnostic differences do not independently establish consensus-sem
 
 **Architectural decision pending:** Review ADR-002's proposed ordering of gas checks and stack validation.
 
-**Status:** Research complete; diagnostic policy review pending.
+**Priority 3 status:** Implemented and verified. The [differential helper](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L98) requires REVM success or halt as expected and checks Ferreth's exact guest status and exception code independently. Host errors and unexpected termination fail the comparison. The dedicated [empty-stack DUP1 regression](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L284) still requires REVM `StackOverflow` and Ferreth `StackUnderflow`. The seeded suite ran 1,000 successful and 100 exceptional cases, including DUP1 underflows through the shared helper. Gas-related error precedence remains pending under Priority 4.
 
 ### RF-004 — Exceptional terminal stacks are not portable conformance results
 
@@ -472,7 +471,7 @@ These differences reflect internal execution ordering rather than successful EVM
 
 Ferreth may preserve stronger internal stack invariants without introducing a consensus-semantic discrepancy.
 
-**Status:** Research complete; apply to differential test policy.
+**Priority 3 audit:** No correction required. The differential helper compares stacks after successful execution and reports observed exceptional stacks in failure diagnostics. The passing workspace suite continues to verify Ferreth's own stack and `s1` preservation on guest errors. See the [ADD and SUB guest regressions](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L212) and [DUP1 guest regressions](../../crates/ferreth-compiler/tests/rv64_dup1.rs#L44).
 
 ### RF-005 — Truncated PUSH immediates are zero-padded
 
@@ -490,22 +489,24 @@ Both implementations produce:
 - Final stack: `[0]`.
 - Remaining gas: `0`.
 
-Ferreth's current decoder rejects truncated PUSH immediates.
+Before Priority 3, Ferreth rejected the vector before guest execution. The new guest regression reproduced the discrepancy with Cargo exit 101 and the following error:
 
-This represents an implementation discrepancy rather than an implementation-specific diagnostic difference.
+```text
+Compile(Decode(TruncatedPush { offset: 0, opcode: 96, expected: 1, available: 0 }))
+```
 
 **Ferreth requirements:**
 
 - Correct truncated PUSH1 decoding to match Cancun zero-padding semantics.
 - Preserve the distinction between original bytecode length and logical immediate width.
 - Add focused regression coverage.
-- Extend the same zero-padding semantics to wider PUSH instructions when supported.
+- Apply the same zero-padding rule to all decoded PUSH widths. The RV64 compiler lowers PUSH1 and still reports `UnsupportedInstruction` for wider widths.
 
-Proposed regression test:
+**Priority 3 status:** Implemented and verified. The same guest regression passed after the fix with normal completion, exception code zero, and stack `[0]`. The [decoder regression](../../crates/ferreth-compiler/src/lib.rs#L343) covers `60`, `61ab`, `61`, `61abcd`, and a truncated PUSH32 at a nonzero offset. The [guest regression](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L121) and [directed Cancun differential suite](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L177) cover `0x60` through RV64 execution. A [compiler boundary test](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L312) verifies rejection of both complete and truncated PUSH2 at the original byte offset. Repeat runs of the [EELS](../../research/eels-cancun/README.md#4-truncated-push1) and [REVM](../../research/revm-frame/README.md#3-truncated-push1) frame vectors with gas 3 both produced stack `[0]` and zero remaining gas.
 
-`truncated_push1_zero_pads_missing_immediate`
-
-**Status:** Pending Priority 3 conformance correction.
+```bash
+cargo test --locked -p ferreth-compiler --test rv64_push1_program truncated_push1_zero_pads_missing_immediate -- --exact
+```
 
 ### RF-006 — Terminal program counters may differ across execution engines
 
@@ -537,7 +538,7 @@ REVM's analyzed bytecode padding and implicit STOP execution are a possible expl
 
 This finding does not relax the future requirement to implement the PC opcode correctly.
 
-**Status:** Research complete for the comparison policy; truncated PUSH1 PC mechanism remains unverified.
+**Priority 3 audit:** No correction required. Source inspection found no cross-engine terminal EVM PC equality assertion. The [RV64 executor tests](../../crates/ferreth-compiler/tests/rv64_executor.rs#L34) validate guest exit boundaries under ADR-001. The truncated PUSH1 PC mechanism in REVM remains unverified.
 
 ### RF-007 — GAS charges before observing remaining frame gas
 
@@ -594,17 +595,17 @@ Implementation-specific diagnostics may still be asserted in Ferreth's own regre
 |---|---|---|
 | RF-001 | Frame-level differential testing | Research complete |
 | RF-002 | ADR-002 and exceptional-halt regression | Pending Priority 4 |
-| RF-003 | Differential test policy and error precedence | Pending Priorities 3–4 |
-| RF-004 | Differential test assertions | Pending Priority 3 |
-| RF-005 | Decoder correction and regression | Pending Priority 3 |
-| RF-006 | Diagnostic comparison policy | Pending Priority 3 |
+| RF-003 | Shared differential helper and dedicated empty-stack DUP1 regression | Harness verified in Priority 3. Gas-related precedence pending Priority 4 |
+| RF-004 | Successful stack comparison and guest stack preservation regressions | Audited in Priority 3. No correction required |
+| RF-005 | Decoder, RV64 guest, compiler boundary, and Cancun differential regressions | Implemented and verified in Priority 3 |
+| RF-006 | Terminal PC diagnostics and RV64 exit-boundary tests | Audited in Priority 3. No correction required |
 | RF-007 | GAS implementation and boundary tests | Pending Priority 4 |
 
 ### Research completion
 
 Priorities 1 and 2 have successfully established independent, executable Cancun reference paths.
 
-The experiments provide sufficient evidence to proceed with Priority 3: focused conformance corrections.
+Priority 3 completed the focused corrections. The workspace suite, differential suite, formatting, compilation, and strict lint checks passed.
 
 Outstanding research limitations remain documented in the individual runner READMEs.
 
@@ -614,6 +615,4 @@ These findings constitute research evidence and proposed implementation requirem
 
 ## Final assessment
 
-The prior research should not be used unchanged to plan implementation. The EELS frame path and EEST migration claims are now grounded in primary sources; the REVM API is source-verified but not executed; historical VMTests remain unverified at the concrete-fixture level. Ferreth's existing REVM differential suite remains useful, but it compares transaction-driven execution and internal diagnostics, not the proposed frame-gas contract.
-
-The most useful next independent evidence is a successful EELS frame smoke test, followed by a minimal direct REVM interpreter experiment. Until then, prefer narrowly scoped source-attributed vectors, keep source/provenance distinct from implementation observations, and treat this report as non-normative input to future review—not an ADR decision.
+The executable EELS and REVM frame references now support the verified Priority 3 corrections. The Ferreth differential suite uses transaction-driven execution to check termination and successful stacks. Equivalent-budget frame-gas comparisons, exceptional gas settlement, and gas-related error precedence remain part of ADR-002 review and Priority 4. Historical VMTests remain unverified at the concrete-fixture level.
