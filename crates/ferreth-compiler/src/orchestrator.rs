@@ -266,6 +266,20 @@ pub fn execute_guest_pop_with_initial_stack(
     execute_linked_program(compile_evm_bytecode(&[0x50])?, initial_stack)
 }
 
+/// Executes one isolated EVM `DUP1` through the shared compiled RV64 body.
+pub fn execute_guest_dup1() -> Result<OrchestratorResult, OrchestratorError> {
+    execute_guest_dup1_with_initial_stack(&[U256::ZERO])
+}
+
+/// Executes the isolated guest `DUP1` body with a caller-provided stack.
+///
+/// The duplication itself is performed entirely by generated RV64 code.
+pub fn execute_guest_dup1_with_initial_stack(
+    initial_stack: &[U256],
+) -> Result<OrchestratorResult, OrchestratorError> {
+    execute_linked_program(compile_evm_bytecode(&[0x80])?, initial_stack)
+}
+
 /// Decodes, compiles, and executes a supported EVM bytecode program once.
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not

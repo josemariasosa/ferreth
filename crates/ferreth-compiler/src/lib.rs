@@ -16,6 +16,7 @@ pub enum Instruction {
     Add,
     Sub,
     Pop,
+    Dup1,
 }
 
 /// One decoded EVM instruction with source metadata for compiler diagnostics.
@@ -36,6 +37,9 @@ pub enum DecodedInstruction {
         offset: usize,
     },
     Pop {
+        offset: usize,
+    },
+    Dup1 {
         offset: usize,
     },
 }
@@ -75,7 +79,7 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Decodes the strict STOP, PUSH1-PUSH32, ADD, SUB, and POP research subset.
+/// Decodes the strict STOP, PUSH1-PUSH32, ADD, SUB, POP, and DUP1 research subset.
 ///
 /// Decoding ends at the first `STOP`, so bytes after it are unreachable and
 /// intentionally not interpreted as EVM instructions.
@@ -89,6 +93,7 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
                 DecodedInstruction::Add { .. } => Instruction::Add,
                 DecodedInstruction::Sub { .. } => Instruction::Sub,
                 DecodedInstruction::Pop { .. } => Instruction::Pop,
+                DecodedInstruction::Dup1 { .. } => Instruction::Dup1,
             })
             .collect()
     })
@@ -107,6 +112,7 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             0x01 => DecodedInstruction::Add { offset },
             0x03 => DecodedInstruction::Sub { offset },
             0x50 => DecodedInstruction::Pop { offset },
+            0x80 => DecodedInstruction::Dup1 { offset },
             0x60..=0x7f => {
                 let width = push_width(opcode).expect("0x60..=0x7f are PUSH opcodes");
                 let available = bytecode.len() - pc;
@@ -303,6 +309,15 @@ mod tests {
         assert_eq!(decode(&[0x00]), Ok(vec![Instruction::Stop]));
         assert_eq!(
             decode(&[0x60, 0x05, 0x00, 0x02]),
+            Ok(vec![Instruction::Push(U256::from(5)), Instruction::Stop])
+        );
+    }
+
+    #[test]
+    fn decodes_dup1_and_ignores_it_after_stop() {
+        assert_eq!(decode(&[0x80]), Ok(vec![Instruction::Dup1]));
+        assert_eq!(
+            decode(&[0x60, 0x05, 0x00, 0x80]),
             Ok(vec![Instruction::Push(U256::from(5)), Instruction::Stop])
         );
     }

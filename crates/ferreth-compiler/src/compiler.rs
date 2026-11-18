@@ -1,4 +1,4 @@
-//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, `SUB`, and `POP` operations.
+//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, and `DUP1` operations.
 //!
 //! This is deliberately not an EVM decoder or a general compiler.  It links
 //! the reusable PUSH1 guest blocks into one executable and supplies the shared
@@ -10,6 +10,7 @@ use asm_rs::{assemble, Arch};
 
 use crate::rv64::{
     add::generate_guest_add,
+    dup::generate_guest_dup1,
     memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
     pop::generate_guest_pop,
     push::generate_guest_push1,
@@ -129,6 +130,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
             DecodedInstruction::Add { .. } => operations.push(CompiledOperation::Add),
             DecodedInstruction::Sub { .. } => operations.push(CompiledOperation::Sub),
             DecodedInstruction::Pop { .. } => operations.push(CompiledOperation::Pop),
+            DecodedInstruction::Dup1 { .. } => operations.push(CompiledOperation::Dup1),
         }
     }
     // Keep the established PUSH1-only linker (and therefore its exact output)
@@ -143,9 +145,10 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 .iter()
                 .map(|operation| match operation {
                     CompiledOperation::Push1(immediate) => *immediate,
-                    CompiledOperation::Add | CompiledOperation::Sub | CompiledOperation::Pop => {
-                        unreachable!("checked above")
-                    }
+                    CompiledOperation::Add
+                    | CompiledOperation::Sub
+                    | CompiledOperation::Pop
+                    | CompiledOperation::Dup1 => unreachable!("checked above"),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -159,6 +162,7 @@ enum CompiledOperation {
     Add,
     Sub,
     Pop,
+    Dup1,
 }
 
 /// Links a mixed sequence of supported opcode bodies. Reaching the end falls
@@ -222,6 +226,28 @@ fn compile_supported_program(
                 Ok(GeneratedOperation::Pop {
                     code,
                     trampoline_offset,
+                })
+            }
+            CompiledOperation::Dup1 => {
+                let code = generate_guest_dup1();
+                let underflow_trampoline_offset =
+                    code.machine_code().len() - 2 * RV64_INSTRUCTION_SIZE as usize;
+                let overflow_trampoline_offset =
+                    code.machine_code().len() - RV64_INSTRUCTION_SIZE as usize;
+                if instruction_at(code.machine_code(), underflow_trampoline_offset)? != 0x0000_006f
+                    || instruction_at(code.machine_code(), overflow_trampoline_offset)?
+                        != 0x0000_006f
+                {
+                    return Err(CompileError::Link {
+                        description:
+                            "DUP1 generator no longer has its underflow and overflow trampolines"
+                                .to_owned(),
+                    });
+                }
+                Ok(GeneratedOperation::Dup1 {
+                    code,
+                    underflow_trampoline_offset,
+                    overflow_trampoline_offset,
                 })
             }
         })
@@ -313,6 +339,30 @@ fn compile_supported_program(
                     .copy_from_slice(&encode_jal_zero(offset)?.to_le_bytes());
                 machine_code.extend_from_slice(&bytes);
             }
+            GeneratedOperation::Dup1 {
+                code,
+                underflow_trampoline_offset,
+                overflow_trampoline_offset,
+            } => {
+                let underflow_pc = operation_start
+                    + u64::try_from(*underflow_trampoline_offset).expect("offset fits u64");
+                let overflow_pc = operation_start
+                    + u64::try_from(*overflow_trampoline_offset).expect("offset fits u64");
+                let underflow_offset = relative_jal_offset(underflow_pc, underflow_start)?;
+                let overflow_offset = relative_jal_offset(overflow_pc, overflow_start)?;
+                assembly.push_str(&linked_dup1_assembly(
+                    code.assembly(),
+                    index,
+                    underflow_offset,
+                    overflow_offset,
+                )?);
+                let mut bytes = code.machine_code().to_vec();
+                bytes[*underflow_trampoline_offset..*underflow_trampoline_offset + 4]
+                    .copy_from_slice(&encode_jal_zero(underflow_offset)?.to_le_bytes());
+                bytes[*overflow_trampoline_offset..*overflow_trampoline_offset + 4]
+                    .copy_from_slice(&encode_jal_zero(overflow_offset)?.to_le_bytes());
+                machine_code.extend_from_slice(&bytes);
+            }
         }
     }
     if has_explicit_stop {
@@ -359,6 +409,11 @@ enum GeneratedOperation {
         code: crate::rv64::push::GeneratedRv64,
         trampoline_offset: usize,
     },
+    Dup1 {
+        code: crate::rv64::push::GeneratedRv64,
+        underflow_trampoline_offset: usize,
+        overflow_trampoline_offset: usize,
+    },
 }
 
 impl GeneratedOperation {
@@ -367,9 +422,48 @@ impl GeneratedOperation {
             Self::Push1 { code, .. }
             | Self::Add { code, .. }
             | Self::Sub { code, .. }
-            | Self::Pop { code, .. } => code.machine_code().len(),
+            | Self::Pop { code, .. }
+            | Self::Dup1 { code, .. } => code.machine_code().len(),
         }
     }
+}
+
+fn linked_dup1_assembly(
+    source: &str,
+    index: usize,
+    underflow_offset: i64,
+    overflow_offset: i64,
+) -> Result<String, CompileError> {
+    let source = source.replacen("guest_dup1:\n", &format!("guest_dup1_{index}:\n"), 1);
+    let source = source.replacen(
+        "guest_dup1_underflow",
+        &format!("guest_dup1_underflow_{index}"),
+        2,
+    );
+    let source = source.replacen(
+        "guest_dup1_overflow",
+        &format!("guest_dup1_overflow_{index}"),
+        2,
+    );
+    let source = source.replacen(
+        &format!("guest_dup1_underflow_{index}:\n    jal zero, 0"),
+        &format!("guest_dup1_underflow_{index}:\n    jal zero, {underflow_offset}"),
+        1,
+    );
+    let source = source.replacen(
+        &format!("guest_dup1_overflow_{index}:\n    jal zero, 0"),
+        &format!("guest_dup1_overflow_{index}:\n    jal zero, {overflow_offset}"),
+        1,
+    );
+    if source.contains("guest_dup1_underflow:\n")
+        || source.contains("guest_dup1_overflow:\n")
+        || source.contains("jal zero, 0")
+    {
+        return Err(CompileError::Link {
+            description: "DUP1 assembly no longer exposes both patchable trampolines".to_owned(),
+        });
+    }
+    Ok(source)
 }
 
 fn linked_pop_assembly(

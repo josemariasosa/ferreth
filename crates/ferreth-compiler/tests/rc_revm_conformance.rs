@@ -253,6 +253,35 @@ fn directed_rc_programs_match_revm_cancun() {
             vec![0x60, 0x05, 0x60, 0x03, 0x50],
         ),
         ("POP leaves an empty stack", vec![0x60, 0x50, 0x50]),
+        ("DUP1 duplicates one item", vec![0x60, 0x05, 0x80]),
+        (
+            "DUP1 then ADD doubles the top item",
+            vec![0x60, 0x05, 0x80, 0x01],
+        ),
+        (
+            "DUP1 preserves lower stack items",
+            vec![0x60, 0x05, 0x60, 0x03, 0x80],
+        ),
+        (
+            "DUP1 operand ordering with SUB",
+            vec![0x60, 0x05, 0x60, 0x03, 0x80, 0x60, 0x01, 0x03],
+        ),
+        (
+            "DUP1 copies a multi-limb word",
+            vec![0x60, 0x01, 0x60, 0x00, 0x03, 0x80],
+        ),
+        (
+            "DUP1 then POP retains the original",
+            vec![0x60, 0x05, 0x80, 0x50],
+        ),
+        (
+            "DUP1 then SUB produces zero",
+            vec![0x60, 0x05, 0x80, 0x03, 0x00],
+        ),
+        (
+            "DUP1 after STOP is unreachable",
+            vec![0x60, 0x05, 0x00, 0x80],
+        ),
         ("POP with empty stack", vec![0x50]),
         (
             "POP underflows after one successful POP",
@@ -272,6 +301,24 @@ fn directed_rc_programs_match_revm_cancun() {
     for (name, bytecode) in cases {
         assert_rc_matches_revm(name, &bytecode, None);
     }
+}
+
+#[test]
+fn revm_43_dup1_empty_stack_reports_stack_overflow_not_underflow() {
+    let bytecode = [0x80];
+    let revm = execute_revm(&bytecode).expect("execute DUP1 underflow in REVM 43 harness");
+    let guest = execute_guest_evm_bytecode(&bytecode).expect("execute guest DUP1 underflow");
+
+    // REVM 43 currently classifies this as StackOverflow; Ferreth follows the
+    // EVM stack precondition and publishes StackUnderflow.
+    assert_eq!(Terminal::from_revm(&revm.result), Terminal::StackOverflow);
+    assert_eq!(
+        Terminal::from_guest(
+            guest.guest_result().status(),
+            guest.guest_result().exception_code()
+        ),
+        Terminal::StackUnderflow
+    );
 }
 
 const RANDOM_SEED: u64 = 0xFE77_E7A0_0000_0001;

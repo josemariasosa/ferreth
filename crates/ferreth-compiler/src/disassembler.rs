@@ -293,12 +293,13 @@ mod tests {
     #[test]
     fn simple_opcodes() {
         assert_eq!(
-            texts(&[0x00, 0x01, 0x03, 0x50]),
+            texts(&[0x00, 0x01, 0x03, 0x50, 0x80]),
             vec![
                 (0, "STOP".into()),
                 (1, "ADD".into()),
                 (2, "SUB".into()),
-                (3, "POP".into())
+                (3, "POP".into()),
+                (4, "DUP1".into())
             ]
         );
     }

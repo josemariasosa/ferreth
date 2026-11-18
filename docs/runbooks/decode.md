@@ -100,5 +100,5 @@ PC      BYTES       OPCODE
 - The disassembler names opcodes and reports byte spans only. It does not
   analyze control flow, gas, stack effects, or compiler support. The separate
   EVM-to-RV64 bytecode compiler currently supports only `STOP`, `PUSH1`, `ADD`,
-  `SUB`, and `POP`; successful disassembly alone does not make other opcodes
-  compilable.
+  `SUB`, `POP`, and `DUP1`; successful disassembly alone does not make other
+  opcodes compilable.

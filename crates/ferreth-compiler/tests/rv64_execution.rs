@@ -167,6 +167,9 @@ fn run_evm_program(program: &[Instruction]) -> Result<U256, String> {
             Add => bytecode.push(Opcode::Add.evm_byte()),
             Sub => bytecode.push(Opcode::Sub.evm_byte()),
             Instruction::Pop => panic!("legacy ProgramRunner test helper does not execute POP"),
+            Instruction::Dup1 => {
+                panic!("legacy ProgramRunner test helper does not execute DUP1")
+            }
         }
     }
     run_evm_arithmetic_bytecode(&bytecode)
