@@ -118,6 +118,14 @@ fn bytecode_push1_programs_execute_in_one_rv64_run() {
 }
 
 #[test]
+fn truncated_push1_zero_pads_missing_immediate() {
+    let result = execute_guest_evm_bytecode(&[0x60]).expect("compile and execute truncated PUSH1");
+    assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
+    assert_eq!(result.guest_result().exception_code(), 0);
+    assert_eq!(result.guest_result().stack(), &[U256::ZERO]);
+}
+
+#[test]
 fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
     let cases = [
         (&[0x00][..], vec![], EVM_STACK_REGION.start(), 8),
@@ -301,15 +309,14 @@ fn bytecode_compilation_reuses_the_push1_program_linker() {
 }
 
 #[test]
-fn bytecode_rejects_unimplemented_or_malformed_input_before_execution() {
-    let (bytecode, opcode, offset) = (&[0x61, 0, 1][..], 0x61, 0);
-    assert_eq!(
-        compile_evm_bytecode(bytecode),
-        Err(CompileError::UnsupportedInstruction { opcode, offset })
-    );
-
-    assert!(matches!(
-        compile_evm_bytecode(&[0x61, 0x05]),
-        Err(CompileError::Decode(_))
-    ));
+fn bytecode_compilation_rejects_complete_and_truncated_push2() {
+    for bytecode in [&[0x60, 0, 0x61, 0, 1][..], &[0x60, 0, 0x61, 0x05][..]] {
+        assert_eq!(
+            compile_evm_bytecode(bytecode),
+            Err(CompileError::UnsupportedInstruction {
+                opcode: 0x61,
+                offset: 2,
+            })
+        );
+    }
 }

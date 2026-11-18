@@ -50,6 +50,8 @@ pub enum DecodeError {
         offset: usize,
         opcode: u8,
     },
+    /// Retained for source compatibility. The decoder now zero-pads missing
+    /// PUSH immediate bytes and no longer emits this error.
     TruncatedPush {
         offset: usize,
         opcode: u8,
@@ -100,6 +102,8 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
 }
 
 /// Decodes bytecode once while retaining opcode and byte-offset metadata.
+/// A PUSH that extends past the end of bytecode fills its missing trailing
+/// immediate bytes with zeros.
 pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, DecodeError> {
     let mut instructions = Vec::new();
     let mut pc = 0;
@@ -115,17 +119,11 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             0x80 => DecodedInstruction::Dup1 { offset },
             0x60..=0x7f => {
                 let width = push_width(opcode).expect("0x60..=0x7f are PUSH opcodes");
-                let available = bytecode.len() - pc;
-                if available < width {
-                    return Err(DecodeError::TruncatedPush {
-                        offset,
-                        opcode,
-                        expected: width,
-                        available,
-                    });
-                }
+                let available = width.min(bytecode.len() - pc);
                 let mut bytes = [0; 32];
-                bytes[32 - width..].copy_from_slice(&bytecode[pc..pc + width]);
+                let immediate_start = bytes.len() - width;
+                bytes[immediate_start..immediate_start + available]
+                    .copy_from_slice(&bytecode[pc..pc + available]);
                 pc += width;
                 DecodedInstruction::Push {
                     value: U256::from_be_bytes(bytes),
@@ -274,7 +272,10 @@ fn generate_sub() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_u256, decode, sub_u256, DecodeError, Instruction, Opcode};
+    use super::{
+        add_u256, decode, decode_detailed, sub_u256, DecodeError, DecodedInstruction, Instruction,
+        Opcode,
+    };
     use revm::primitives::U256;
 
     #[test]
@@ -323,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_and_truncated_opcodes_at_byte_offsets() {
+    fn rejects_unsupported_opcodes_at_byte_offsets() {
         let unsupported = decode(&[0x61, 0x02, 0x01, 0x02]).unwrap_err();
         assert_eq!(
             unsupported,
@@ -336,20 +337,44 @@ mod tests {
             unsupported.to_string(),
             "unsupported opcode 0x02 at byte offset 3"
         );
-        let truncated = decode(&[0x60, 0x7f, 0x7f, 0x01, 0x03]).unwrap_err();
+    }
+
+    #[test]
+    fn decodes_truncated_push_immediates_with_trailing_zeros() {
+        for (bytecode, value) in [
+            (&[0x60][..], 0x00u16),
+            (&[0x61, 0xab][..], 0xab00),
+            (&[0x61][..], 0x0000),
+            (&[0x61, 0xab, 0xcd][..], 0xabcd),
+        ] {
+            assert_eq!(
+                decode_detailed(bytecode),
+                Ok(vec![DecodedInstruction::Push {
+                    value: U256::from(value),
+                    opcode: bytecode[0],
+                    offset: 0,
+                }]),
+                "bytecode={bytecode:02x?}"
+            );
+        }
+
+        let mut wide_value = [0; 32];
+        wide_value[..2].copy_from_slice(&[0x01, 0x03]);
         assert_eq!(
-            truncated,
-            DecodeError::TruncatedPush {
-                offset: 2,
-                opcode: 0x7f,
-                expected: 32,
-                available: 2
-            }
+            decode_detailed(&[0x60, 0x7f, 0x7f, 0x01, 0x03]),
+            Ok(vec![
+                DecodedInstruction::Push {
+                    value: U256::from(0x7fu8),
+                    opcode: 0x60,
+                    offset: 0,
+                },
+                DecodedInstruction::Push {
+                    value: U256::from_be_bytes(wide_value),
+                    opcode: 0x7f,
+                    offset: 2,
+                },
+            ])
         );
-        assert!(truncated.to_string().contains("0x7f at byte offset 2"));
-        assert!(truncated
-            .to_string()
-            .contains("expected 32 immediate bytes, found 2"));
     }
 
     #[test]
