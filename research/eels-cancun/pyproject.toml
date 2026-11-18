@@ -1,0 +1,10 @@
+[project]
+name = "eels-cancun"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ethereum-execution",
+]
+
+[tool.uv.sources]
+ethereum-execution = { git = "https://github.com/ethereum/execution-specs.git", rev = "d15ecf40062fcfe20d23b7b5ff1c078bcbe251c3" }
