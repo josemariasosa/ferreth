@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     orchestrator::{
@@ -6,7 +7,6 @@ use ferreth_compiler::{
     },
     rv64::{guest::GuestExecutionStatus, memory::EVM_STACK_REGION},
 };
-use revm::primitives::U256;
 
 #[test]
 fn guest_sub_publishes_the_rv64_computed_result() {

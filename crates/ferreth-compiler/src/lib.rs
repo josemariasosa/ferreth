@@ -1,8 +1,7 @@
 use std::fmt::Write;
 
-use revm::primitives::U256;
+use alloy_primitives::U256;
 
-pub mod benchmark;
 pub mod compiler;
 pub mod disassembler;
 pub mod execution;
@@ -276,7 +275,7 @@ mod tests {
         add_u256, decode, decode_detailed, sub_u256, DecodeError, DecodedInstruction, Instruction,
         Opcode,
     };
-    use revm::primitives::U256;
+    use alloy_primitives::U256;
 
     #[test]
     fn decodes_push_widths_and_opcode_like_immediates() {

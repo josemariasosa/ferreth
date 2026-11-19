@@ -1277,9 +1277,17 @@ dependencies = [
 name = "ferreth-compiler"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "asm-rs",
- "revm",
  "rvemu",
+]
+
+[[package]]
+name = "ferreth-conformance"
+version = "0.1.0"
+dependencies = [
+ "ferreth-compiler",
+ "revm",
 ]
 
 [[package]]

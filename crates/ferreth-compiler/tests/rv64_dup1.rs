@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     compiler::{compile_evm_bytecode, PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE},
@@ -12,7 +13,6 @@ use ferreth_compiler::{
         memory::{ENTRY_PC, EVM_STACK_CAPACITY, EVM_STACK_REGION, EXIT_PC},
     },
 };
-use revm::primitives::U256;
 
 #[test]
 fn dup1_executes_in_supported_bytecode_sequences() {

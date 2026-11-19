@@ -49,7 +49,7 @@ This is experimental research, not a production-ready EVM implementation.
        Compare with REVM
 ```
 
-Ferreth currently compiles a small subset of EVM instructions into executable RV64 machine code, runs them through `rvemu`, and validates their behavior against `revm`.
+Ferreth compiles a small subset of EVM instructions into executable RV64 machine code and runs them through `rvemu`. REVM-based comparison and benchmarking live in the separate `ferreth-conformance` crate; the compiler does not depend on an EVM reference engine.
 
 The architecture separates compilation from execution through a backend-neutral interface, allowing future experiments with other emulators or native RISC-V hardware.
 
@@ -83,6 +83,9 @@ Clone the repository and run the test suite:
 cargo test --workspace
 ```
 
+The default `cargo test` command runs compiler tests only. Run
+`cargo test -p ferreth-conformance` for the REVM differential suites.
+
 Execute a simple EVM program:
 
 ```bash
@@ -100,7 +103,7 @@ cargo run -p ferreth-compiler -- translate --op ADD
 Run the arithmetic benchmarks:
 
 ```bash
-cargo run -p ferreth-compiler -- \
+cargo run -p ferreth-conformance -- \
   bench --op ALL --cases 1000 --seed 42 --format json
 ```
 

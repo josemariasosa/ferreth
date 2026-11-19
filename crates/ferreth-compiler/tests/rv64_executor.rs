@@ -1,9 +1,12 @@
-use ferreth_compiler::rv64::executor::{
-    ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor,
+use alloy_primitives::U256;
+use ferreth_compiler::{
+    execution::Rv64Runner,
+    rv64::{
+        executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
+        memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC},
+    },
+    Opcode,
 };
-use ferreth_compiler::rv64::memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC};
-use ferreth_compiler::{execution::Rv64Runner, Opcode};
-use revm::primitives::U256;
 
 const ADDI_X5_X0_42: u32 = 0x02a0_0293;
 const JAL_X0_PLUS_4: u32 = 0x0040_006f;

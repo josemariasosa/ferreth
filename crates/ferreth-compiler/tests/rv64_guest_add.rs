@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     add_u256,
@@ -8,7 +9,6 @@ use ferreth_compiler::{
         opcodes::add::generate_guest_add,
     },
 };
-use revm::primitives::U256;
 
 const NATIVE_SP_SENTINEL: u64 = 0xbfff_f000;
 

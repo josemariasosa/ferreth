@@ -1,10 +1,9 @@
 use std::process::ExitCode;
 
+use alloy_primitives::U256;
 use ferreth_compiler::{
-    benchmark::{run_benchmark, run_guest_benchmark, BenchOptions},
     decode,
     disassembler::{disassemble, format_disassembly, parse_hex},
-    execution::DEFAULT_RANDOM_SEED,
     orchestrator::{
         execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
         execute_guest_push1, execute_guest_push1_sequence, execute_guest_sub,
@@ -18,7 +17,6 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("translate") => translate(&args),
         Some("execute") => execute(&args[1..]),
-        Some("bench") => bench(&args[1..]),
         Some("decode") => decode_command(&args[1..]),
         _ => usage_failure(),
     }
@@ -227,74 +225,6 @@ fn decode_command(args: &[String]) -> ExitCode {
     }
 }
 
-fn bench(args: &[String]) -> ExitCode {
-    if matches!(args, [scope, format] if scope == "guest" && format == "--format=json")
-        || matches!(args, [scope, flag, format] if scope == "guest" && flag == "--format" && format == "json")
-    {
-        return match run_guest_benchmark() {
-            Ok(report) => {
-                println!("{}", report.to_json());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("guest benchmark failed: {error}");
-                ExitCode::FAILURE
-            }
-        };
-    }
-    let mut operation = None;
-    let mut cases = None;
-    let mut seed = DEFAULT_RANDOM_SEED;
-    let mut format = None;
-    let mut index = 0;
-    while index < args.len() {
-        let Some(value) = args.get(index + 1) else {
-            return usage_failure();
-        };
-        match args[index].as_str() {
-            "--op" if operation.is_none() => operation = Some(value.as_str()),
-            "--cases" if cases.is_none() => match value.parse::<usize>() {
-                Ok(parsed) => cases = Some(parsed),
-                Err(_) => return usage_failure(),
-            },
-            "--seed" => match parse_u64(value) {
-                Some(parsed) => seed = parsed,
-                None => return usage_failure(),
-            },
-            "--format" if format.is_none() => format = Some(value.as_str()),
-            _ => return usage_failure(),
-        }
-        index += 2;
-    }
-    let (Some(operation), Some(cases)) = (operation, cases) else {
-        return usage_failure();
-    };
-    if format != Some("json") {
-        return usage_failure();
-    }
-    let operations = match operation {
-        "ALL" => vec![Opcode::Add, Opcode::Sub],
-        "ADD" => vec![Opcode::Add],
-        "SUB" => vec![Opcode::Sub],
-        _ => return usage_failure(),
-    };
-    let report = run_benchmark(BenchOptions {
-        operations,
-        random_cases_per_operation: cases,
-        seed,
-    });
-    let passed = report.passed();
-    // JSON is the sole stdout payload for evidence capture. A failed report is
-    // still emitted before returning failure so its structured evidence survives.
-    println!("{}", report.to_json());
-    if passed {
-        ExitCode::SUCCESS
-    } else {
-        eprintln!("benchmark differential parity failure; see JSON failures array");
-        ExitCode::FAILURE
-    }
-}
-
 fn parse_u64(value: &str) -> Option<u64> {
     value.strip_prefix("0x").map_or_else(
         || value.parse().ok(),
@@ -306,7 +236,7 @@ fn parse_push1_value(value: &str) -> Option<u8> {
     u8::try_from(parse_u64(value)?).ok()
 }
 
-fn parse_u256(value: &str) -> Option<revm::primitives::U256> {
+fn parse_u256(value: &str) -> Option<U256> {
     value.parse().ok()
 }
 
@@ -325,6 +255,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP|DUP1\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator decode --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
+    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --push1-sequence 5,3\n  ferreth-compiler execute --bytecode HEX\n  ferreth-compiler decode --bytecode HEX");
     ExitCode::FAILURE
 }

@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use ferreth_compiler::rv64::{
     executor::{IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::{
@@ -6,7 +7,6 @@ use ferreth_compiler::rv64::{
     },
     memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION, METADATA_REGION},
 };
-use revm::primitives::U256;
 
 fn initialized_executor() -> RvemuExecutor {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");

@@ -8,9 +8,9 @@ measurement.
 
 | Scope | What it measures | Command |
 | --- | --- | --- |
-| `opcode_core` | The arithmetic RV64 routine operating on 256-bit values through its pointer-based core interface. This is the historical ADD/SUB baseline. | `bench --op ADD|SUB|ALL --cases N --format json` |
-| `opcode_guest` | One isolated guest opcode, including guest stack handling and guest termination. | `bench guest --format json` |
-| `program_guest` | One complete supported EVM bytecode program compiled and executed as one guest program. | `bench guest --format json` |
+| `opcode_core` | The arithmetic RV64 routine operating on 256-bit values through its pointer-based core interface. This is the historical ADD/SUB baseline. | `ferreth-conformance bench --op ADD|SUB|ALL --cases N --format json` |
+| `opcode_guest` | One isolated guest opcode, including guest stack handling and guest termination. | `ferreth-conformance bench guest --format json` |
+| `program_guest` | One complete supported EVM bytecode program compiled and executed as one guest program. | `ferreth-conformance bench guest --format json` |
 
 These scopes include different amounts of generated code and runtime work.
 Do not compare their totals as if they were the same workload.
@@ -20,9 +20,9 @@ Do not compare their totals as if they were the same workload.
 Run commands from the workspace root:
 
 ```sh
-cargo run -p ferreth-compiler -- bench --op ADD --cases 1000 --seed 42 --format json
-cargo run -p ferreth-compiler -- bench --op SUB --cases 1000 --seed 42 --format json
-cargo run -p ferreth-compiler -- bench --op ALL --cases 1000 --seed 42 --format json
+cargo run -p ferreth-conformance -- bench --op ADD --cases 1000 --seed 42 --format json
+cargo run -p ferreth-conformance -- bench --op SUB --cases 1000 --seed 42 --format json
+cargo run -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
 ```
 
 The current CLI accepts the following options:
@@ -65,7 +65,7 @@ per operation, in addition to 12 directed cases. Generate a candidate for
 comparison with that reference using:
 
 ```sh
-cargo run -p ferreth-compiler -- bench --op ALL --cases 1000 --seed 42 --format json
+cargo run -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
 ```
 
 | Operation | Successful cases | Dynamic instructions per case | Dynamic instructions total | Routine words | FNV-1a machine-code hash |
@@ -88,7 +88,7 @@ not establish byte-for-byte equivalence with the lost historical artifact.
 The current guest benchmark command is:
 
 ```sh
-cargo run -p ferreth-compiler -- bench guest --format json
+cargo run -p ferreth-conformance -- bench guest --format json
 ```
 
 The equivalent `--format=json` spelling is also accepted. The JSON schema has
@@ -161,7 +161,7 @@ inspection.
 tmp_report="$(mktemp)"
 trap 'rm -f "$tmp_report"' EXIT
 
-cargo run -p ferreth-compiler -- \
+cargo run -p ferreth-conformance -- \
   bench --op ALL --cases 1000 --seed 42 --format json \
   > "$tmp_report"
 
@@ -176,7 +176,7 @@ equivalence. To inspect just the guest JSON, run the guest benchmark and pipe
 or redirect stdout as needed:
 
 ```sh
-cargo run -p ferreth-compiler -- bench guest --format json
+cargo run -p ferreth-conformance -- bench guest --format json
 ```
 
 The CLI has no output-file option; shell redirection is the supported way to
@@ -197,4 +197,5 @@ candidate as an approved baseline without explicit authorization.
       program totals are 20, 31, 73, 30, and 34 in listed order.
 - [ ] Write reports to a temporary file; do not create or overwrite
       `runs/rv64-arithmetic.json` without approval.
-- [ ] Run all package tests with `cargo test -p ferreth-compiler`.
+- [ ] Run compiler tests with `cargo test -p ferreth-compiler` and differential
+      conformance tests with `cargo test -p ferreth-conformance`.

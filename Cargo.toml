@@ -1,4 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferreth-compiler", "research/revm-frame"]
+members = [
+    "crates/ferreth-compiler",
+    "crates/ferreth-conformance",
+    "research/revm-frame",
+]
 default-members = ["crates/ferreth-compiler"]
