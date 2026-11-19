@@ -30,10 +30,10 @@ Repository observations:
 - [compiler.rs](../../crates/ferreth-compiler/src/compiler.rs) compiles `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, and `DUP1`. It stops decoding at `STOP`. Reaching the end of bytecode completes normally. The decoder recognizes PUSH1–PUSH32, but the compiler rejects all PUSH widths other than PUSH1.
 - The [decoder](../../crates/ferreth-compiler/src/lib.rs) right-pads truncated PUSH immediates with zeros and retains `DecodeError::TruncatedPush` for source compatibility. The [static disassembler](../../crates/ferreth-compiler/src/disassembler.rs) reports the physical bytes and the number of missing bytes.
 - [dup.rs](../../crates/ferreth-compiler/src/rv64/opcodes/dup.rs) checks underflow before capacity and leaves the stack unchanged on either error. [guest.rs](../../crates/ferreth-compiler/src/rv64/guest.rs) defines the 1024-word stack and its guest-side stack validation.
-- [rc_revm_conformance.rs](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs) runs REVM with `SpecId::CANCUN`, through `inspect_tx`, with transaction gas limit 1,000,000. Its inspector captures the interpreter stack after instructions. It contains an explicit test for the empty-stack DUP1 diagnostic mismatch.
-- [execution.rs](../../crates/ferreth-compiler/src/execution.rs) also uses Cancun REVM, but its transaction path returns call output rather than frame stack/gas.
-- [Cargo.lock](../../Cargo.lock) resolves `revm` 43.0.3 and `revm-interpreter` 43.0.2. The compiler crate depends directly on `revm` 43.0.3; it does not declare a separate direct `revm-interpreter` dependency.
-- [benchmark.rs](../../crates/ferreth-compiler/src/benchmark.rs) measures RV64 instruction counts, not EVM gas.
+- [rc_revm_conformance.rs](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs) runs REVM with `SpecId::CANCUN`, through `inspect_tx`, with transaction gas limit 1,000,000. Its inspector captures the interpreter stack after instructions. It contains an explicit test for the empty-stack DUP1 diagnostic mismatch.
+- [ferreth-conformance/src/lib.rs](../../crates/ferreth-conformance/src/lib.rs) provides Cancun REVM reference execution; its transaction path returns call output rather than frame stack/gas. The compiler's [execution module](../../crates/ferreth-compiler/src/execution.rs) only runs generated RV64 code.
+- [Cargo.lock](../../Cargo.lock) resolves `revm` 43.0.3 and `revm-interpreter` 43.0.2. REVM is a direct dependency of `ferreth-conformance`; `ferreth-compiler` uses `alloy-primitives` and does not depend on REVM. The conformance crate does not declare a separate direct `revm-interpreter` dependency.
+- [benchmark.rs](../../crates/ferreth-conformance/src/benchmark.rs) measures RV64 instruction counts, not EVM gas.
 
 The current guest ABI has status, provisional exception code and final stack pointer; gas is not part of the ABI. GAS and gas metering are not implemented. ADR-001 is Accepted; ADR-002 is Proposed. This report does not authorize implementation or change either ADR.
 
@@ -131,7 +131,7 @@ REVM's `Interpreter::step` debits static opcode gas before calling the instructi
 The existing regression test was run and passed:
 
 ```text
-cargo test -p ferreth-compiler --test rc_revm_conformance \
+cargo test -p ferreth-conformance --test rc_revm_conformance \
   revm_43_dup1_empty_stack_reports_stack_overflow_not_underflow -- --exact --nocapture
 ```
 
@@ -446,7 +446,7 @@ The observed diagnostic differences do not independently establish consensus-sem
 
 **Architectural decision pending:** Review ADR-002's proposed ordering of gas checks and stack validation.
 
-**Priority 3 status:** Implemented and verified. The [differential helper](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L98) requires REVM success or halt as expected and checks Ferreth's exact guest status and exception code independently. Host errors and unexpected termination fail the comparison. The dedicated [empty-stack DUP1 regression](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L284) still requires REVM `StackOverflow` and Ferreth `StackUnderflow`. The seeded suite ran 1,000 successful and 100 exceptional cases, including DUP1 underflows through the shared helper. Gas-related error precedence remains pending under Priority 4.
+**Priority 3 status:** Implemented and verified. The [differential helper](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs#L98) requires REVM success or halt as expected and checks Ferreth's exact guest status and exception code independently. Host errors and unexpected termination fail the comparison. The dedicated [empty-stack DUP1 regression](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs#L284) still requires REVM `StackOverflow` and Ferreth `StackUnderflow`. The seeded suite ran 1,000 successful and 100 exceptional cases, including DUP1 underflows through the shared helper. Gas-related error precedence remains pending under Priority 4.
 
 ### RF-004 — Exceptional terminal stacks are not portable conformance results
 
@@ -502,7 +502,7 @@ Compile(Decode(TruncatedPush { offset: 0, opcode: 96, expected: 1, available: 0 
 - Add focused regression coverage.
 - Apply the same zero-padding rule to all decoded PUSH widths. The RV64 compiler lowers PUSH1 and still reports `UnsupportedInstruction` for wider widths.
 
-**Priority 3 status:** Implemented and verified. The same guest regression passed after the fix with normal completion, exception code zero, and stack `[0]`. The [decoder regression](../../crates/ferreth-compiler/src/lib.rs#L343) covers `60`, `61ab`, `61`, `61abcd`, and a truncated PUSH32 at a nonzero offset. The [guest regression](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L121) and [directed Cancun differential suite](../../crates/ferreth-compiler/tests/rc_revm_conformance.rs#L177) cover `0x60` through RV64 execution. A [compiler boundary test](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L312) verifies rejection of both complete and truncated PUSH2 at the original byte offset. Repeat runs of the [EELS](../../research/eels-cancun/README.md#4-truncated-push1) and [REVM](../../research/revm-frame/README.md#3-truncated-push1) frame vectors with gas 3 both produced stack `[0]` and zero remaining gas.
+**Priority 3 status:** Implemented and verified. The same guest regression passed after the fix with normal completion, exception code zero, and stack `[0]`. The [decoder regression](../../crates/ferreth-compiler/src/lib.rs#L343) covers `60`, `61ab`, `61`, `61abcd`, and a truncated PUSH32 at a nonzero offset. The [guest regression](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L121) and [directed Cancun differential suite](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs#L177) cover `0x60` through RV64 execution. A [compiler boundary test](../../crates/ferreth-compiler/tests/rv64_push1_program.rs#L312) verifies rejection of both complete and truncated PUSH2 at the original byte offset. Repeat runs of the [EELS](../../research/eels-cancun/README.md#4-truncated-push1) and [REVM](../../research/revm-frame/README.md#3-truncated-push1) frame vectors with gas 3 both produced stack `[0]` and zero remaining gas.
 
 ```bash
 cargo test --locked -p ferreth-compiler --test rv64_push1_program truncated_push1_zero_pads_missing_immediate -- --exact

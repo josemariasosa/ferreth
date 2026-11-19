@@ -255,6 +255,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP|DUP1\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator decode --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json");
+    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --push1-sequence 5,3\n  ferreth-compiler execute --bytecode HEX\n  ferreth-compiler decode --bytecode HEX");
     ExitCode::FAILURE
 }

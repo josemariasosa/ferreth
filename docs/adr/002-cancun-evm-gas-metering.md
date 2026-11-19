@@ -107,9 +107,9 @@ This proposal preserves guest autonomy, stack ownership, register conventions, a
 - `crates/ferreth-compiler/src/rv64/{guest.rs,memory.rs}`: 24-byte metadata, stack and memory layout.
 - `crates/ferreth-compiler/src/rv64/{push.rs,add.rs,sub.rs,pop.rs,dup.rs}`: stack-aware generators and exception branches.
 - `crates/ferreth-compiler/src/orchestrator.rs`, `rv64/executor/{mod.rs,rvemu.rs}`: guest initialization, execution boundary, result reading, sentinel and metrics.
-- `crates/ferreth-compiler/src/execution.rs`, `tests/rc_revm_conformance.rs`: REVM Cancun execution and existing differential harness.
+- `crates/ferreth-conformance/src/lib.rs`, `crates/ferreth-conformance/tests/rc_revm_conformance.rs`: REVM Cancun execution and existing differential harness.
 - `Cargo.lock`: REVM 43.0.3 and resolved `revm-interpreter` 43.0.2.
-- `crates/ferreth-compiler/src/benchmark.rs`, `docs/runbooks/benchmark.md`: RV64 instruction metrics only.
+- `crates/ferreth-conformance/src/benchmark.rs`, `docs/runbooks/benchmark.md`: RV64 instruction metrics only.
 
 ### Cancun and REVM sources
 

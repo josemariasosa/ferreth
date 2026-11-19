@@ -4,14 +4,14 @@ use ferreth_compiler::{
     rv64::{guest::GuestExecutionStatus, memory::EVM_STACK_CAPACITY},
 };
 use revm::{
+    Context, InspectEvm, Inspector, MainBuilder, MainContext,
     bytecode::Bytecode,
     context::TxEnv,
     context_interface::result::{ExecutionResult, HaltReason},
     database::InMemoryDB,
     interpreter::Interpreter,
-    primitives::{hardfork::SpecId, Address, U256},
+    primitives::{Address, U256, hardfork::SpecId},
     state::AccountInfo,
-    Context, InspectEvm, Inspector, MainBuilder, MainContext,
 };
 
 const CONTRACT: Address = Address::new([0x22; 20]);

@@ -26,8 +26,9 @@ semantics or gas accounting.
 - Install Rust and Cargo. The package uses Rust edition 2021; the manifests do
   not declare a `rust-version` minimum.
 - Cargo resolves and builds the Rust dependencies from the manifests,
-  including `asm-rs`, `revm`, and `rvemu`. No separate RV64 assembler command is
-  used by these CLI operations.
+  including `alloy-primitives`, `asm-rs`, and `rvemu`. REVM is a dependency of
+  the separate `ferreth-conformance` package, not the compiler CLI. No separate
+  RV64 assembler command is used by these CLI operations.
 
 The command form used below is:
 
@@ -37,7 +38,7 @@ cargo run -p ferreth-compiler -- <command> [arguments]
 
 ## Command reference
 
-The CLI has four top-level commands: `translate`, `execute`, `decode`, and `bench`.
+The compiler CLI has three top-level commands: `translate`, `execute`, and `decode`.
 There is no dedicated `--help` option. Running the CLI without a recognized
 command prints usage to stderr and exits unsuccessfully.
 
@@ -85,12 +86,11 @@ cargo run -p ferreth-compiler -- decode --bytecode 6005600350
 See the [EVM Bytecode Disassembler](decode.md) runbook for output details,
 examples, and limitations.
 
-### `bench`
-
-Run the arithmetic benchmark and emit JSON:
+REVM-backed arithmetic and guest benchmarks are provided by the separate
+`ferreth-conformance` CLI. For example:
 
 ```sh
-cargo run -p ferreth-compiler -- bench --op ADD --cases 100 --format json
+cargo run -p ferreth-conformance -- bench --op ADD --cases 100 --format json
 ```
 
 See the [Benchmark Runbook](benchmark.md) for supported options and report
@@ -119,8 +119,8 @@ details.
 - **Executor or instruction-limit failure:** the CLI has no option to set an
   instruction limit. Limits are enforced internally; if execution fails
   before a valid guest result is published, the relevant command reports the
-  error to stderr and returns a failure status. Arithmetic benchmark parity
-  failures still emit their JSON evidence before returning failure.
+  error to stderr and returns a failure status. Conformance benchmark parity
+  failures emit their JSON evidence before returning failure.
 
 ## Current limitations
 

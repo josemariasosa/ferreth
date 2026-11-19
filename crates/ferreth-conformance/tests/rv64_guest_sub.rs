@@ -1,15 +1,14 @@
-use alloy_primitives::U256;
-use asm_rs::{Arch, assemble};
 use ferreth_compiler::{
     Opcode,
-    execution::run_evm,
     rv64::{
-        executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
+        executor::{IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{initialize_guest_state, read_evm_word, write_evm_word},
         memory::{ENTRY_PC, EVM_STACK_REGION, EXIT_PC, validate_generated_code},
         opcodes::sub::generate_guest_sub,
     },
 };
+use ferreth_conformance::run_evm;
+use revm::primitives::U256;
 
 const NATIVE_SP_SENTINEL: u64 = 0xbfff_f000;
 

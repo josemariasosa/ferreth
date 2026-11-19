@@ -1,12 +1,10 @@
 use Instruction::{Add, Push, Sub};
-use alloy_primitives::U256;
 use ferreth_compiler::{
     Instruction, Opcode, decode,
-    execution::{
-        DEFAULT_RANDOM_SEED, ProgramRunner, Rv64Runner, directed_cases, hex, random_u256, run_evm,
-        run_evm_bytecode,
-    },
+    execution::{DEFAULT_RANDOM_SEED, ProgramRunner, Rv64Runner, directed_cases, hex, random_u256},
 };
+use ferreth_conformance::{run_evm, run_evm_bytecode};
+use revm::primitives::U256;
 
 const RANDOM_CASES: usize = 1_000;
 

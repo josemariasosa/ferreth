@@ -7,9 +7,9 @@ the host; it does not implement EVM stack manipulation in RV64, gas, or
 complete observable parity with revm.
 
 ```sh
-cargo run --manifest-path translator/Cargo.toml -- translate --op ADD
-cargo run --manifest-path translator/Cargo.toml -- translate --op SUB
-cargo test --manifest-path translator/Cargo.toml
+cargo run -p ferreth-compiler -- translate --op ADD
+cargo run -p ferreth-compiler -- translate --op SUB
+cargo test --locked -p ferreth-compiler
 ```
 
 ## Reproducible RV64 execution baseline
@@ -21,10 +21,9 @@ Cancun. It is an empirical retired-instruction baseline, not a cycle, energy,
 gas, or hardware-performance benchmark.
 
 ```sh
-mkdir -p translator/runs
-cargo run --release --manifest-path translator/Cargo.toml -- \
+cargo run --release -p ferreth-conformance -- \
   bench --op ALL --cases 1000 --seed 42 --format json \
-  > translator/runs/rv64-arithmetic.json
+  > runs/rv64-arithmetic-candidate.json
 ```
 
 `ADD`, `SUB`, and `ALL` are accepted values for `--op`; `ALL` applies the same
@@ -48,10 +47,9 @@ Unrecognized instruction encodings are counted as `other`; this baseline only
 classifies base 32-bit RV64 encodings and would require extension if compressed
 or other instruction formats were introduced.
 
-Reports and `rvemu`'s DTB/DTS byproducts are intentionally kept in
-`translator/runs/`, which is ignored by Git. To promote a reviewed
-baseline, copy it to a new, explicitly named file under `experiments/baselines/`
-in a separate reviewed change. Do not overwrite an existing baseline file.
+The benchmark is provided by `ferreth-conformance`; the compiler crate itself
+does not depend on REVM. The command writes its JSON report to stdout, so use a
+new candidate path and do not overwrite an existing baseline file.
 
 ## Calling convention
 
@@ -78,14 +76,15 @@ For `a = [5, 0, 0, 0]` and `b = [7, 0, 0, 0]`, the written limbs are
 
 ## End-to-end differential test
 
-The integration test assembles the translator's generated source for RV64 with
-the documented `asm-rs` Rust assembler and executes its machine code
-instruction-by-instruction in the `rvemu` Rust emulator. It removes only the
-GNU metadata directives, which do not encode instructions. The test initializes
-the emulator's memory and `a0`/`a1`/`a2` registers directly, uses an `EBREAK`
-return address for deterministic termination, and enforces a 256-instruction
-limit. The generated function uses RV64I instructions, which are a subset of
-RV64IM. It does not use a software fallback for RV64 execution.
+The `ferreth-conformance` integration test assembles the compiler's generated
+source for RV64 with the documented `asm-rs` Rust assembler and executes its
+machine code instruction-by-instruction in the `rvemu` Rust emulator. It
+removes only the GNU metadata directives, which do not encode instructions.
+The test initializes the emulator's memory and `a0`/`a1`/`a2` registers
+directly, uses an `EBREAK` return address for deterministic termination, and
+enforces a 256-instruction limit. The generated function uses RV64I
+instructions, which are a subset of RV64IM. It does not use a software
+fallback for RV64 execution.
 
 The other path constructs EVM bytecode with `PUSH32`, the tested opcode,
 `MSTORE`, and `RETURN` and executes it through revm 43 using the fixed Cancun
@@ -101,8 +100,8 @@ random pairs, and their reverse-operand counterparts, all with seed
 Run from the repository root:
 
 ```sh
-cargo test --manifest-path translator/Cargo.toml
-cargo test --manifest-path translator/Cargo.toml --test rv64_execution -- --nocapture
+cargo test --locked -p ferreth-conformance
+cargo test --locked -p ferreth-conformance --test rv64_execution -- --nocapture
 ```
 
 The second command also prints an executed `ADD(5, 7)` example and its results.

@@ -1,8 +1,7 @@
-//! Shared differential execution support for tests and the benchmark command.
+//! RV64 arithmetic execution helpers shared by compiler and conformance tests.
 //!
-//! This module deliberately executes the generated RV64 machine code through
-//! the RV64 executor boundary and the EVM bytecode in revm.  It does not use
-//! the Rust limb helpers as a reference for either path.
+//! This module executes generated machine code through the RV64 executor
+//! boundary; it does not execute EVM bytecode in a reference engine.
 
 use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};

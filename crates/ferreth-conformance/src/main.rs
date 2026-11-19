@@ -115,7 +115,7 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 
 fn usage_failure() -> ExitCode {
     eprintln!(
-        "Usage:\n  ferrum-eth-translator translate --op ADD|SUB\n  ferrum-eth-translator translate --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --op ADD|SUB --a U256 --b U256\n  ferrum-eth-translator execute --op POP|DUP1\n  ferrum-eth-translator execute --op PUSH1 --value 0..255\n  ferrum-eth-translator execute --push1-sequence 5,3\n  ferrum-eth-translator execute --bytecode HEX\n  ferrum-eth-translator decode --bytecode HEX\n  ferrum-eth-translator bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferrum-eth-translator bench guest --format json"
+        "Usage:\n  ferreth-conformance bench --op ADD|SUB|ALL --cases N [--seed N] --format json\n  ferreth-conformance bench guest --format json"
     );
     ExitCode::FAILURE
 }
