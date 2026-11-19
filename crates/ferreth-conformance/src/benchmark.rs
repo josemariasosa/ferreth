@@ -4,15 +4,16 @@ use std::fmt::Write;
 
 use revm::primitives::U256;
 
-use crate::{
-    execution::{directed_cases, hex, random_u256, run_evm, InstructionMetrics, Rv64Runner},
+use crate::run_evm;
+use ferreth_compiler::{
+    Opcode,
+    execution::{InstructionMetrics, Rv64Runner, directed_cases, hex, random_u256},
     orchestrator::{
-        execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
-        execute_guest_push1, execute_guest_sub, OrchestratorError, OrchestratorResult,
-        EXECUTOR_IDENTITY,
+        EXECUTOR_IDENTITY, OrchestratorError, OrchestratorResult, execute_guest_add,
+        execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop, execute_guest_push1,
+        execute_guest_sub,
     },
     rv64::guest::GuestExecutionStatus,
-    Opcode,
 };
 
 /// Deterministic RV64 guest measurements. Unlike [`BenchmarkReport`], this
@@ -26,14 +27,14 @@ pub struct GuestBenchmarkReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GuestMeasurement {
     name: &'static str,
-    metrics: crate::orchestrator::GuestInstructionMetrics,
+    metrics: ferreth_compiler::orchestrator::GuestInstructionMetrics,
     status: GuestExecutionStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GuestProgramMeasurement {
     bytecode: &'static str,
-    metrics: crate::orchestrator::GuestInstructionMetrics,
+    metrics: ferreth_compiler::orchestrator::GuestInstructionMetrics,
     status: GuestExecutionStatus,
 }
 
@@ -79,7 +80,7 @@ fn write_guest_measurement(
     output: &mut String,
     name: &str,
     status: GuestExecutionStatus,
-    metrics: crate::orchestrator::GuestInstructionMetrics,
+    metrics: ferreth_compiler::orchestrator::GuestInstructionMetrics,
 ) {
     write!(output, "{{\"input\":\"{name}\",\"status\":\"{}\",\"rv64\":{{\"opcode_body\":{},\"guest_termination\":{},\"total\":{}}}}}", guest_status_name(status), metrics.opcode_body(), metrics.guest_termination(), metrics.total()).expect("writing JSON to String");
 }
@@ -543,8 +544,9 @@ fn push_json_string(output: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_benchmark, run_guest_benchmark, BenchOptions};
-    use crate::{execution::DEFAULT_RANDOM_SEED, Opcode};
+    use super::{BenchOptions, run_benchmark, run_guest_benchmark};
+    use crate::Opcode;
+    use ferreth_compiler::execution::DEFAULT_RANDOM_SEED;
 
     #[test]
     fn json_evidence_is_deterministic_and_metrics_are_complete() {

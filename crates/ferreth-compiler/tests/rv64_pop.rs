@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use ferreth_compiler::{
     compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
     orchestrator::{
@@ -8,7 +9,6 @@ use ferreth_compiler::{
         guest::GuestExecutionStatus, memory::EVM_STACK_REGION, opcodes::pop::generate_guest_pop,
     },
 };
-use revm::primitives::U256;
 
 #[test]
 fn pop_generator_is_a_minimal_stack_pointer_only_body() {

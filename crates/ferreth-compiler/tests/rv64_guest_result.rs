@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use ferreth_compiler::rv64::{
     executor::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
     guest::{
@@ -6,7 +7,6 @@ use ferreth_compiler::rv64::{
     },
     memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC, METADATA_REGION},
 };
-use revm::primitives::U256;
 
 const EBREAK: u32 = 0x0010_0073;
 

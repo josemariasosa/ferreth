@@ -10,5 +10,5 @@ asm-rs = { version = "0.2.0", default-features = false, features = [
     "std",
     "riscv",
 ] }
-revm = { version = "43.0.3", default-features = false, features = ["std"] }
+alloy-primitives = "1.7.3"
 rvemu = "0.0.11"

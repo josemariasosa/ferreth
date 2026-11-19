@@ -7,8 +7,8 @@
 
 use std::fmt;
 
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
-use revm::primitives::U256;
 
 use crate::{
     compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},

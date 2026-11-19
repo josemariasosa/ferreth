@@ -1,0 +1,8 @@
+[package]
+name = "ferreth-conformance"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ferreth-compiler = { path = "../ferreth-compiler" }
+revm = { version = "43.0.3", default-features = false, features = ["std"] }

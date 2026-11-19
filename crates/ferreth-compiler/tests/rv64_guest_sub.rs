@@ -1,15 +1,11 @@
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
-use ferreth_compiler::{
-    execution::run_evm,
-    rv64::{
-        executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
-        guest::{initialize_guest_state, read_evm_word, write_evm_word},
-        memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},
-        opcodes::sub::generate_guest_sub,
-    },
-    Opcode,
+use ferreth_compiler::rv64::{
+    executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
+    guest::{initialize_guest_state, read_evm_word, write_evm_word},
+    memory::{validate_generated_code, ENTRY_PC, EVM_STACK_REGION, EXIT_PC},
+    opcodes::sub::generate_guest_sub,
 };
-use revm::primitives::U256;
 
 const NATIVE_SP_SENTINEL: u64 = 0xbfff_f000;
 
@@ -62,27 +58,6 @@ fn execute_sub(initial_stack: &[U256]) -> RvemuExecutor {
         .execute(ENTRY_PC, EXIT_PC, 100)
         .expect("valid guest SUB reaches test-only exit epilogue");
     executor
-}
-
-#[test]
-fn sub_uses_evm_top_first_order_confirmed_by_revm() {
-    assert_eq!(
-        run_evm(Opcode::Sub, U256::from(3), U256::from(5)).expect("revm executes SUB"),
-        U256::MAX - U256::from(1),
-        "revm confirms EVM stack [5, 3] evaluates 3 - 5"
-    );
-    assert_eq!(
-        read_evm_word(&mut execute_sub(&[U256::from(5), U256::from(3)]), 0).expect("read result"),
-        U256::MAX - U256::from(1)
-    );
-    assert_eq!(
-        read_evm_word(&mut execute_sub(&[U256::from(3), U256::from(5)]), 0).expect("read result"),
-        U256::from(2)
-    );
-    assert_eq!(
-        read_evm_word(&mut execute_sub(&[U256::from(5), U256::from(5)]), 0).expect("read result"),
-        U256::ZERO
-    );
 }
 
 #[test]

@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use revm::primitives::U256;
+use alloy_primitives::U256;
 
 use super::{
     executor::{ExecutionReport, ExecutorError, IntegerRegister, Rv64Executor},

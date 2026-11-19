@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     compiler::{
@@ -15,7 +16,6 @@ use ferreth_compiler::{
         opcodes::sub::generate_guest_sub,
     },
 };
-use revm::primitives::U256;
 
 #[test]
 fn one_push1_produces_one_stack_word_and_publishes_s1() {
