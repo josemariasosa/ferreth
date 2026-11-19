@@ -192,6 +192,12 @@ The completion report must identify changes, evidence, verification results, lim
 
 Another engineer or agent must be able to reproduce and continue the work without relying on undocumented conversation history.
 
+## Engineering Continuity
+
+Read `docs/bitacora/README.md` when resuming ongoing project work.
+The engineering log provides context and provisional plans,
+not architectural authority or implementation authorization.
+
 ---
 
 **Research produces evidence. Evidence informs decisions. Decisions govern implementation. Verification establishes correctness.**
