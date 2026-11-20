@@ -1,7 +1,7 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phases 1.0 through 1.4
-are accepted. Phase 1.5 met its exit gate and is ready for maintainer review.
+Complete and review each exit gate before advancing. Phases 1.0 through 1.5
+are accepted. Phase 1.6 met its exit gate and is ready for maintainer review.
 Record source-derived expectations and observed results with their exact
 inputs, dependency versions, and commands. Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
@@ -42,13 +42,14 @@ inputs, dependency versions, and commands. Use [Phase 0](../README.md) and
 
 ## 1.5 — Long-range guest execution
 
-- **Status.** Exit gate met. All four layouts passed independent decoding and empty-stack execution. Both seeded 47-PUSH guests took the distant overflow jump, published the expected result, and preserved the entire stack. The production suite reproduced all four LF-026 failures. [Results and RF-013](results/1.5-long-range-guest.md)
+- **Status.** Accepted. All four layouts passed independent decoding and empty-stack execution. Both seeded 47-PUSH guests took the distant overflow jump, published the expected result, and preserved the entire stack. The production suite reproduced all four LF-026 failures. [Results and RF-013](results/1.5-long-range-guest.md)
 - **Research question.** Does symbolic assembly resolve the LF-026 boundary and execute an actually taken distant overflow transfer?
 - **Expected evidence.** Run `6002` repeated 46 and 47 times, at EOF and followed by STOP, from an empty stack. Run both 47-PUSH variants from the Phase 0 seeded 1,024-word stack and verify the first overflow destination from the final word and the observed publisher PC.
 - **Exit gate.** All four empty-stack cases complete with the expected number of twos. Both seeded runs publish overflow, preserve all 1,024 seeded words and `s1 = 0x80109000`, and reach the independently verified overflow publisher.
 
 ## 1.6 — Mixed opcode composition
 
+- **Status.** Exit gate met. Seventeen specimen pairs matched production outcomes, publisher bindings, bytes and RV64 counts. The repeated EOF and STOP guests called and returned through each occurrence's own core. Both DUP1 exceptional paths published the expected results. The inherited core byte/hash contracts matched, and the production suite reproduced the four LF-026 failures. [Results and RF-014](results/1.6-mixed-symbolic-guest.md)
 - **Research question.** Can repeated ADD, SUB, POP and DUP1 fragments compose with PUSH1 while preserving local arithmetic calls, continuation targets, and exception routing?
 - **Expected evidence.** Short representative mixed guests with repeated fragments, EOF and STOP, seeded inputs and exceptional cases, including both DUP1 exits. Record final references, outcomes, and instruction counts against Phase 0 controls where available. Compare standalone ADD/SUB core hashes with Phase 0.
 - **Exit gate.** Reference checks establish that each occurrence calls its own leaf and reaches its own continuation where applicable, both DUP1 exits reach their intended publishers, and mixed guest outcomes satisfy the ABI. The standalone arithmetic core hashes match.
