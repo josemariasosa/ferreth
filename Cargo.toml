@@ -4,5 +4,6 @@ members = [
     "crates/ferreth-compiler",
     "crates/ferreth-conformance",
     "research/revm-frame",
+    "research/guest-linking/phase-1",
 ]
 default-members = ["crates/ferreth-compiler"]
