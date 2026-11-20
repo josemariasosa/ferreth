@@ -2,17 +2,19 @@ use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     compiler::{
-        compile_evm_bytecode, compile_push1_program, CompileError,
+        compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program,
         PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
     },
+    execution::random_u256,
     orchestrator::{
         execute_guest_evm_bytecode, execute_guest_evm_bytecode_with_initial_stack,
         execute_guest_push1_sequence, execute_guest_push1_sequence_with_initial_stack,
     },
     rv64::{
         guest::GuestExecutionStatus,
-        memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION},
+        memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION, EVM_WORD_SIZE},
         opcodes::add::generate_guest_add,
+        opcodes::push::generate_guest_push1,
         opcodes::sub::generate_guest_sub,
     },
 };
@@ -319,4 +321,106 @@ fn bytecode_compilation_rejects_complete_and_truncated_push2() {
             })
         );
     }
+}
+
+fn repeated_push1_bytecode(pushes: usize, explicit_stop: bool) -> Vec<u8> {
+    let mut bytecode = [0x60, 0x02].repeat(pushes);
+    if explicit_stop {
+        bytecode.push(0x00);
+    }
+    bytecode
+}
+
+fn assert_first_push_reaches_overflow_publisher(program: &CompiledRv64Program) {
+    let trampoline = generate_guest_push1(2).overflow_trampoline_offset();
+    let word = u32::from_le_bytes(
+        program.machine_code()[trampoline..trampoline + 4]
+            .try_into()
+            .expect("first PUSH1 trampoline is a complete instruction"),
+    );
+    assert_eq!(word & 0x7f, 0x6f, "overflow trampoline must be JAL");
+    assert_eq!((word >> 7) & 0x1f, 0, "overflow JAL must use x0");
+
+    // J-type immediate bits are scattered across the instruction word.
+    let immediate = ((word >> 31) << 20)
+        | (((word >> 12) & 0xff) << 12)
+        | (((word >> 20) & 1) << 11)
+        | (((word >> 21) & 0x3ff) << 1);
+    let displacement = i64::from((immediate as i32) << 11 >> 11);
+    let trampoline_pc = program.entry_pc() + trampoline as u64;
+    let target_pc = trampoline_pc
+        .checked_add_signed(displacement)
+        .expect("overflow destination fits in a PC");
+    // Both bytecode paths list the normal publisher first and overflow second.
+    assert_eq!(target_pc, program.termination_entry_pcs()[1]);
+}
+
+fn assert_repeated_push1_succeeds(pushes: usize, explicit_stop: bool) {
+    let bytecode = repeated_push1_bytecode(pushes, explicit_stop);
+    let program = compile_evm_bytecode(&bytecode).expect("compile repeated PUSH1 bytecode");
+    assert_first_push_reaches_overflow_publisher(&program);
+
+    let execution = execute_guest_evm_bytecode(&bytecode).expect("execute repeated PUSH1 bytecode");
+    let result = execution.guest_result();
+    assert_eq!(result.status(), GuestExecutionStatus::Normal);
+    assert_eq!(result.exception_code(), 0);
+    assert_eq!(result.stack(), vec![U256::from(2); pushes]);
+    assert_eq!(result.stack_depth(), pushes as u64);
+    assert_eq!(
+        result.final_s1(),
+        EVM_STACK_REGION.start() + pushes as u64 * EVM_WORD_SIZE
+    );
+}
+
+fn assert_repeated_push1_overflows(explicit_stop: bool) {
+    let bytecode = repeated_push1_bytecode(47, explicit_stop);
+    let program = compile_evm_bytecode(&bytecode).expect("compile repeated PUSH1 bytecode");
+    assert_first_push_reaches_overflow_publisher(&program);
+
+    let mut seed = 42;
+    let initial_stack = (0..EVM_STACK_CAPACITY)
+        .map(|_| random_u256(&mut seed))
+        .collect::<Vec<_>>();
+    let execution = execute_guest_evm_bytecode_with_initial_stack(&bytecode, &initial_stack)
+        .expect("execute repeated PUSH1 bytecode on a full stack");
+    let result = execution.guest_result();
+    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
+    assert_eq!(
+        result.exception_code(),
+        PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE
+    );
+    assert_eq!(result.stack(), initial_stack);
+    assert_eq!(result.stack_depth(), EVM_STACK_CAPACITY);
+    assert_eq!(result.final_s1(), EVM_STACK_REGION.end());
+}
+
+#[test]
+fn repeated_push1_46_eof_completes_normally() {
+    assert_repeated_push1_succeeds(46, false);
+}
+
+#[test]
+fn repeated_push1_46_stop_completes_normally() {
+    assert_repeated_push1_succeeds(46, true);
+}
+
+// LF-026 regresses at 47 PUSH1s for both compiler paths.
+#[test]
+fn repeated_push1_47_eof_completes_normally() {
+    assert_repeated_push1_succeeds(47, false);
+}
+
+#[test]
+fn repeated_push1_47_stop_completes_normally() {
+    assert_repeated_push1_succeeds(47, true);
+}
+
+#[test]
+fn repeated_push1_47_eof_full_stack_publishes_overflow() {
+    assert_repeated_push1_overflows(false);
+}
+
+#[test]
+fn repeated_push1_47_stop_full_stack_publishes_overflow() {
+    assert_repeated_push1_overflows(true);
 }
