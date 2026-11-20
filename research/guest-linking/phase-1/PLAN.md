@@ -1,10 +1,10 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phases 1.0 and 1.1
-are accepted. Phase 1.2 met its exit gate and is ready for maintainer
-review. Phase 1.3 requires maintainer authorization. Record source-derived
-expectations and observed results with their exact inputs, dependency versions,
-and commands. Use [Phase 0](../README.md) and
+Complete and review each exit gate before advancing. Phases 1.0 through 1.2
+are accepted. Phase 1.3 met its exit gate and is ready for maintainer review.
+Phase 1.4 awaits maintainer authorization. Record source-derived expectations
+and observed results with their exact inputs, dependency versions, and commands.
+Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
 
 ## 1.0 — Experimental scaffolding
@@ -29,6 +29,7 @@ and commands. Use [Phase 0](../README.md) and
 
 ## 1.3 — Independent instruction verification
 
+- **Status.** Exit gate met. Six experiments verified byte-derived JAL and branch targets, including the two-word relaxed BEQ and rejection of the LF-027 sign-bit corruption. The production baseline reproduced all four known LF-026 failures. [Results and RF-011](results/1.3-independent-verification.md)
 - **Research question.** Can final RV64 control transfers be checked against their intended destinations independently of the assembler's relocation calculations?
 - **Expected evidence.** Hand-derived instruction fixtures and checks for opcode, destination register where applicable, signed displacement, site alignment and bounds, and target PC from the instruction's own address. Include an intentionally wrong destination and a backward JAL that exercises LF-027.
 - **Exit gate.** The checks accept the valid forward and backward fixtures and reject the wrong-target and malformed cases. The comparison of final words to intended addresses is reproducible.
