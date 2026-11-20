@@ -1,7 +1,7 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phases 1.0 through 1.5
-are accepted. Phase 1.6 met its exit gate and is ready for maintainer review.
+Complete and review each exit gate before advancing. Phases 1.0 through 1.6
+are accepted. Phase 1.7 has a decision package ready for architectural approval.
 Record source-derived expectations and observed results with their exact
 inputs, dependency versions, and commands. Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
@@ -49,13 +49,16 @@ inputs, dependency versions, and commands. Use [Phase 0](../README.md) and
 
 ## 1.6 — Mixed opcode composition
 
-- **Status.** Exit gate met. Seventeen specimen pairs matched production outcomes, publisher bindings, bytes and RV64 counts. The repeated EOF and STOP guests called and returned through each occurrence's own core. Both DUP1 exceptional paths published the expected results. The inherited core byte/hash contracts matched, and the production suite reproduced the four LF-026 failures. [Results and RF-014](results/1.6-mixed-symbolic-guest.md)
+- **Status.** Accepted. Seventeen specimen pairs matched production outcomes, publisher bindings, bytes and RV64 counts. The repeated EOF and STOP guests called and returned through each occurrence's own core. Both DUP1 exceptional paths published the expected results. The inherited core byte/hash contracts matched, and the production suite reproduced the four LF-026 failures. [Results and RF-014](results/1.6-mixed-symbolic-guest.md)
 - **Research question.** Can repeated ADD, SUB, POP and DUP1 fragments compose with PUSH1 while preserving local arithmetic calls, continuation targets, and exception routing?
 - **Expected evidence.** Short representative mixed guests with repeated fragments, EOF and STOP, seeded inputs and exceptional cases, including both DUP1 exits. Record final references, outcomes, and instruction counts against Phase 0 controls where available. Compare standalone ADD/SUB core hashes with Phase 0.
 - **Exit gate.** Reference checks establish that each occurrence calls its own leaf and reaches its own continuation where applicable, both DUP1 exits reach their intended publishers, and mixed guest outcomes satisfy the ABI. The standalone arithmetic core hashes match.
 
 ## 1.7 — Architecture evaluation
 
+- **Status.** Exit gate met. RF-015 recommends one symbolic composer using the frozen `asm-rs 0.2.0` resolution, shared publishers and a minimal record of intended publisher references checked against the final bytes. [Decision package](results/1.7-architecture-decision.md)
 - **Research question.** Does the measured result justify symbolic assembly alone, or does independent validation require a minimal explicit record of intended references?
 - **Expected evidence.** A comparison grounded in the preceding probes, with supported references, limits, required metadata, ABI and compatibility implications, and traceable regression requirements for any follow-on implementation.
 - **Exit gate.** Record a reviewable recommendation supported by the evidence, or document the blocking capability and the smallest checked patching alternative. Production integration requires a separate maintainer decision.
+- **Phase 2 proposal.** Validate final images, compare PUSH1 and STOP beside legacy, add mixed composition and cut over compile APIs, converge isolated ADD/SUB, then remove duplicate paths after parity review. All four production LF-026 regressions remain mandatory. [Migration and acceptance gates](results/1.7-architecture-decision.md#e-proposed-phase-2-migration)
+- **Next decision.** Maintainer approval of the architecture and explicit authorization for Phase 2. ADR-002 remains proposed.
