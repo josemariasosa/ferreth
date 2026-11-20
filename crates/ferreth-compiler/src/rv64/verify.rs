@@ -27,6 +27,7 @@ pub(crate) enum Fragment {
 #[derive(Clone, Copy)]
 pub(crate) enum PublisherLayout {
     PushOnly,
+    Symbolic,
     Mixed,
     IsolatedArithmetic,
 }
@@ -41,6 +42,8 @@ pub(crate) fn verify_final_image(
 ) -> Result<(), String> {
     let (normal, overflow, underflow) = match (layout, publisher_pcs) {
         (PublisherLayout::PushOnly, &[normal, overflow]) => (normal, Some(overflow), None),
+        (PublisherLayout::Symbolic, &[normal]) => (normal, None, None),
+        (PublisherLayout::Symbolic, &[normal, overflow]) => (normal, Some(overflow), None),
         (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
             (normal, Some(overflow), Some(underflow))
         }
@@ -75,6 +78,99 @@ pub(crate) fn verify_final_image(
     if pc - ENTRY_PC != bytes.len() as u64 {
         return Err(format!(
             "unexpected image bytes after publisher end at {pc:#x}"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Transfer {
+    Jal { rd: u32 },
+    Branch { funct3: u32, rs1: u32, rs2: u32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeclaredTransfer {
+    pub(crate) site_pc: u64,
+    pub(crate) target_pc: u64,
+    pub(crate) kind: Transfer,
+}
+
+/// Checks every control transfer in the fragment area against fragment-owned
+/// declarations. The fixed-layout verifier remains the independent completeness
+/// check for the current PUSH1 candidate.
+pub(crate) fn verify_declared_transfers(
+    bytes: &[u8],
+    publisher_start: u64,
+    declarations: &[DeclaredTransfer],
+) -> Result<(), String> {
+    let image = Image {
+        bytes,
+        base_pc: ENTRY_PC,
+    };
+    if !publisher_start.is_multiple_of(RV64_INSTRUCTION_SIZE) {
+        return Err(format!(
+            "publisher start {publisher_start:#x} is not four-byte aligned"
+        ));
+    }
+    let body_bytes = publisher_start
+        .checked_sub(ENTRY_PC)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .ok_or_else(|| format!("publisher start {publisher_start:#x} precedes the image"))?;
+    if body_bytes > bytes.len() || !body_bytes.is_multiple_of(4) {
+        return Err(format!(
+            "publisher start {publisher_start:#x} is outside the executable image"
+        ));
+    }
+
+    let mut declarations = declarations.to_vec();
+    declarations.sort_by_key(|declaration| declaration.site_pc);
+    if declarations
+        .windows(2)
+        .any(|pair| pair[0].site_pc == pair[1].site_pc)
+    {
+        return Err("duplicate symbolic transfer declaration".to_owned());
+    }
+    for declaration in &declarations {
+        if declaration.site_pc < ENTRY_PC || declaration.site_pc >= publisher_start {
+            return Err(format!(
+                "declared transfer site {:#x} is outside the fragment area",
+                declaration.site_pc
+            ));
+        }
+        if !declaration.site_pc.is_multiple_of(RV64_INSTRUCTION_SIZE) {
+            return Err(format!(
+                "declared transfer site {:#x} is not four-byte aligned",
+                declaration.site_pc
+            ));
+        }
+    }
+
+    let mut next_declaration = 0;
+    for offset in (0..body_bytes).step_by(4) {
+        let pc = ENTRY_PC + offset as u64;
+        let word = image.word(pc)?;
+        if matches!(word & 0x7f, JAL | BRANCH | JALR) {
+            let Some(declaration) = declarations.get(next_declaration) else {
+                return Err(format!(
+                    "unexpected control transfer {word:#010x} at {pc:#x}"
+                ));
+            };
+            if declaration.site_pc != pc {
+                return Err(format!(
+                    "unexpected control transfer {word:#010x} at {pc:#x}"
+                ));
+            }
+            image.verify_transfer(pc, word, &declaration.kind, declaration.target_pc)?;
+            next_declaration += 1;
+        } else if word & 3 != 3 || word & 0x1f == 0x1f {
+            return Err(format!("unsupported instruction width at {pc:#x}"));
+        }
+    }
+    if let Some(declaration) = declarations.get(next_declaration) {
+        return Err(format!(
+            "declared transfer site {:#x} is not an encoded control transfer",
+            declaration.site_pc
         ));
     }
     Ok(())
@@ -204,12 +300,6 @@ struct Site {
 enum Expected {
     Transfer { kind: Transfer, target_pc: u64 },
     Fixed(u32),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Transfer {
-    Jal { rd: u32 },
-    Branch { funct3: u32, rs1: u32, rs2: u32 },
 }
 
 impl Site {

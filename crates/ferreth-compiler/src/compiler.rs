@@ -21,7 +21,7 @@ use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
 mod publisher;
 #[allow(dead_code, reason = "Phase 2.2 candidate awaits public routing review")]
-mod symbolic;
+pub(crate) mod symbolic;
 
 use publisher::Publisher;
 

@@ -380,6 +380,12 @@ maintainer authorization. [Incremental plan](../../research/guest-linking/phase-
 
 ### Phase 2 — Consolidate guest composition
 
+The bounded Phase 2.3a correction is implemented and recorded in the
+[Phase 2.3a fragment-contract report](../../research/guest-linking/phase-2.3a-fragment-contract.md).
+It establishes the generated-fragment/reference boundary only; PUSH1 and STOP
+remain the sole symbolic generators, and public compilation remains on the
+legacy routes. Stop for maintainer review before mixed-opcode composition.
+
 - Implement only the reviewed mechanism from Phase 1. Give one composer ownership of fragment placement, external transfers and publisher composition. Keep one consistent publication implementation for all applicable guests.
 - Route bytecode and sequence compilation through that composer. Route isolated ADD/SUB through ordinary single-op guest compilation with seeded initial stack, following POP/DUP1. Preserve useful convenience APIs as thin adapters where possible.
 - Remove redundant text reconstruction and handwritten encoders only after parity is established. If an encoder remains, correct and test signed immediate encoding. Preserve independent verification of targets, emitted layout, publisher entry PCs and readable assembly.

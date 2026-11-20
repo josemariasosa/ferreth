@@ -134,3 +134,11 @@ The [Phase 2.2 report](phase-2.2-symbolic-guest-composer.md) records the
 private composer, shared publisher source, parity and distant overflow
 regressions, and measured executable bounds. The public compiler routes
 still exercise the four LF-026 controls. Phase 2.2 ends at maintainer review.
+
+## Opcode-independent fragment contract
+
+The [Phase 2.3a report](phase-2.3a-fragment-contract.md) records the generated
+fragment/reference contract, declaration-derived publisher inventory, final
+image verification and retained PUSH1 fixed-layout gate. Only PUSH1 and STOP
+are symbolically generated; public compilation remains on the legacy routes.
+Phase 2.3a stops for maintainer review before mixed-opcode composition.

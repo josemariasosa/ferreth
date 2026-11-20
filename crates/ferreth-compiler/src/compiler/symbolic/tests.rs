@@ -13,6 +13,7 @@ use crate::{
         memory::{
             LayoutError, EVM_STACK_CAPACITY, EVM_STACK_REGION, EVM_WORD_SIZE, METADATA_REGION,
         },
+        verify::{verify_declared_transfers, DeclaredTransfer, Transfer},
     },
     DecodeError,
 };
@@ -27,47 +28,78 @@ fn bytecode(immediates: &[u8], stop: bool) -> Vec<u8> {
 
 fn assert_layout(candidate: &CompiledRv64Program, pushes: usize, stop: bool) {
     let normal = ENTRY_PC + 44 * pushes as u64 + 4 * u64::from(stop);
-    assert_eq!(candidate.termination_entry_pcs(), [normal, normal + 28]);
+    let has_overflow = pushes > 0;
+    let expected_publishers = if has_overflow {
+        vec![normal, normal + 28]
+    } else {
+        vec![normal]
+    };
+    assert_eq!(candidate.termination_entry_pcs(), expected_publishers);
     assert_eq!(
         candidate.machine_code().len(),
-        44 * pushes + 4 * usize::from(stop) + 60
+        44 * pushes + 4 * usize::from(stop) + 28 + 32 * usize::from(has_overflow)
     );
     assert_eq!(candidate.normal_termination_instructions(), 7);
-    assert_eq!(candidate.exceptional_termination_instructions(), 8);
+    assert_eq!(
+        candidate.exceptional_termination_instructions(),
+        8 * u64::from(has_overflow)
+    );
     let round_trip = assemble_image(candidate.assembly()).unwrap();
     assert_eq!(round_trip.base_address(), candidate.entry_pc());
     assert_eq!(round_trip.bytes(), candidate.machine_code());
     assert_eq!(
         round_trip.labels().len(),
-        pushes * 3 + usize::from(stop) + 2
+        pushes * 3 + usize::from(stop) + 1 + usize::from(has_overflow)
     );
     println!(
-        "pushes={pushes} stop={stop} bytes={} publishers={:x?}",
+        "pushes={pushes} stop={stop} source_bytes={} phase22_source_bytes={} labels={} image_bytes={} publishers={:x?}",
+        candidate.assembly().len(),
+        candidate.assembly().len()
+            + usize::from(!has_overflow) * super::Publisher::Overflow.assembly().len(),
+        round_trip.labels().len(),
         candidate.machine_code().len(),
         candidate.termination_entry_pcs()
     );
 }
 
-fn assert_legacy_layout(candidate: &CompiledRv64Program, legacy: &CompiledRv64Program, stop: bool) {
+fn assert_legacy_layout(
+    candidate: &CompiledRv64Program,
+    legacy: &CompiledRv64Program,
+    pushes: usize,
+    stop: bool,
+) {
     let legacy_size = legacy.machine_code().len();
-    let unreachable_tail = 32 * usize::from(stop);
+    let unreachable_tail = 32 * (usize::from(stop) + usize::from(pushes == 0));
     assert_eq!(
         candidate.machine_code(),
         &legacy.machine_code()[..legacy_size - unreachable_tail]
     );
     assert_eq!(
         candidate.termination_entry_pcs(),
-        &legacy.termination_entry_pcs()[..2]
+        &legacy.termination_entry_pcs()[..candidate.termination_entry_pcs().len()]
     );
-    assert_eq!(legacy.termination_entry_pcs().len(), 2 + usize::from(stop));
     assert_eq!(
         candidate.normal_termination_instructions(),
         legacy.normal_termination_instructions()
     );
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        legacy.exceptional_termination_instructions()
+        if pushes == 0 {
+            0
+        } else {
+            legacy.exceptional_termination_instructions()
+        }
     );
+}
+
+fn make_fragments(immediates: &[u8], stop: bool) -> Vec<SymbolicFragment> {
+    immediates
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, immediate)| generate_symbolic_push1(immediate, index))
+        .chain(stop.then(stop_fragment))
+        .collect()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -241,12 +273,7 @@ fn short_artifacts_and_execution_match_legacy() {
     for immediates in [&[][..], &[2], &[2, 3], &[0, 127, 128, 255, 96]] {
         for stop in [false, true] {
             let input = bytecode(immediates, stop);
-            let fragments: Vec<_> = immediates
-                .iter()
-                .copied()
-                .map(SymbolicFragment::Push1)
-                .chain(stop.then_some(SymbolicFragment::Stop))
-                .collect();
+            let fragments = make_fragments(immediates, stop);
             let candidate = compile(&input).unwrap();
             assert_eq!(candidate, compose(&fragments).unwrap());
             let legacy = compile_evm_bytecode(&input).unwrap();
@@ -255,7 +282,7 @@ fn short_artifacts_and_execution_match_legacy() {
             }
             let pushes = immediates.len();
             assert_layout(&candidate, pushes, stop);
-            assert_legacy_layout(&candidate, &legacy, stop);
+            assert_legacy_layout(&candidate, &legacy, pushes, stop);
             let normal = observe(&candidate, &[], pushes, None);
             assert_eq!(normal, observe(&legacy, &[], pushes, None));
             let expected: Vec<_> = immediates.iter().copied().map(U256::from).collect();
@@ -279,7 +306,7 @@ fn frontend_preserves_truncated_push_and_first_stop() {
         assert_eq!(candidate, compile(canonical).unwrap());
         let legacy = compile_evm_bytecode(input).unwrap();
         assert_eq!(legacy, compile_evm_bytecode(canonical).unwrap());
-        assert_legacy_layout(&candidate, &legacy, stop);
+        assert_legacy_layout(&candidate, &legacy, 1, stop);
         let actual = observe(&candidate, &[], 1, None);
         assert_eq!(actual, observe(&legacy, &[], 1, None));
         assert_result(
@@ -337,7 +364,7 @@ fn long_layouts_match_phase_one_and_take_distant_overflow() {
         assert_result(&exceptional, &full, true, 4);
         match compile_evm_bytecode(&input) {
             Ok(legacy) if pushes == 46 => {
-                assert_legacy_layout(&candidate, &legacy, stop);
+                assert_legacy_layout(&candidate, &legacy, pushes, stop);
                 assert_eq!(normal, observe(&legacy, &[], pushes, None));
                 assert_eq!(exceptional, observe(&legacy, &full, pushes, Some(0)));
             }
@@ -372,8 +399,9 @@ fn push_from_one_below_capacity_before_next_push_fails() {
 
 #[test]
 fn final_image_rejects_missing_misdirected_and_expanded_transfers() {
-    let fragments = [SymbolicFragment::Push1(2), SymbolicFragment::Stop];
-    let source = emit(&fragments);
+    let fragments = make_fragments(&[2], true);
+    let publishers = publisher_inventory(&fragments);
+    let source = emit(&fragments, &publishers);
     for (from, to, diagnostic) in [
         (
             "jal zero, push1_stack_overflow_exit",
@@ -383,7 +411,7 @@ fn final_image_rejects_missing_misdirected_and_expanded_transfers() {
         (
             "jal zero, push1_continue_0",
             "addi zero, zero, 0",
-            "unexpected opcode",
+            "unexpected control transfer",
         ),
         (
             "jal zero, push1_continue_0",
@@ -408,14 +436,121 @@ fn final_image_rejects_missing_misdirected_and_expanded_transfers() {
     ] {
         let modified = source.replace(from, to);
         let result = assemble_image(&modified).unwrap();
-        let err = verified_program(&fragments, modified, result).unwrap_err();
+        let err = verified_program(&fragments, &publishers, modified, result).unwrap_err();
         assert!(
-            matches!(err, CompileError::Link { description } if description.contains(diagnostic))
+            matches!(&err, CompileError::Link { description } if description.contains(diagnostic)),
+            "fixture {from:?}: {err:?}"
         );
     }
     let image = assemble_image(&source).unwrap();
-    assert!(verified_program(&fragments[..1], source, image).is_err());
-    assert!(compose(&[SymbolicFragment::Stop, SymbolicFragment::Push1(2)]).is_err());
+    assert!(verified_program(&fragments[..1], &publishers, source, image).is_err());
+    assert!(compose(&[stop_fragment(), generate_symbolic_push1(2, 0)]).is_err());
+}
+
+#[test]
+fn declarations_and_namespaces_reject_incomplete_or_corrupted_images() {
+    let mut fragments = make_fragments(&[2], false);
+    let publishers = publisher_inventory(&fragments);
+    let source = emit(&fragments, &publishers);
+
+    fragments[0].external_references.clear();
+    let image = assemble_image(&source).unwrap();
+    let missing = verified_program(&fragments, &publishers, source.clone(), image).unwrap_err();
+    assert!(matches!(
+        missing,
+        CompileError::Link { description } if description.contains("unexpected control transfer")
+    ));
+
+    fragments = make_fragments(&[2], false);
+    let external = fragments[0].external_references[0];
+    fragments[0].external_references.push(external);
+    let image = assemble_image(&source).unwrap();
+    let duplicate = verified_program(&fragments, &publishers, source.clone(), image).unwrap_err();
+    assert!(matches!(
+        duplicate,
+        CompileError::Link { description } if description.contains("duplicate symbolic transfer")
+    ));
+
+    fragments = make_fragments(&[2], false);
+    fragments[0].external_references[0].role = PublisherRole::Normal;
+    let image = assemble_image(&source).unwrap();
+    let wrong_role = verified_program(&fragments, &publishers, source.clone(), image).unwrap_err();
+    assert!(matches!(
+        wrong_role,
+        CompileError::Link { description } if description.contains("targets")
+    ));
+
+    for extra_transfer in [
+        "    jal zero, normal_exit\n",
+        "    beq zero, zero, normal_exit\n",
+    ] {
+        let expanded = source.replace(
+            "push1_continue_0:\n",
+            &format!("push1_continue_0:\n{extra_transfer}"),
+        );
+        let image = assemble_image(&expanded).unwrap();
+        let error = verified_program(&make_fragments(&[2], false), &publishers, expanded, image)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Link { description } if description.contains("unexpected control transfer")
+        ));
+    }
+
+    let corrupted = source.replace("jal zero, push1_continue_0", "jal zero, push1_overflow_0");
+    let image = assemble_image(&corrupted).unwrap();
+    let error =
+        verified_program(&make_fragments(&[2], false), &publishers, corrupted, image).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Link { description } if description.contains("targets")
+    ));
+
+    let collision =
+        compose(&[generate_symbolic_push1(2, 0), generate_symbolic_push1(3, 0)]).unwrap_err();
+    assert!(matches!(
+        collision,
+        CompileError::Link { description } if description.contains("duplicate fragment entry")
+    ));
+    let local_collision = source.replace("push1_overflow_0", "normal_exit");
+    assert!(assemble_image(&local_collision).is_err());
+
+    let image = assemble_image(&source).unwrap();
+    let missing_publisher = verified_program(
+        &make_fragments(&[2], false),
+        &[PublisherRole::Normal],
+        source,
+        image,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing_publisher,
+        CompileError::Link { description } if description.contains("missing Overflow publisher")
+    ));
+}
+
+#[test]
+fn declaration_verifier_rejects_misalignment_and_executable_bounds() {
+    let bytes = 0x0080_006f_u32.to_le_bytes();
+    let declaration = [DeclaredTransfer {
+        site_pc: ENTRY_PC + 2,
+        target_pc: ENTRY_PC + 4,
+        kind: Transfer::Jal { rd: 0 },
+    }];
+    let error = verify_declared_transfers(&bytes, ENTRY_PC + 4, &declaration).unwrap_err();
+    assert!(error.contains("not four-byte aligned"), "{error}");
+
+    let error = verify_declared_transfers(
+        &bytes,
+        ENTRY_PC + 8,
+        &[DeclaredTransfer {
+            site_pc: ENTRY_PC,
+            target_pc: ENTRY_PC + 4,
+            kind: Transfer::Jal { rd: 0 },
+        }],
+    )
+    .unwrap_err();
+    assert!(error.contains("outside the executable image"), "{error}");
 }
 
 #[test]
@@ -427,15 +562,15 @@ fn push1_capacity_boundary() {
         (23_829, true, 1_048_540, true),
         (23_830, true, 1_048_584, false),
     ] {
-        let mut fragments = vec![SymbolicFragment::Push1(2); pushes];
-        fragments.extend(stop.then_some(SymbolicFragment::Stop));
-        let source = emit(&fragments);
+        let fragments = make_fragments(&vec![2; pushes], stop);
+        let publishers = publisher_inventory(&fragments);
+        let source = emit(&fragments, &publishers);
         let image = assemble_image(&source).unwrap();
         assert_eq!(image.len(), size);
         assert_eq!(image.labels().len(), 3 * pushes + usize::from(stop) + 2);
         let source_bytes = source.len();
         let labels = image.labels().len();
-        let result = verified_program(&fragments, source, image);
+        let result = verified_program(&fragments, &publishers, source, image);
         if accepted {
             assert_eq!(result.unwrap().machine_code().len(), size);
         } else {

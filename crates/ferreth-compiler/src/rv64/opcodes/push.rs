@@ -2,6 +2,11 @@ use std::fmt::Write;
 
 use asm_rs::{assemble, Arch};
 
+use crate::{
+    compiler::symbolic::{ExternalDeclaration, LocalDeclaration, PublisherRole, SymbolicFragment},
+    rv64::verify::{Fragment, Transfer},
+};
+
 use crate::rv64::codegen::GeneratedRv64;
 
 /// Generates one stack-aware RV64 implementation of EVM `PUSH1`.
@@ -25,21 +30,45 @@ pub fn generate_guest_push1(immediate: u8) -> GeneratedRv64 {
     }
 }
 
-pub(crate) fn emit_symbolic_push1(
-    assembly: &mut String,
-    immediate: u8,
-    index: usize,
-    overflow_publisher: &str,
-) {
+pub(crate) fn generate_symbolic_push1(immediate: u8, index: usize) -> SymbolicFragment {
+    let entry = format!("guest_push1_{index}");
     let overflow = format!("push1_overflow_{index}");
     let continuation = format!("push1_continue_{index}");
-    writeln!(assembly, "guest_push1_{index}:").unwrap();
-    emit_push1_body(assembly, immediate, &overflow, &continuation);
+    let mut assembly = String::new();
+    writeln!(assembly, "{entry}:").unwrap();
+    emit_push1_body(&mut assembly, immediate, &overflow, &continuation);
     writeln!(
-        assembly,
-        "{overflow}:\n    jal zero, {overflow_publisher}\n{continuation}:"
+        &mut assembly,
+        "{overflow}:\n    jal zero, {}\n{continuation}:",
+        PublisherRole::Overflow.label()
     )
     .unwrap();
+    SymbolicFragment::new(
+        assembly,
+        entry,
+        vec![ExternalDeclaration {
+            site_word: 10,
+            role: PublisherRole::Overflow,
+            kind: Transfer::Jal { rd: 0 },
+        }],
+        vec![
+            LocalDeclaration {
+                site_word: 2,
+                target_symbol: overflow,
+                kind: Transfer::Branch {
+                    funct3: 7,
+                    rs1: 9,
+                    rs2: 5,
+                },
+            },
+            LocalDeclaration {
+                site_word: 9,
+                target_symbol: continuation,
+                kind: Transfer::Jal { rd: 0 },
+            },
+        ],
+        Fragment::Push1,
+    )
 }
 
 fn emit_push1_body(assembly: &mut String, immediate: u8, overflow: &str, continuation: &str) {
