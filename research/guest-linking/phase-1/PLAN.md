@@ -1,8 +1,8 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phases 1.0 through 1.2
-are accepted. Phase 1.3 met its exit gate and is ready for maintainer review.
-Phase 1.4 awaits maintainer authorization. Record source-derived expectations
+Complete and review each exit gate before advancing. Phases 1.0 through 1.3
+are accepted. Phase 1.4 met its exit gate and is ready for maintainer review.
+Phase 1.5 awaits maintainer authorization. Record source-derived expectations
 and observed results with their exact inputs, dependency versions, and commands.
 Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
@@ -29,13 +29,14 @@ Use [Phase 0](../README.md) and
 
 ## 1.3 — Independent instruction verification
 
-- **Status.** Exit gate met. Six experiments verified byte-derived JAL and branch targets, including the two-word relaxed BEQ and rejection of the LF-027 sign-bit corruption. The production baseline reproduced all four known LF-026 failures. [Results and RF-011](results/1.3-independent-verification.md)
+- **Status.** Accepted. Six experiments verified byte-derived JAL and branch targets, including the two-word relaxed BEQ and rejection of the LF-027 sign-bit corruption. The production baseline reproduced all four known LF-026 failures. [Results and RF-011](results/1.3-independent-verification.md)
 - **Research question.** Can final RV64 control transfers be checked against their intended destinations independently of the assembler's relocation calculations?
 - **Expected evidence.** Hand-derived instruction fixtures and checks for opcode, destination register where applicable, signed displacement, site alignment and bounds, and target PC from the instruction's own address. Include an intentionally wrong destination and a backward JAL that exercises LF-027.
 - **Exit gate.** The checks accept the valid forward and backward fixtures and reject the wrong-target and malformed cases. The comparison of final words to intended addresses is reproducible.
 
 ## 1.4 — Symbolic PUSH1 composition
 
+- **Status.** Exit gate met. One, two, and five PUSH1 fragments assembled with unique local labels and independently verified transfers. The two-PUSH artifact matched production bytes and publisher PCs. Short normal and full-stack exception runs matched production results, and the workspace reproduced the four known LF-026 failures. [Results and RF-012](results/1.4-symbolic-push1.md)
 - **Research question.** Can repeated PUSH1 bodies bind unique local labels and symbolic normal and overflow destinations while preserving short-guest behavior?
 - **Expected evidence.** Final source, words, publisher PCs, and independently checked control transfers for short specimens. Compare EOF and STOP cases and short full-stack overflow with Phase 0 for status, stack, final `s1`, and RV64 instruction counts.
 - **Exit gate.** Every checked reference binds to its intended target, the short specimens satisfy the ABI and match baseline semantics, and differences in assembly, words or counts have an explanation.
