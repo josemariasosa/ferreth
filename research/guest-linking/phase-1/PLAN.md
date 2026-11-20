@@ -1,7 +1,8 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phase 1.0 is the current
-scope. Later steps require maintainer authorization. Record source-derived
+Complete and review each exit gate before advancing. Phase 1.0 is approved.
+Phase 1.1 met its exit gate and is ready for maintainer review. Later steps
+require maintainer authorization. Record source-derived
 expectations and observed results with their exact inputs, dependency versions,
 and commands. Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
@@ -14,6 +15,7 @@ and commands. Use [Phase 0](../README.md) and
 
 ## 1.1 — Assembler result API
 
+- **Status.** Exit gate met. The specimen reproduced the expected bytes and exposed absolute label addresses and an output-relative applied relocation. The production baseline reproduced all four known failures, and the spike test passed. [Results](results/1.1-assembler-api.md)
 - **Research question.** What final bytes, label addresses, and applied relocation details does the pinned assembler expose for RV64 at a nonzero origin?
 - **Expected evidence.** A minimal labeled input with recorded source, origin, result bytes, reported addresses and relocation entries, and the corresponding pinned API source.
 - **Exit gate.** Reproduce the result and establish the address and offset conventions, or record the missing information and stop for review.
