@@ -19,6 +19,12 @@ use crate::rv64::{
 };
 use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
+mod publisher;
+#[allow(dead_code, reason = "Phase 2.2 candidate awaits public routing review")]
+mod symbolic;
+
+use publisher::Publisher;
+
 /// Provisional guest exception code for an EVM stack-overflow push.
 pub const PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE: u64 = 1;
 /// Provisional guest exception code for an EVM binary-operation underflow.
@@ -254,9 +260,9 @@ fn compile_supported_program(
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
 
-    let normal_assembly = normal_exit_assembly();
-    let overflow_assembly = overflow_exit_assembly();
-    let underflow_assembly = underflow_exit_assembly();
+    let normal_assembly = Publisher::Normal.assembly();
+    let overflow_assembly = Publisher::Overflow.assembly();
+    let underflow_assembly = Publisher::Underflow.assembly();
     let normal_code = assemble(&normal_assembly, Arch::Rv64).map_err(assembly_error)?;
     let overflow_code = assemble(&overflow_assembly, Arch::Rv64).map_err(assembly_error)?;
     let underflow_code = assemble(&underflow_assembly, Arch::Rv64).map_err(assembly_error)?;
@@ -571,8 +577,8 @@ pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, C
         .copied()
         .map(generate_guest_push1)
         .collect::<Vec<_>>();
-    let normal_assembly = normal_exit_assembly();
-    let overflow_assembly = overflow_exit_assembly();
+    let normal_assembly = Publisher::Normal.assembly();
+    let overflow_assembly = Publisher::Overflow.assembly();
     let normal_code = assemble(&normal_assembly, Arch::Rv64).map_err(assembly_error)?;
     let overflow_code = assemble(&overflow_assembly, Arch::Rv64).map_err(assembly_error)?;
     let opcode_len = generated
@@ -635,46 +641,6 @@ pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, C
         exceptional_termination_instructions: instruction_count(&overflow_code)?,
         termination_entry_pcs,
     })
-}
-
-fn normal_exit_assembly() -> String {
-    "normal_exit:\n\
-        \x20   addi t1, s0, -2048\n\
-        \x20   addi t1, t1, -2048\n\
-        \x20   sd s1, 16(t1)\n\
-        \x20   sd zero, 8(t1)\n\
-        \x20   addi t0, zero, 1\n\
-        \x20   sd t0, 0(t1)\n\
-        \x20   jalr zero, -4(t1)\n"
-        .to_owned()
-}
-
-fn overflow_exit_assembly() -> String {
-    format!(
-        "push1_stack_overflow_exit:\n\
-         \x20   addi t1, s0, -2048\n\
-         \x20   addi t1, t1, -2048\n\
-         \x20   sd s1, 16(t1)\n\
-         \x20   addi t0, zero, {PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE}\n\
-         \x20   sd t0, 8(t1)\n\
-         \x20   addi t0, zero, 2\n\
-         \x20   sd t0, 0(t1)\n\
-         \x20   jalr zero, -4(t1)\n"
-    )
-}
-
-fn underflow_exit_assembly() -> String {
-    format!(
-        "binary_stack_underflow_exit:\n\
-         \x20   addi t1, s0, -2048\n\
-         \x20   addi t1, t1, -2048\n\
-         \x20   sd s1, 16(t1)\n\
-         \x20   addi t0, zero, {PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE}\n\
-         \x20   sd t0, 8(t1)\n\
-         \x20   addi t0, zero, 2\n\
-         \x20   sd t0, 0(t1)\n\
-         \x20   jalr zero, -4(t1)\n"
-    )
 }
 
 fn assembly_error(error: impl fmt::Debug) -> CompileError {

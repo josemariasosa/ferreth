@@ -127,4 +127,10 @@ The [Phase 2.1 report](phase-2.1-final-image-verification.md) records the
 private verifier at all three production linker checkpoints, its fixed-layout
 contract, and the before/after artifact and execution comparison. The
 Phase 2.1 gate passed with the four expected LF-026 failures still active.
-Phase 2.2 awaits maintainer authorization.
+
+## Private PUSH1 and STOP composer
+
+The [Phase 2.2 report](phase-2.2-symbolic-guest-composer.md) records the
+private composer, shared publisher source, parity and distant overflow
+regressions, and measured executable bounds. The public compiler routes
+still exercise the four LF-026 controls. Phase 2.2 ends at maintainer review.
