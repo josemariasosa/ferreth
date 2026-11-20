@@ -1,0 +1,15 @@
+WARNING: failed to read a device tree binary: No such file or directory (os error 2)
+WARNING: maybe need to install dtc commend `apt install device-tree-compiler`
+46 pushes stop=false: NORMAL depth=46 total=467
+count=46 stop=false site=0x80000028 target=0x80000804 displacement=2012 code_len=2084 (47 derived) symbolic_word=0x7dc0006f relocations=[AppliedRelocation { offset: 0, size: 4, label: "publisher", kind: RvJal20, addend: 0 }]
+47 pushes stop=false: RV64 assembly failed: ImmediateOverflow { value: 2056, min: -2048, max: 2047, span: Span { line: 12, col: 5, offset: 205, len: 3 } }
+count=47 stop=false site=0x80000028 target=0x80000830 displacement=2056 code_len=2128 (47 derived) symbolic_word=0x0090006f relocations=[AppliedRelocation { offset: 0, size: 4, label: "publisher", kind: RvJal20, addend: 0 }]
+WARNING: failed to read a device tree binary: No such file or directory (os error 2)
+WARNING: maybe need to install dtc commend `apt install device-tree-compiler`
+46 pushes stop=true: NORMAL depth=46 total=468
+count=46 stop=true site=0x80000028 target=0x80000808 displacement=2016 code_len=2120 (47 derived) symbolic_word=0x7e00006f relocations=[AppliedRelocation { offset: 0, size: 4, label: "publisher", kind: RvJal20, addend: 0 }]
+47 pushes stop=true: RV64 assembly failed: ImmediateOverflow { value: 2060, min: -2048, max: 2047, span: Span { line: 12, col: 5, offset: 205, len: 3 } }
+count=47 stop=true site=0x80000028 target=0x80000834 displacement=2060 code_len=2164 (47 derived) symbolic_word=0x00d0006f relocations=[AppliedRelocation { offset: 0, size: 4, label: "publisher", kind: RvJal20, addend: 0 }]
+compiler: requested=-4 word=0x7fdff06f decoded=+1048572
+orchestrator: requested=-4 word=0x7fdff06f decoded=+1048572
+assembler: requested=-4 word=0xffdff06f decoded=-4

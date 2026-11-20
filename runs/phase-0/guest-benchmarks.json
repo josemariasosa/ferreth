@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "experiment": "rv64-guest-instruction-metrics",
+  "executor": "rvemu 0.0.11",
+  "measurement": "successfully executed RV64 instructions; exit sentinel observed before fetch and excluded",
+  "opcode_guest": [
+    {
+      "input": "PUSH1 0x05",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 10,
+        "guest_termination": 7,
+        "total": 17
+      }
+    },
+    {
+      "input": "ADD 0x05 0x03",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 42,
+        "guest_termination": 7,
+        "total": 49
+      }
+    },
+    {
+      "input": "SUB 0x05 0x03",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 42,
+        "guest_termination": 7,
+        "total": 49
+      }
+    },
+    {
+      "input": "POP [0x00]",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 3,
+        "guest_termination": 7,
+        "total": 10
+      }
+    },
+    {
+      "input": "DUP1 [0x00]",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 14,
+        "guest_termination": 7,
+        "total": 21
+      }
+    }
+  ],
+  "program_guest": [
+    {
+      "input": "6005",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 10,
+        "guest_termination": 7,
+        "total": 17
+      }
+    },
+    {
+      "input": "60056003",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 20,
+        "guest_termination": 7,
+        "total": 27
+      }
+    },
+    {
+      "input": "6005600301",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 62,
+        "guest_termination": 7,
+        "total": 69
+      }
+    },
+    {
+      "input": "6005600303",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 62,
+        "guest_termination": 7,
+        "total": 69
+      }
+    },
+    {
+      "input": "600560030100",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 63,
+        "guest_termination": 7,
+        "total": 70
+      }
+    },
+    {
+      "input": "600550",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 13,
+        "guest_termination": 7,
+        "total": 20
+      }
+    },
+    {
+      "input": "600580",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 24,
+        "guest_termination": 7,
+        "total": 31
+      }
+    },
+    {
+      "input": "60058001",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 66,
+        "guest_termination": 7,
+        "total": 73
+      }
+    },
+    {
+      "input": "6005600350",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 23,
+        "guest_termination": 7,
+        "total": 30
+      }
+    },
+    {
+      "input": "60058050",
+      "status": "normal",
+      "rv64": {
+        "opcode_body": 27,
+        "guest_termination": 7,
+        "total": 34
+      }
+    }
+  ]
+}

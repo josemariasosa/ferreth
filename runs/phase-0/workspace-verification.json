@@ -1,0 +1,673 @@
+{
+  "baseline_revision": "2a49a0a3a157a1e505ab46d2dc66f333606a4802",
+  "red_revision": "2aa061cf46794588b8d95d3b252dda2e45c1f338",
+  "cargo_lock_blob": "a25bf331b456a8d7c93e1d7feff6721d8458d5b5",
+  "baseline": {
+    "cargo_exit": 0,
+    "discovered": 135,
+    "individual_results": 135,
+    "totals": {
+      "passed": 135,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "packages": {
+      "ferreth-compiler": {
+        "passed": 120,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      "ferreth-conformance": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      "revm-frame": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    },
+    "targets": [
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/lib.rs",
+        "passed": 46,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_dup1.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_execution.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_executor.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_initialization.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_memory.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_result.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_pop.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1_program.rs",
+        "passed": 17,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "unittests src/lib.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rc_revm_conformance.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rv64_execution.rs",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rv64_guest_sub.rs",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "revm-frame",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "Doc-tests ferreth_compiler",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "Doc-tests ferreth_conformance",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    ],
+    "rejected_jal_displacement": {}
+  },
+  "fail_fast": {
+    "cargo_exit": 101,
+    "discovered": 141,
+    "individual_results": 126,
+    "totals": {
+      "passed": 122,
+      "failed": 4,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "packages": {
+      "ferreth-compiler": {
+        "passed": 122,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    },
+    "targets": [
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/lib.rs",
+        "passed": 46,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_dup1.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_execution.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_executor.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_initialization.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_memory.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_result.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_pop.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1_program.rs",
+        "passed": 19,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    ],
+    "rejected_jal_displacement": {
+      "repeated_push1_47_eof_completes_normally": 2056,
+      "repeated_push1_47_eof_full_stack_publishes_overflow": 2056,
+      "repeated_push1_47_stop_completes_normally": 2060,
+      "repeated_push1_47_stop_full_stack_publishes_overflow": 2060
+    }
+  },
+  "complete": {
+    "cargo_exit": 101,
+    "discovered": 141,
+    "individual_results": 141,
+    "totals": {
+      "passed": 137,
+      "failed": 4,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "packages": {
+      "ferreth-compiler": {
+        "passed": 122,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      "ferreth-conformance": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      "revm-frame": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    },
+    "targets": [
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/lib.rs",
+        "passed": 46,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_dup1.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_execution.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_executor.rs",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_add_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_initialization.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_memory.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_result.rs",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_guest_sub_orchestrator.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_pop.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "tests/rv64_push1_program.rs",
+        "passed": 19,
+        "failed": 4,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "unittests src/lib.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rc_revm_conformance.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rv64_execution.rs",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "tests/rv64_guest_sub.rs",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "revm-frame",
+        "target": "unittests src/main.rs",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-compiler",
+        "target": "Doc-tests ferreth_compiler",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      },
+      {
+        "package": "ferreth-conformance",
+        "target": "Doc-tests ferreth_conformance",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered": 0
+      }
+    ],
+    "rejected_jal_displacement": {
+      "repeated_push1_47_eof_completes_normally": 2056,
+      "repeated_push1_47_eof_full_stack_publishes_overflow": 2056,
+      "repeated_push1_47_stop_completes_normally": 2060,
+      "repeated_push1_47_stop_full_stack_publishes_overflow": 2060
+    }
+  },
+  "seeded_rc_corpus": {
+    "test": "seeded_random_rc_programs_match_revm_cancun",
+    "passed": true,
+    "valid_cases": 1000,
+    "exceptional_cases": 100
+  },
+  "format_exit": 0,
+  "strict_workspace_clippy_exit": 0,
+  "compiler_tree_has_revm": false
+}
