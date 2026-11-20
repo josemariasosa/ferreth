@@ -1,10 +1,9 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phases 1.0 through 1.3
-are accepted. Phase 1.4 met its exit gate and is ready for maintainer review.
-Phase 1.5 awaits maintainer authorization. Record source-derived expectations
-and observed results with their exact inputs, dependency versions, and commands.
-Use [Phase 0](../README.md) and
+Complete and review each exit gate before advancing. Phases 1.0 through 1.4
+are accepted. Phase 1.5 met its exit gate and is ready for maintainer review.
+Record source-derived expectations and observed results with their exact
+inputs, dependency versions, and commands. Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
 
 ## 1.0 — Experimental scaffolding
@@ -36,13 +35,14 @@ Use [Phase 0](../README.md) and
 
 ## 1.4 — Symbolic PUSH1 composition
 
-- **Status.** Exit gate met. One, two, and five PUSH1 fragments assembled with unique local labels and independently verified transfers. The two-PUSH artifact matched production bytes and publisher PCs. Short normal and full-stack exception runs matched production results, and the workspace reproduced the four known LF-026 failures. [Results and RF-012](results/1.4-symbolic-push1.md)
+- **Status.** Accepted. One, two, and five PUSH1 fragments assembled with unique local labels and independently verified transfers. The two-PUSH artifact matched production bytes and publisher PCs. Short normal and full-stack exception runs matched production results, and the workspace reproduced the four known LF-026 failures. [Results and RF-012](results/1.4-symbolic-push1.md)
 - **Research question.** Can repeated PUSH1 bodies bind unique local labels and symbolic normal and overflow destinations while preserving short-guest behavior?
 - **Expected evidence.** Final source, words, publisher PCs, and independently checked control transfers for short specimens. Compare EOF and STOP cases and short full-stack overflow with Phase 0 for status, stack, final `s1`, and RV64 instruction counts.
 - **Exit gate.** Every checked reference binds to its intended target, the short specimens satisfy the ABI and match baseline semantics, and differences in assembly, words or counts have an explanation.
 
 ## 1.5 — Long-range guest execution
 
+- **Status.** Exit gate met. All four layouts passed independent decoding and empty-stack execution. Both seeded 47-PUSH guests took the distant overflow jump, published the expected result, and preserved the entire stack. The production suite reproduced all four LF-026 failures. [Results and RF-013](results/1.5-long-range-guest.md)
 - **Research question.** Does symbolic assembly resolve the LF-026 boundary and execute an actually taken distant overflow transfer?
 - **Expected evidence.** Run `6002` repeated 46 and 47 times, at EOF and followed by STOP, from an empty stack. Run both 47-PUSH variants from the Phase 0 seeded 1,024-word stack and verify the first overflow destination from the final word and the observed publisher PC.
 - **Exit gate.** All four empty-stack cases complete with the expected number of twos. Both seeded runs publish overflow, preserve all 1,024 seeded words and `s1 = 0x80109000`, and reach the independently verified overflow publisher.

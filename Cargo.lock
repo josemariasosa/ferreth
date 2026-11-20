@@ -1295,6 +1295,7 @@ name = "ferreth-linking-spike"
 version = "0.1.0"
 dependencies = [
  "asm-rs",
+ "ferreth-compiler",
 ]
 
 [[package]]

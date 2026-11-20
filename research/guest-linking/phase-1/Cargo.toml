@@ -10,3 +10,6 @@ asm-rs = { version = "=0.2.0", default-features = false, features = [
     "std",
     "riscv",
 ] }
+
+[dev-dependencies]
+ferreth-compiler = { path = "../../../crates/ferreth-compiler" }
