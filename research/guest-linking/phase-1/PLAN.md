@@ -1,8 +1,8 @@
 # Phase 1 research plan
 
-Complete and review each exit gate before advancing. Phase 1.0 is approved.
-Phase 1.1 met its exit gate and is ready for maintainer review. Later steps
-require maintainer authorization. Record source-derived
+Complete and review each exit gate before advancing. Phases 1.0 and 1.1
+are accepted. Phase 1.2 met its exit gate and is ready for maintainer
+review. Phase 1.3 requires maintainer authorization. Record source-derived
 expectations and observed results with their exact inputs, dependency versions,
 and commands. Use [Phase 0](../README.md) and
 [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md) as comparison references.
@@ -15,13 +15,14 @@ and commands. Use [Phase 0](../README.md) and
 
 ## 1.1 — Assembler result API
 
-- **Status.** Exit gate met. The specimen reproduced the expected bytes and exposed absolute label addresses and an output-relative applied relocation. The production baseline reproduced all four known failures, and the spike test passed. [Results](results/1.1-assembler-api.md)
+- **Status.** Accepted. The specimen reproduced the expected bytes and exposed absolute label addresses and an output-relative applied relocation. The production baseline reproduced all four known failures, and the spike test passed. [Results](results/1.1-assembler-api.md)
 - **Research question.** What final bytes, label addresses, and applied relocation details does the pinned assembler expose for RV64 at a nonzero origin?
 - **Expected evidence.** A minimal labeled input with recorded source, origin, result bytes, reported addresses and relocation entries, and the corresponding pinned API source.
 - **Exit gate.** Reproduce the result and establish the address and offset conventions, or record the missing information and stop for review.
 
 ## 1.2 — Symbolic control flow
 
+- **Status.** Exit gate met. Six experiments verified symbolic JAL displacements, encoding boundaries, alignment and named-symbol diagnostics, and conditional-branch relaxation. The production baseline reproduced all four known failures. [Results](results/1.2-symbolic-control-flow.md)
 - **Research question.** Which references and input constraints does the assembler handle, and how does relaxation affect final layout?
 - **Expected evidence.** Forward and backward symbolic JALs, signed range edges and just-outside cases, misalignment, duplicate and undefined labels, and short and relaxed conditional branches. Record final bytes, label positions, applied relocations, and raw diagnostics.
 - **Exit gate.** Establish the supported reference forms and layout behavior, including the distinction between ISA alignment and Ferreth's four-byte instruction alignment. Record any blocking assembler limitation for review.
