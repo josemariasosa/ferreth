@@ -105,5 +105,9 @@ workspace results. The tracked inventory records Cargo exit statuses,
 per-target summaries, counts cross-checked from individual outcomes, and the
 four rejected displacements. Raw streams and full specimen captures are in
 the local `runs/phase-0/local/` directory on the audit machine.
+Use distinct `CARGO_TARGET_DIR` values for the baseline and integrated
+checkouts. A shared target directory produced a stale 17-test binary in one
+audit run. Baseline discovery should contain 135 tests and RED discovery
+should contain 141.
 [Workspace inventory](../../runs/phase-0/workspace-verification.json) ·
 [Engineering log](../../docs/bitacora/2026-11-20.md)
