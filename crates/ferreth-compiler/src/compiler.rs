@@ -15,6 +15,7 @@ use crate::rv64::{
         add::generate_guest_add, dup::generate_guest_dup1, pop::generate_guest_pop,
         push::generate_guest_push1, sub::generate_guest_sub,
     },
+    verify::{verify_final_image, Fragment, PublisherLayout},
 };
 use crate::{decode_detailed, DecodeError, DecodedInstruction};
 
@@ -383,13 +384,30 @@ fn compile_supported_program(
         });
     }
     validate_generated_code(ENTRY_PC, machine_code.len())?;
+    let termination_entry_pcs = vec![normal_start, overflow_start, underflow_start];
+    let fragments = operations
+        .iter()
+        .map(|operation| match operation {
+            CompiledOperation::Push1(_) => Fragment::Push1,
+            CompiledOperation::Add | CompiledOperation::Sub => Fragment::Arithmetic,
+            CompiledOperation::Pop => Fragment::Pop,
+            CompiledOperation::Dup1 => Fragment::Dup1,
+        })
+        .chain(has_explicit_stop.then_some(Fragment::Stop));
+    verify_final_image(
+        &machine_code,
+        fragments,
+        PublisherLayout::Mixed,
+        &termination_entry_pcs,
+    )
+    .map_err(verification_error)?;
     Ok(CompiledRv64Program {
         assembly,
         machine_code,
         normal_termination_instructions: instruction_count(&normal_code)?,
         // Both currently supported guest-exception publishers are eight instructions.
         exceptional_termination_instructions: instruction_count(&overflow_code)?,
-        termination_entry_pcs: vec![normal_start, overflow_start, underflow_start],
+        termination_entry_pcs,
     })
 }
 
@@ -602,12 +620,20 @@ pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, C
         });
     }
     validate_generated_code(ENTRY_PC, machine_code.len())?;
+    let termination_entry_pcs = vec![normal_start, overflow_start];
+    verify_final_image(
+        &machine_code,
+        std::iter::repeat_n(Fragment::Push1, immediates.len()),
+        PublisherLayout::PushOnly,
+        &termination_entry_pcs,
+    )
+    .map_err(verification_error)?;
     Ok(CompiledRv64Program {
         assembly,
         machine_code,
         normal_termination_instructions: instruction_count(&normal_code)?,
         exceptional_termination_instructions: instruction_count(&overflow_code)?,
-        termination_entry_pcs: vec![normal_start, overflow_start],
+        termination_entry_pcs,
     })
 }
 
@@ -654,6 +680,12 @@ fn underflow_exit_assembly() -> String {
 fn assembly_error(error: impl fmt::Debug) -> CompileError {
     CompileError::Link {
         description: format!("RV64 assembly failed: {error:?}"),
+    }
+}
+
+fn verification_error(error: String) -> CompileError {
+    CompileError::Link {
+        description: format!("RV64 final-image verification failed: {error}"),
     }
 }
 

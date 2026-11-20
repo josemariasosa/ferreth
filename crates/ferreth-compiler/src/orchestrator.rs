@@ -21,6 +21,7 @@ use crate::{
         },
         memory::{LayoutError, ENTRY_PC, EVM_STACK_CAPACITY, EVM_STACK_REGION, EXIT_PC},
         opcodes::{add::generate_guest_add, sub::generate_guest_sub},
+        verify::{verify_final_image, Fragment, PublisherLayout},
     },
 };
 
@@ -478,11 +479,21 @@ fn link_guest_arithmetic(
         });
     }
     crate::rv64::memory::validate_generated_code(ENTRY_PC, machine_code.len())?;
+    let termination_entry_pcs = vec![normal_start, underflow_start];
+    verify_final_image(
+        &machine_code,
+        [Fragment::Arithmetic],
+        PublisherLayout::IsolatedArithmetic,
+        &termination_entry_pcs,
+    )
+    .map_err(|error| OrchestratorError::Link {
+        description: format!("RV64 final-image verification failed: {error}"),
+    })?;
 
     Ok(LinkedGuestArithmetic {
         assembly,
         machine_code,
-        termination_entry_pcs: vec![normal_start, underflow_start],
+        termination_entry_pcs,
     })
 }
 

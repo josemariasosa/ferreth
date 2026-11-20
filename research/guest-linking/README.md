@@ -120,3 +120,11 @@ linking and publisher ownership, records experimentally observed assembler and
 Ferreth capacity limits, identifies compatibility decisions, and defines
 bounded implementation and rollback gates. It does not authorize or implement
 production migration.
+
+## Production final-image verification
+
+The [Phase 2.1 report](phase-2.1-final-image-verification.md) records the
+private verifier at all three production linker checkpoints, its fixed-layout
+contract, and the before/after artifact and execution comparison. The
+Phase 2.1 gate passed with the four expected LF-026 failures still active.
+Phase 2.2 awaits maintainer authorization.

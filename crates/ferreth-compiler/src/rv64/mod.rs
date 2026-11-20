@@ -5,3 +5,4 @@ pub mod executor;
 pub mod guest;
 pub mod memory;
 pub mod opcodes;
+pub(crate) mod verify;
