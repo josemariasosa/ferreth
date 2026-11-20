@@ -111,3 +111,12 @@ audit run. Baseline discovery should contain 135 tests and RED discovery
 should contain 141.
 [Workspace inventory](../../runs/phase-0/workspace-verification.json) ·
 [Engineering log](../../docs/bitacora/2026-11-20.md)
+
+## Production migration readiness
+
+Phase 1.7 recommends symbolic guest composition, subject to maintainer review.
+The [Phase 2.0 readiness report](phase-2.0-readiness.md) inventories current
+linking and publisher ownership, records experimentally observed assembler and
+Ferreth capacity limits, identifies compatibility decisions, and defines
+bounded implementation and rollback gates. It does not authorize or implement
+production migration.
