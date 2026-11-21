@@ -545,3 +545,42 @@ fn repeated_arithmetic_rejects_colliding_entry_and_leaf_names() {
         Err(CompileError::Link { .. })
     ));
 }
+
+#[test]
+fn isolated_arithmetic_images_match_symbolic_singletons() {
+    use crate::orchestrator::{execute_guest_add, execute_guest_sub};
+    for (bytecode, execute) in [
+        (ADD, execute_guest_add as fn(U256, U256) -> _),
+        (SUB, execute_guest_sub),
+    ] {
+        let isolated = execute(U256::from(2), U256::from(3)).unwrap();
+        let symbolic = compile(&[bytecode]).unwrap();
+        assert_eq!(isolated.machine_code(), symbolic.machine_code());
+        assert_ne!(isolated.assembly(), symbolic.assembly());
+        assert_eq!(
+            symbolic.termination_entry_pcs(),
+            [ENTRY_PC + 172, ENTRY_PC + 200]
+        );
+    }
+}
+
+#[test]
+fn replays_cancun_multilimb_dup_and_stopped_sub_vectors() {
+    // Same inputs as directed_rc_programs_match_revm_cancun.
+    parity(
+        &[0x60, 1, 0x60, 0, SUB, DUP1],
+        &[],
+        &[U256::MAX, U256::MAX],
+        76,
+        &[(88, 2)],
+        None,
+    );
+    parity(
+        &[0x60, 5, DUP1, SUB, 0],
+        &[],
+        &[U256::ZERO],
+        67,
+        &[(108, 2)],
+        None,
+    );
+}

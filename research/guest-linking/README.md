@@ -168,3 +168,11 @@ private ADD/SUB fragments, independent local call and return checks,
 exact core identity, and runtime parity with the public legacy route.
 The implementation followed the [Phase 2.3c plan](phase-2.3c-plan.md)
 and now awaits maintainer review.
+
+## Private integration and public cutover review
+
+The [Phase 2.3d audit](phase-2.3d-integration-review.md) records the six-opcode
+matrix, RF-023 through RF-025, frozen verification and isolated arithmetic
+image identity. The [Phase 2.4 plan](phase-2.4-cutover-plan.md) identifies
+the routing and public compatibility decisions awaiting maintainer review.
+The legacy public route still reproduces LF-026.

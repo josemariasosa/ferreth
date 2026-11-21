@@ -391,8 +391,13 @@ the ADR-001 executable bound apply independently.
 The [Phase 2.3c report](../../research/guest-linking/phase-2.3c-symbolic-arithmetic.md)
 records RF-022 and the private ADD/SUB integration, including exact leaf
 identity, fixed-layout call/return verification and directed runtime parity.
-Phase 2.3c awaits maintainer review. Public compilation remains on the legacy
-routes, with the four LF-026 controls still active.
+The [Phase 2.3d integration review](../../research/guest-linking/phase-2.3d-integration-review.md)
+records corrected unsupported-PUSH error precedence (RF-023), required publisher
+PC validation (RF-024), and declaration-site ownership (RF-025). All six private
+opcodes passed the gate. The isolated arithmetic singleton images already match
+in full. Public compilation still reproduces the four LF-026 controls.
+The [bounded Phase 2.4 plan](../../research/guest-linking/phase-2.4-cutover-plan.md)
+awaits maintainer review of public artifact metadata and routing.
 
 - Implement only the reviewed mechanism from Phase 1. Give one composer ownership of fragment placement, external transfers and publisher composition. Keep one consistent publication implementation for all applicable guests.
 - Route bytecode and sequence compilation through that composer. Route isolated ADD/SUB through ordinary single-op guest compilation with seeded initial stack, following POP/DUP1. Preserve useful convenience APIs as thin adapters where possible.

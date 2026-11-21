@@ -324,3 +324,16 @@ fn verifies_fragment_and_publisher_inventory_and_publication_roles() {
         "{error}"
     );
 }
+
+#[test]
+fn declared_publisher_at_zero_cannot_hide_a_missing_body() {
+    let program = compile_evm_bytecode(&[]).unwrap();
+    let normal_only = &program.machine_code()[..28];
+    for (layout, pcs) in [
+        (PublisherLayout::Symbolic, vec![0]),
+        (PublisherLayout::SymbolicNormalOverflow, vec![ENTRY_PC, 0]),
+    ] {
+        let bytes = if pcs.len() == 1 { &[][..] } else { normal_only };
+        assert!(verify_final_image(bytes, [], layout, &pcs).is_err());
+    }
+}

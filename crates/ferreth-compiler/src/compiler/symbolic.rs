@@ -99,26 +99,28 @@ fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
         .iter()
         .enumerate()
         .map(|(index, instruction)| {
-            let continuation = if index + 1 < instructions.len() {
-                match &instructions[index + 1] {
-                    DecodedInstruction::Stop { .. } => "guest_stop".to_owned(),
-                    DecodedInstruction::Push { opcode: 0x60, .. } => {
-                        format!("guest_push1_{}", index + 1)
+            let continuation = || {
+                Ok(if index + 1 < instructions.len() {
+                    match &instructions[index + 1] {
+                        DecodedInstruction::Stop { .. } => "guest_stop".to_owned(),
+                        DecodedInstruction::Push { opcode: 0x60, .. } => {
+                            format!("guest_push1_{}", index + 1)
+                        }
+                        DecodedInstruction::Pop { .. } => format!("guest_pop_{}", index + 1),
+                        DecodedInstruction::Dup1 { .. } => format!("guest_dup1_{}", index + 1),
+                        DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => {
+                            format!("guest_arithmetic_{}", index + 1)
+                        }
+                        DecodedInstruction::Push { opcode, offset, .. } => {
+                            return Err(CompileError::UnsupportedInstruction {
+                                opcode: *opcode,
+                                offset: *offset,
+                            })
+                        }
                     }
-                    DecodedInstruction::Pop { .. } => format!("guest_pop_{}", index + 1),
-                    DecodedInstruction::Dup1 { .. } => format!("guest_dup1_{}", index + 1),
-                    DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => {
-                        format!("guest_arithmetic_{}", index + 1)
-                    }
-                    DecodedInstruction::Push { opcode, offset, .. } => {
-                        return Err(CompileError::UnsupportedInstruction {
-                            opcode: *opcode,
-                            offset: *offset,
-                        })
-                    }
-                }
-            } else {
-                PublisherRole::Normal.label().to_owned()
+                } else {
+                    PublisherRole::Normal.label().to_owned()
+                })
             };
             match instruction {
                 DecodedInstruction::Stop { .. } => Ok(stop_fragment()),
@@ -133,10 +135,12 @@ fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
                         offset: *offset,
                     })
                 }
-                DecodedInstruction::Add { .. } => Ok(generate_symbolic_add(index, continuation)),
-                DecodedInstruction::Sub { .. } => Ok(generate_symbolic_sub(index, continuation)),
-                DecodedInstruction::Pop { .. } => Ok(generate_symbolic_pop(index, continuation)),
-                DecodedInstruction::Dup1 { .. } => Ok(generate_symbolic_dup1(index, continuation)),
+                DecodedInstruction::Add { .. } => Ok(generate_symbolic_add(index, continuation()?)),
+                DecodedInstruction::Sub { .. } => Ok(generate_symbolic_sub(index, continuation()?)),
+                DecodedInstruction::Pop { .. } => Ok(generate_symbolic_pop(index, continuation()?)),
+                DecodedInstruction::Dup1 { .. } => {
+                    Ok(generate_symbolic_dup1(index, continuation()?))
+                }
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -233,8 +237,11 @@ fn verified_program(
             .ok_or_else(|| verification_error(format!("missing {role:?} publisher")))
     };
 
+    let normal_pc = publisher_pc(PublisherRole::Normal)?;
+    let mut fragment_end = normal_pc;
     let mut declarations = Vec::new();
-    for fragment in fragments {
+    // Walk back from Normal so the next entry bounds each owner's sites.
+    for fragment in fragments.iter().rev() {
         let entry_pc = image.label_address(&fragment.entry_symbol).ok_or_else(|| {
             verification_error(format!(
                 "missing fragment entry label {}",
@@ -251,21 +258,21 @@ fn verified_program(
                     ))
                 })?;
             declarations.push(DeclaredTransfer {
-                site_pc: transfer_site_pc(entry_pc, declaration.site_word)?,
+                site_pc: transfer_site_pc(entry_pc, fragment_end, declaration.site_word)?,
                 target_pc,
                 kind: declaration.kind,
             });
         }
         for declaration in &fragment.external_references {
             declarations.push(DeclaredTransfer {
-                site_pc: transfer_site_pc(entry_pc, declaration.site_word)?,
+                site_pc: transfer_site_pc(entry_pc, fragment_end, declaration.site_word)?,
                 target_pc: publisher_pc(declaration.role)?,
                 kind: declaration.kind,
             });
         }
+        fragment_end = entry_pc;
     }
 
-    let normal_pc = publisher_pc(PublisherRole::Normal)?;
     verify_declared_transfers(image.bytes(), normal_pc, &declarations)
         .map_err(verification_error)?;
     let symbolic_layout = if publishers == vec![PublisherRole::Normal] {
@@ -316,11 +323,17 @@ fn verified_program(
     })
 }
 
-fn transfer_site_pc(entry_pc: u64, site_word: u64) -> Result<u64, CompileError> {
-    site_word
+fn transfer_site_pc(entry_pc: u64, fragment_end: u64, site_word: u64) -> Result<u64, CompileError> {
+    let pc = site_word
         .checked_mul(RV64_INSTRUCTION_SIZE)
         .and_then(|offset| entry_pc.checked_add(offset))
-        .ok_or_else(|| verification_error("transfer site address overflow".to_owned()))
+        .ok_or_else(|| verification_error("transfer site address overflow".to_owned()))?;
+    if pc >= fragment_end {
+        return Err(verification_error(format!(
+            "transfer site {pc:#x} outside its owning fragment [{entry_pc:#x}, {fragment_end:#x})"
+        )));
+    }
+    Ok(pc)
 }
 
 #[cfg(test)]

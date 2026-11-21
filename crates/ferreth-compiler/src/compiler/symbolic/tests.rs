@@ -705,3 +705,41 @@ fn push1_capacity_boundary() {
         println!("pushes={pushes} stop={stop} source_bytes={source_bytes} labels={labels} asm=ok image_bytes={size} layout_accepted={accepted}");
     }
 }
+
+#[test]
+fn unsupported_push_diagnostics_follow_decoded_order() {
+    for input in [&[0x61, 0, 1, 0x62][..], &[0x50, 0x61, 0, 1, 0x62]] {
+        let expected = CompileError::UnsupportedInstruction {
+            opcode: 0x61,
+            offset: input.len() - 4,
+        };
+        assert_eq!(compile_evm_bytecode(input), Err(expected.clone()));
+        assert_eq!(compile(input), Err(expected));
+    }
+}
+
+#[test]
+fn matching_pop_continuation_cannot_skip_the_next_fragment() {
+    let fragments = [
+        generate_symbolic_pop(0, "guest_stop".to_owned()),
+        generate_symbolic_pop(1, "guest_stop".to_owned()),
+        stop_fragment(),
+    ];
+    let error = compose(&fragments).unwrap_err();
+    assert!(
+        matches!(error, CompileError::Link { ref description } if description.contains("targets 0x80000020, expected 0x80000010")),
+        "{error}"
+    );
+}
+
+#[test]
+fn declaration_site_must_belong_to_its_fragment() {
+    let mut fragments = make_fragments(&[2, 3], false);
+    let mut stolen = fragments[1].external_references.remove(0);
+    stolen.site_word += 11;
+    fragments[0].external_references.push(stolen);
+    let error = compose(&fragments).unwrap_err();
+    assert!(
+        matches!(error, CompileError::Link { description } if description.contains("outside its owning fragment"))
+    );
+}

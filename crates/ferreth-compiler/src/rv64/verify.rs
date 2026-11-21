@@ -162,28 +162,18 @@ pub(crate) fn verify_final_image(
     for fragment in fragments {
         pc = fragment.verify(&image, pc, normal, overflow, underflow)?;
     }
-    let publishers: Vec<(u64, Publisher)> = match layout {
+    let underflow = underflow.map(|entry| (entry, Publisher::Underflow));
+    let overflow = overflow.map(|entry| (entry, Publisher::Overflow));
+    let exceptional = match layout {
         PublisherLayout::Symbolic
         | PublisherLayout::SymbolicNormalOverflow
         | PublisherLayout::SymbolicNormalUnderflow
-        | PublisherLayout::SymbolicNormalUnderflowOverflow => [
-            (normal, Publisher::Normal),
-            (underflow.unwrap_or(0), Publisher::Underflow),
-            (overflow.unwrap_or(0), Publisher::Overflow),
-        ]
-        .into_iter()
-        .filter(|(entry, _)| *entry != 0)
-        .collect(),
-        _ => [
-            (normal, Publisher::Normal),
-            (overflow.unwrap_or(0), Publisher::Overflow),
-            (underflow.unwrap_or(0), Publisher::Underflow),
-        ]
-        .into_iter()
-        .filter(|(entry, _)| *entry != 0)
-        .collect(),
+        | PublisherLayout::SymbolicNormalUnderflowOverflow => [underflow, overflow],
+        _ => [overflow, underflow],
     };
-    for (entry, publisher) in publishers {
+    for (entry, publisher) in
+        std::iter::once((normal, Publisher::Normal)).chain(exceptional.into_iter().flatten())
+    {
         if entry != pc {
             return Err(format!(
                 "{publisher:?} publisher PC {entry:#x}, expected {pc:#x}"
