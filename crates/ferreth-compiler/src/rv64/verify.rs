@@ -28,6 +28,9 @@ pub(crate) enum Fragment {
 pub(crate) enum PublisherLayout {
     PushOnly,
     Symbolic,
+    SymbolicNormalOverflow,
+    SymbolicNormalUnderflow,
+    SymbolicNormalUnderflowOverflow,
     Mixed,
     IsolatedArithmetic,
 }
@@ -43,7 +46,15 @@ pub(crate) fn verify_final_image(
     let (normal, overflow, underflow) = match (layout, publisher_pcs) {
         (PublisherLayout::PushOnly, &[normal, overflow]) => (normal, Some(overflow), None),
         (PublisherLayout::Symbolic, &[normal]) => (normal, None, None),
-        (PublisherLayout::Symbolic, &[normal, overflow]) => (normal, Some(overflow), None),
+        (PublisherLayout::SymbolicNormalOverflow, &[normal, overflow]) => {
+            (normal, Some(overflow), None)
+        }
+        (PublisherLayout::SymbolicNormalUnderflow, &[normal, underflow]) => {
+            (normal, None, Some(underflow))
+        }
+        (PublisherLayout::SymbolicNormalUnderflowOverflow, &[normal, underflow, overflow]) => {
+            (normal, Some(overflow), Some(underflow))
+        }
         (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
             (normal, Some(overflow), Some(underflow))
         }
@@ -60,20 +71,34 @@ pub(crate) fn verify_final_image(
     for fragment in fragments {
         pc = fragment.verify(&image, pc, normal, overflow, underflow)?;
     }
-    let publishers = [
-        (Some(normal), Publisher::Normal),
-        (overflow, Publisher::Overflow),
-        (underflow, Publisher::Underflow),
-    ];
+    let publishers: Vec<(u64, Publisher)> = match layout {
+        PublisherLayout::Symbolic
+        | PublisherLayout::SymbolicNormalOverflow
+        | PublisherLayout::SymbolicNormalUnderflow
+        | PublisherLayout::SymbolicNormalUnderflowOverflow => [
+            (normal, Publisher::Normal),
+            (underflow.unwrap_or(0), Publisher::Underflow),
+            (overflow.unwrap_or(0), Publisher::Overflow),
+        ]
+        .into_iter()
+        .filter(|(entry, _)| *entry != 0)
+        .collect(),
+        _ => [
+            (normal, Publisher::Normal),
+            (overflow.unwrap_or(0), Publisher::Overflow),
+            (underflow.unwrap_or(0), Publisher::Underflow),
+        ]
+        .into_iter()
+        .filter(|(entry, _)| *entry != 0)
+        .collect(),
+    };
     for (entry, publisher) in publishers {
-        if let Some(entry) = entry {
-            if entry != pc {
-                return Err(format!(
-                    "{publisher:?} publisher PC {entry:#x}, expected {pc:#x}"
-                ));
-            }
-            pc = publisher.verify(&image, pc)?;
+        if entry != pc {
+            return Err(format!(
+                "{publisher:?} publisher PC {entry:#x}, expected {pc:#x}"
+            ));
         }
+        pc = publisher.verify(&image, pc)?;
     }
     if pc - ENTRY_PC != bytes.len() as u64 {
         return Err(format!(

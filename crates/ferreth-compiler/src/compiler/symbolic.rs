@@ -9,7 +9,9 @@ use crate::{
     decode_detailed,
     rv64::{
         memory::{validate_generated_code, ENTRY_PC, RV64_INSTRUCTION_SIZE},
-        opcodes::push::generate_symbolic_push1,
+        opcodes::{
+            dup::generate_symbolic_dup1, pop::generate_symbolic_pop, push::generate_symbolic_push1,
+        },
         verify::{
             verify_declared_transfers, verify_final_image, DeclaredTransfer, Fragment,
             PublisherLayout, Transfer,
@@ -21,6 +23,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PublisherRole {
     Normal,
+    Underflow,
     Overflow,
 }
 
@@ -28,6 +31,7 @@ impl PublisherRole {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Normal => "normal_exit",
+            Self::Underflow => "binary_stack_underflow_exit",
             Self::Overflow => "push1_stack_overflow_exit",
         }
     }
@@ -35,6 +39,7 @@ impl PublisherRole {
     fn publisher(self) -> Publisher {
         match self {
             Self::Normal => Publisher::Normal,
+            Self::Underflow => Publisher::Underflow,
             Self::Overflow => Publisher::Overflow,
         }
     }
@@ -88,35 +93,65 @@ impl SymbolicFragment {
 }
 
 fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
-    let fragments = decode_detailed(bytecode)?
-        .into_iter()
+    let instructions = decode_detailed(bytecode)?;
+    let fragments = instructions
+        .iter()
         .enumerate()
-        .map(|(index, instruction)| match instruction {
-            DecodedInstruction::Stop { .. } => Ok(stop_fragment()),
-            DecodedInstruction::Push {
-                value,
-                opcode: 0x60,
-                ..
-            } => Ok(generate_symbolic_push1(value.to::<u8>(), index)),
-            DecodedInstruction::Push { opcode, offset, .. } => {
-                Err(CompileError::UnsupportedInstruction { opcode, offset })
+        .map(|(index, instruction)| {
+            let continuation = if index + 1 < instructions.len() {
+                match &instructions[index + 1] {
+                    DecodedInstruction::Stop { .. } => "guest_stop".to_owned(),
+                    DecodedInstruction::Push { opcode: 0x60, .. } => {
+                        format!("guest_push1_{}", index + 1)
+                    }
+                    DecodedInstruction::Pop { .. } => format!("guest_pop_{}", index + 1),
+                    DecodedInstruction::Dup1 { .. } => format!("guest_dup1_{}", index + 1),
+                    DecodedInstruction::Add { offset } => {
+                        return Err(CompileError::UnsupportedInstruction {
+                            opcode: 0x01,
+                            offset: *offset,
+                        })
+                    }
+                    DecodedInstruction::Sub { offset } => {
+                        return Err(CompileError::UnsupportedInstruction {
+                            opcode: 0x03,
+                            offset: *offset,
+                        })
+                    }
+                    DecodedInstruction::Push { opcode, offset, .. } => {
+                        return Err(CompileError::UnsupportedInstruction {
+                            opcode: *opcode,
+                            offset: *offset,
+                        })
+                    }
+                }
+            } else {
+                PublisherRole::Normal.label().to_owned()
+            };
+            match instruction {
+                DecodedInstruction::Stop { .. } => Ok(stop_fragment()),
+                DecodedInstruction::Push {
+                    value,
+                    opcode: 0x60,
+                    ..
+                } => Ok(generate_symbolic_push1(value.to::<u8>(), index)),
+                DecodedInstruction::Push { opcode, offset, .. } => {
+                    Err(CompileError::UnsupportedInstruction {
+                        opcode: *opcode,
+                        offset: *offset,
+                    })
+                }
+                DecodedInstruction::Add { offset } => Err(CompileError::UnsupportedInstruction {
+                    opcode: 0x01,
+                    offset: *offset,
+                }),
+                DecodedInstruction::Sub { offset } => Err(CompileError::UnsupportedInstruction {
+                    opcode: 0x03,
+                    offset: *offset,
+                }),
+                DecodedInstruction::Pop { .. } => Ok(generate_symbolic_pop(index, continuation)),
+                DecodedInstruction::Dup1 { .. } => Ok(generate_symbolic_dup1(index, continuation)),
             }
-            DecodedInstruction::Add { offset } => Err(CompileError::UnsupportedInstruction {
-                opcode: 0x01,
-                offset,
-            }),
-            DecodedInstruction::Sub { offset } => Err(CompileError::UnsupportedInstruction {
-                opcode: 0x03,
-                offset,
-            }),
-            DecodedInstruction::Pop { offset } => Err(CompileError::UnsupportedInstruction {
-                opcode: 0x50,
-                offset,
-            }),
-            DecodedInstruction::Dup1 { offset } => Err(CompileError::UnsupportedInstruction {
-                opcode: 0x80,
-                offset,
-            }),
         })
         .collect::<Result<Vec<_>, _>>()?;
     compose(&fragments)
@@ -247,10 +282,29 @@ fn verified_program(
     let normal_pc = publisher_pc(PublisherRole::Normal)?;
     verify_declared_transfers(image.bytes(), normal_pc, &declarations)
         .map_err(verification_error)?;
+    let symbolic_layout = if publishers == vec![PublisherRole::Normal] {
+        PublisherLayout::Symbolic
+    } else if publishers == vec![PublisherRole::Normal, PublisherRole::Underflow] {
+        PublisherLayout::SymbolicNormalUnderflow
+    } else if publishers == vec![PublisherRole::Normal, PublisherRole::Overflow] {
+        PublisherLayout::SymbolicNormalOverflow
+    } else if publishers
+        == vec![
+            PublisherRole::Normal,
+            PublisherRole::Underflow,
+            PublisherRole::Overflow,
+        ]
+    {
+        PublisherLayout::SymbolicNormalUnderflowOverflow
+    } else {
+        return Err(verification_error(
+            "invalid symbolic publisher inventory".to_owned(),
+        ));
+    };
     verify_final_image(
         image.bytes(),
         fragments.iter().map(|fragment| fragment.fixed_layout),
-        PublisherLayout::Symbolic,
+        symbolic_layout,
         &publisher_pcs,
     )
     .map_err(verification_error)?;

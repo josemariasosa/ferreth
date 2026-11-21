@@ -530,6 +530,262 @@ fn declarations_and_namespaces_reject_incomplete_or_corrupted_images() {
 }
 
 #[test]
+fn pop_dup1_exceptional_publication() {
+    let pop = compose(&[generate_symbolic_pop(
+        0,
+        PublisherRole::Normal.label().to_owned(),
+    )])
+    .unwrap();
+    let mut executor = RvemuExecutor::new().unwrap();
+    executor.load_code(pop.machine_code()).unwrap();
+    executor
+        .write_memory(pop.exit_pc(), &0x0010_0073_u32.to_le_bytes())
+        .unwrap();
+    initialize_guest_state(&mut executor).unwrap();
+    let underflow_pc = pop.termination_entry_pcs()[1];
+    let body = executor
+        .execute_until(
+            ENTRY_PC,
+            &[underflow_pc, pop.exit_pc()],
+            pop.instruction_limit(),
+        )
+        .unwrap();
+    assert_eq!(body.exit_pc, underflow_pc);
+    assert_eq!(body.executed_instructions, 2);
+    let termination = executor
+        .execute_until(underflow_pc, &[pop.exit_pc()], 8)
+        .unwrap();
+    assert_eq!(termination.exit_pc, pop.exit_pc());
+    let report = ExecutionReport {
+        exit_pc: termination.exit_pc,
+        executed_instructions: body.executed_instructions + termination.executed_instructions,
+    };
+    let result = read_guest_result(&mut executor, &report).unwrap();
+    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
+    assert_eq!(result.exception_code(), 2);
+    assert_eq!(result.final_s1(), EVM_STACK_REGION.start());
+    assert!(result.stack().is_empty());
+
+    let dup = compose(&[generate_symbolic_dup1(
+        0,
+        PublisherRole::Normal.label().to_owned(),
+    )])
+    .unwrap();
+    let mut executor = RvemuExecutor::new().unwrap();
+    executor.load_code(dup.machine_code()).unwrap();
+    executor
+        .write_memory(dup.exit_pc(), &0x0010_0073_u32.to_le_bytes())
+        .unwrap();
+    initialize_guest_state(&mut executor).unwrap();
+    let underflow_pc = dup.termination_entry_pcs()[1];
+    let body = executor
+        .execute_until(
+            ENTRY_PC,
+            &[underflow_pc, dup.exit_pc()],
+            dup.instruction_limit(),
+        )
+        .unwrap();
+    assert_eq!(body.exit_pc, underflow_pc);
+    assert_eq!(body.executed_instructions, 2);
+    let termination = executor
+        .execute_until(underflow_pc, &[dup.exit_pc()], 8)
+        .unwrap();
+    assert_eq!(termination.exit_pc, dup.exit_pc());
+    let report = ExecutionReport {
+        exit_pc: termination.exit_pc,
+        executed_instructions: body.executed_instructions + termination.executed_instructions,
+    };
+    let result = read_guest_result(&mut executor, &report).unwrap();
+    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
+    assert_eq!(result.exception_code(), 2);
+    assert_eq!(result.final_s1(), EVM_STACK_REGION.start());
+    assert!(result.stack().is_empty());
+
+    let full = full_stack();
+    let mut executor = RvemuExecutor::new().unwrap();
+    executor.load_code(dup.machine_code()).unwrap();
+    executor
+        .write_memory(dup.exit_pc(), &0x0010_0073_u32.to_le_bytes())
+        .unwrap();
+    initialize_guest_state(&mut executor).unwrap();
+    for (slot, &word) in full.iter().enumerate() {
+        write_evm_word(&mut executor, slot, word).unwrap();
+    }
+    executor.write_register(
+        IntegerRegister::EVM_STACK_NEXT_FREE,
+        EVM_STACK_REGION.start() + full.len() as u64 * EVM_WORD_SIZE,
+    );
+    let overflow_pc = *dup.termination_entry_pcs().last().unwrap();
+    let body = executor
+        .execute_until(
+            ENTRY_PC,
+            &[overflow_pc, dup.exit_pc()],
+            dup.instruction_limit(),
+        )
+        .unwrap();
+    assert_eq!(body.exit_pc, overflow_pc);
+    assert_eq!(body.executed_instructions, 5);
+    let termination = executor
+        .execute_until(overflow_pc, &[dup.exit_pc()], 8)
+        .unwrap();
+    assert_eq!(termination.exit_pc, dup.exit_pc());
+    let report = ExecutionReport {
+        exit_pc: termination.exit_pc,
+        executed_instructions: body.executed_instructions + termination.executed_instructions,
+    };
+    let result = read_guest_result(&mut executor, &report).unwrap();
+    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
+    assert_eq!(result.exception_code(), 1);
+    assert_eq!(result.final_s1(), EVM_STACK_REGION.end());
+    assert_eq!(result.stack(), full);
+}
+
+#[test]
+#[ignore = "bounded opt-in POP/DUP1 capacity probe"]
+fn pop_dup1_capacity_probe() {
+    for count in [33_332, 33_333, 65_535, 65_536] {
+        let fragments = (0..count)
+            .map(|index| {
+                let continuation = if index + 1 == count {
+                    PublisherRole::Normal.label().to_owned()
+                } else {
+                    format!("guest_pop_{}", index + 1)
+                };
+                generate_symbolic_pop(index, continuation)
+            })
+            .collect::<Vec<_>>();
+        let publishers = publisher_inventory(&fragments);
+        let source = emit(&fragments, &publishers);
+        match assemble_image(&source) {
+            Ok(image) => println!(
+                "POP fragments={count} labels_per_fragment=2 total_labels={} source_bytes={} assembled_image_bytes={} ferreth_accepts={}",
+                image.labels().len(),
+                source.len(),
+                image.len(),
+                verified_program(&fragments, &publishers, source, image).is_ok()
+            ),
+            Err(error) => println!(
+                "POP fragments={count} labels_per_fragment=2 source_bytes={} assembler={error}",
+                source.len()
+            ),
+        }
+    }
+
+    for count in [33_331, 33_332, 33_333] {
+        let fragments = (0..count)
+            .map(|index| {
+                let continuation = if index + 1 == count {
+                    PublisherRole::Normal.label().to_owned()
+                } else {
+                    format!("guest_dup1_{}", index + 1)
+                };
+                generate_symbolic_dup1(index, continuation)
+            })
+            .collect::<Vec<_>>();
+        let publishers = publisher_inventory(&fragments);
+        let source = emit(&fragments, &publishers);
+        match assemble_image(&source) {
+            Ok(image) => println!(
+                "DUP1 fragments={count} labels_per_fragment=3 total_labels={} source_bytes={} assembled_image_bytes={} ferreth_accepts={}",
+                image.labels().len(),
+                source.len(),
+                image.len(),
+                verified_program(&fragments, &publishers, source, image).is_ok()
+            ),
+            Err(error) => println!(
+                "DUP1 fragments={count} labels_per_fragment=3 source_bytes={} assembler={error}",
+                source.len()
+            ),
+        }
+    }
+}
+
+#[test]
+fn pop_dup1_inventory_and_mixed_runtime() {
+    for (input, roles) in [
+        (
+            &[0x50][..],
+            vec![PublisherRole::Normal, PublisherRole::Underflow],
+        ),
+        (
+            &[0x80][..],
+            vec![
+                PublisherRole::Normal,
+                PublisherRole::Underflow,
+                PublisherRole::Overflow,
+            ],
+        ),
+        (
+            &[0x60, 2, 0x50][..],
+            vec![
+                PublisherRole::Normal,
+                PublisherRole::Underflow,
+                PublisherRole::Overflow,
+            ],
+        ),
+    ] {
+        let instructions = decode_detailed(input).unwrap();
+        let mut fragments = Vec::new();
+        for (index, instruction) in instructions.iter().enumerate() {
+            let continuation = if index + 1 < instructions.len() {
+                match &instructions[index + 1] {
+                    DecodedInstruction::Push { opcode: 0x60, .. } => {
+                        format!("guest_push1_{}", index + 1)
+                    }
+                    DecodedInstruction::Pop { .. } => format!("guest_pop_{}", index + 1),
+                    DecodedInstruction::Dup1 { .. } => format!("guest_dup1_{}", index + 1),
+                    DecodedInstruction::Stop { .. } => "guest_stop".to_owned(),
+                    _ => unreachable!(),
+                }
+            } else {
+                PublisherRole::Normal.label().to_owned()
+            };
+            match instruction {
+                DecodedInstruction::Push { value, .. } => {
+                    fragments.push(generate_symbolic_push1(value.to::<u8>(), index))
+                }
+                DecodedInstruction::Pop { .. } => {
+                    fragments.push(generate_symbolic_pop(index, continuation))
+                }
+                DecodedInstruction::Dup1 { .. } => {
+                    fragments.push(generate_symbolic_dup1(index, continuation))
+                }
+                DecodedInstruction::Stop { .. } => fragments.push(stop_fragment()),
+                _ => unreachable!(),
+            }
+        }
+        let candidate = compose(&fragments).unwrap();
+        assert_eq!(publisher_inventory(&fragments), roles);
+        let round_trip = assemble_image(candidate.assembly()).unwrap();
+        assert_eq!(round_trip.bytes(), candidate.machine_code());
+    }
+
+    let pop = compose(&[generate_symbolic_pop(
+        0,
+        PublisherRole::Normal.label().to_owned(),
+    )])
+    .unwrap();
+    let pop_result = observe(&pop, &[U256::from(2)], 0, None);
+    assert_result(&pop_result, &[], false, 3);
+
+    let dup = compose(&[generate_symbolic_dup1(
+        0,
+        PublisherRole::Normal.label().to_owned(),
+    )])
+    .unwrap();
+    let dup_result = observe(&dup, &[U256::from(2)], 0, None);
+    assert_result(&dup_result, &[U256::from(2), U256::from(2)], false, 14);
+
+    let mixed = compose(&[
+        generate_symbolic_dup1(0, "guest_pop_1".to_owned()),
+        generate_symbolic_pop(1, PublisherRole::Normal.label().to_owned()),
+    ])
+    .unwrap();
+    let mixed_result = observe(&mixed, &[U256::from(2)], 0, None);
+    assert_result(&mixed_result, &[U256::from(2)], false, 17);
+}
+
+#[test]
 fn declaration_verifier_rejects_misalignment_and_executable_bounds() {
     let bytes = 0x0080_006f_u32.to_le_bytes();
     let declaration = [DeclaredTransfer {

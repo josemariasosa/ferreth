@@ -142,3 +142,11 @@ fragment/reference contract, declaration-derived publisher inventory, final
 image verification and retained PUSH1 fixed-layout gate. Only PUSH1 and STOP
 are symbolically generated; public compilation remains on the legacy routes.
 Phase 2.3a stops for maintainer review before mixed-opcode composition.
+
+## Symbolic POP and DUP1
+
+The [Phase 2.3b report](phase-2.3b-pop-dup1.md) records private symbolic POP
+and DUP1 fragments, declaration-derived three-role publisher inventory,
+fixed-layout and runtime verification, label-density probes, and workspace
+counts. Public compilation remains unchanged and the milestone stops for
+maintainer review.
