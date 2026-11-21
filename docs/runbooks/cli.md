@@ -71,8 +71,9 @@ arithmetic.
 
 The bytecode argument is pairs of hexadecimal digits. It must not include
 spaces or a `0x` prefix. A `STOP` ends decoding, so bytes after the first
-`STOP` are not interpreted. Unlike bytecode execution, isolated `PUSH1`
-commands print the generated RV64 assembly and machine-code words directly.
+`STOP` are not interpreted. Missing trailing PUSH immediate bytes are
+zero-padded. Unlike bytecode execution, isolated `PUSH1` commands print the
+generated RV64 assembly and machine-code words directly.
 
 ### `decode`
 
@@ -101,10 +102,10 @@ details.
   stderr and returns a failure status. Unsupported translation operations,
   missing flags, invalid numeric values, and malformed hex argument syntax
   follow this path.
-- **Unsupported opcode or truncated PUSH in bytecode:** prints
-  `bytecode decoding failed` with the offending byte offset and returns a
-  failure status. For example, `02` is an unsupported opcode, and `600561` is
-  a truncated `PUSH2`.
+- **Unsupported opcode in bytecode:** prints `bytecode decoding failed` with
+  the offending byte offset and returns a failure status. For example, `02`
+  is an unsupported opcode. Truncated PUSH immediates are zero-padded instead;
+  for example, `60` executes as `PUSH1 0`.
 - **Decoded but uncompiled PUSH widths:** `PUSH2`–`PUSH32` are recognized by
   the decoder, but RC reports an unsupported instruction when asked to
   compile them. For example, `cargo run -p ferreth-compiler -- execute
@@ -127,7 +128,7 @@ The decoder and compiler do not support the same instruction set:
 
 | Component | Supported opcodes |
 | --- | --- |
-| `execute` bytecode decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP` |
+| `execute` bytecode decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP`, `DUP1` |
 | RC bytecode compiler | `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1` |
 | Isolated guest operations (RO) | `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1` |
 

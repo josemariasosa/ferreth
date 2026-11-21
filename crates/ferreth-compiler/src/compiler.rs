@@ -1,8 +1,8 @@
 //! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, and `DUP1` operations.
 //!
-//! This is deliberately not an EVM decoder or a general compiler.  It links
-//! the reusable PUSH1 guest blocks into one executable and supplies the shared
-//! terminal paths required by the initial guest ABI.
+//! The bytecode entry point decodes the supported subset and composes symbolic
+//! guest fragments into one executable with the shared terminal paths required
+//! by the guest ABI. It is not a general EVM compiler.
 
 use std::fmt;
 

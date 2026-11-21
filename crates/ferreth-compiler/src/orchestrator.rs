@@ -1,9 +1,7 @@
-//! Minimal Rust orchestration for isolated RV64 guest opcode experiments.
+//! Rust orchestration for isolated opcodes and supported EVM bytecode.
 //!
-//! This module deliberately links only the code needed to run one `PUSH1`.
-//! The opcode body remains owned by [`crate::rv64::push`]; publication and
-//! exit code are runtime infrastructure that future isolated opcodes can
-//! share without putting termination policy in their generators.
+//! Both paths compile guest programs through the shared bytecode compiler and
+//! execute the resulting RV64 image with the guest state and result ABI.
 
 use std::fmt;
 
@@ -34,11 +32,6 @@ pub const EXECUTOR_IDENTITY: &str = "rvemu 0.0.11";
 
 pub use crate::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE;
 
-/// Explicitly provisional guest exception code for a rejected EVM stack push.
-///
-/// The accepted ABI reserves the exception-code field but not its production
-/// taxonomy.  Keep this small isolated constant until that taxonomy is
-/// decided, rather than treating it as a stable EVM error code.
 const EBREAK: u32 = 0x0010_0073;
 
 /// Dynamic RV64 instruction counts for one isolated guest execution.
@@ -125,7 +118,7 @@ impl fmt::Display for OrchestratorError {
             Self::GuestInitialization(error) => write!(f, "could not initialize guest: {error}"),
             Self::GuestMemory(error) => write!(f, "could not prepare guest stack: {error}"),
             Self::GuestResult(error) => write!(f, "could not retrieve guest result: {error}"),
-            Self::Compile(error) => write!(f, "could not compile PUSH1 program: {error}"),
+            Self::Compile(error) => write!(f, "could not compile EVM bytecode: {error}"),
             Self::InitialStackTooDeep { depth } => write!(
                 f,
                 "initial EVM stack depth {depth} exceeds capacity {EVM_STACK_CAPACITY}"
@@ -200,7 +193,7 @@ pub fn execute_guest_add(a: U256, b: U256) -> Result<OrchestratorResult, Orchest
 /// Executes the isolated guest `ADD` body with a caller-provided initial stack.
 ///
 /// This exposes the wrapper's guest-level underflow behavior for integration
-/// tests without adding ADD to the bytecode compiler or RC execution path.
+/// tests using the same bytecode compiler as the RC execution path.
 pub fn execute_guest_add_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
@@ -224,7 +217,7 @@ pub fn execute_guest_sub(a: U256, b: U256) -> Result<OrchestratorResult, Orchest
 /// Executes the isolated guest `SUB` body with a caller-provided initial stack.
 ///
 /// This is test-facing ABI setup that exposes the wrapper's guest-level
-/// underflow behavior without adding SUB to bytecode compilation or RC.
+/// underflow behavior using the shared bytecode compiler.
 pub fn execute_guest_sub_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {

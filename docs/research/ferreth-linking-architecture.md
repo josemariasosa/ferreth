@@ -5,6 +5,15 @@
 **Status:** Research completed for this session; implementation and ADR-002 approval remain pending.  
 **Resume:** Saturday, 2026-11-21. Start with the phases in section 8.
 
+> **Historical baseline:** Most architecture descriptions, recommendations,
+> and reproducibility commands below refer to the recorded 2026-11-19 revision.
+> Later phase updates describe their own checkpoints, not necessarily the current
+> checkout. The PUSH1-sequence APIs and CLI command have since been retired;
+> current production compilation goes through `compile_evm_bytecode` →
+> `symbolic::compile` → `compose`. Use the [CLI runbook](../runbooks/cli.md)
+> for supported commands. Historical commands remain evidence and may not run
+> on the current checkout.
+
 ## 1. Purpose and engineering position
 
 Ferreth is an experimental EVM bytecode-to-RV64 compiler. Its immediate objective is to establish a semantically correct, independently verifiable baseline for the supported Cancun instruction subset, against which later optimizations can be evaluated. Passing a finite corpus is evidence, not proof of complete EVM conformance.
