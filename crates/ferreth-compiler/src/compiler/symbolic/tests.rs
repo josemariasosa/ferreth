@@ -752,6 +752,65 @@ fn matching_pop_continuation_cannot_skip_the_next_fragment() {
 }
 
 #[test]
+fn matching_push1_continuation_cannot_skip_the_next_fragment() {
+    let mut fragments = make_fragments(&[1, 2, 3], false);
+    let original = "jal zero, push1_continue_0";
+    assert_eq!(fragments[0].source.matches(original).count(), 1);
+    fragments[0].source = fragments[0]
+        .source
+        .replace(original, "jal zero, guest_push1_2");
+    let mut continuations = fragments[0]
+        .local_transfers
+        .iter_mut()
+        .filter(|declaration| declaration.site_word == 9);
+    continuations.next().unwrap().target_symbol = "guest_push1_2".to_owned();
+    assert!(continuations.next().is_none());
+
+    let publishers = publisher_inventory(&fragments);
+    assert_eq!(publishers, [PublisherRole::Normal, PublisherRole::Overflow]);
+    let source = emit(&fragments, &publishers);
+    let image = assemble_image(&source).expect("mutated source must assemble");
+    let publisher_pcs: Vec<_> = publishers
+        .iter()
+        .map(|role| image.label_address(role.label()).unwrap())
+        .collect();
+    let normal_pc = publisher_pcs[0];
+    let mut fragment_end = normal_pc;
+    let mut declarations = Vec::new();
+    for fragment in fragments.iter().rev() {
+        let entry_pc = image.label_address(&fragment.entry_symbol).unwrap();
+        for declaration in &fragment.local_transfers {
+            declarations.push(DeclaredTransfer {
+                site_pc: transfer_site_pc(entry_pc, fragment_end, declaration.site_word).unwrap(),
+                target_pc: image.label_address(&declaration.target_symbol).unwrap(),
+                kind: declaration.kind,
+            });
+        }
+        for declaration in &fragment.external_references {
+            declarations.push(DeclaredTransfer {
+                site_pc: transfer_site_pc(entry_pc, fragment_end, declaration.site_word).unwrap(),
+                target_pc: image.label_address(declaration.role.label()).unwrap(),
+                kind: declaration.kind,
+            });
+        }
+        fragment_end = entry_pc;
+    }
+
+    verify_declared_transfers(image.bytes(), normal_pc, &declarations)
+        .expect("encoded transfers must agree with their declarations");
+    let error = verify_final_image(
+        image.bytes(),
+        fragments.iter().map(|fragment| fragment.fixed_layout),
+        PublisherLayout::SymbolicNormalOverflow,
+        &publisher_pcs,
+    )
+    .unwrap_err();
+    assert!(error.contains("targets"), "{error}");
+    assert!(error.contains("0x80000058"), "{error}");
+    assert!(error.contains("0x8000002c"), "{error}");
+}
+
+#[test]
 fn declaration_site_must_belong_to_its_fragment() {
     let mut fragments = make_fragments(&[2, 3], false);
     let mut stolen = fragments[1].external_references.remove(0);
