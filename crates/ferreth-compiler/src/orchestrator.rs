@@ -594,7 +594,7 @@ mod tests {
         let initial_stack = (0..EVM_STACK_CAPACITY)
             .map(|slot| U256::from(slot + 1))
             .collect::<Vec<_>>();
-        let result = execute_guest_push1_sequence_with_initial_stack(&[5], &initial_stack)
+        let result = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &initial_stack)
             .expect("full-stack PUSH1 reaches the guest exception exit");
 
         assert_eq!(
@@ -615,7 +615,8 @@ mod tests {
     #[test]
     fn push1_normal_execution_publishes_rv64_stack_results() {
         for immediate in [0, 5, u8::MAX] {
-            let result = execute_guest_push1(immediate).expect("PUSH1 completes through RV64");
+            let result = execute_guest_evm_bytecode(&[0x60, immediate])
+                .expect("PUSH1 completes through RV64");
 
             assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
             assert_eq!(result.guest_result().exception_code(), 0);
@@ -665,7 +666,7 @@ mod tests {
 
     #[test]
     fn linked_assembly_reassembles_to_the_loaded_machine_code() {
-        let linked = compile_push1_program(&[5]).expect("link PUSH1");
+        let linked = compile_evm_bytecode(&[0x60, 5]).expect("link PUSH1");
         assert_eq!(
             asm_rs::assemble(linked.assembly(), asm_rs::Arch::Rv64)
                 .expect("reassemble linked source"),

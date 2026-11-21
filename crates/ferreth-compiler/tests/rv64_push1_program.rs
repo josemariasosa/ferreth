@@ -2,14 +2,11 @@ use alloy_primitives::U256;
 use asm_rs::{assemble, Arch};
 use ferreth_compiler::{
     compiler::{
-        compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program,
+        compile_evm_bytecode, CompileError, CompiledRv64Program,
         PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
     },
     execution::random_u256,
-    orchestrator::{
-        execute_guest_evm_bytecode, execute_guest_evm_bytecode_with_initial_stack,
-        execute_guest_push1_sequence, execute_guest_push1_sequence_with_initial_stack,
-    },
+    orchestrator::{execute_guest_evm_bytecode, execute_guest_evm_bytecode_with_initial_stack},
     rv64::{
         guest::GuestExecutionStatus,
         memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION, EVM_WORD_SIZE},
@@ -21,7 +18,7 @@ use ferreth_compiler::{
 
 #[test]
 fn one_push1_produces_one_stack_word_and_publishes_s1() {
-    let result = execute_guest_push1_sequence(&[5]).expect("execute one PUSH1");
+    let result = execute_guest_evm_bytecode(&[0x60, 5]).expect("execute one PUSH1");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().stack(), &[U256::from(5)]);
     assert_eq!(
@@ -32,13 +29,15 @@ fn one_push1_produces_one_stack_word_and_publishes_s1() {
 
 #[test]
 fn two_and_three_push1_operations_preserve_insertion_order_in_one_run() {
-    let two = execute_guest_push1_sequence(&[5, 3]).expect("execute two PUSH1 operations");
+    let two =
+        execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("execute two PUSH1 operations");
     assert_eq!(two.guest_result().stack(), &[U256::from(5), U256::from(3)]);
     // 20 opcode instructions plus one shared seven-instruction normal exit,
     // rather than two separately executed 17-instruction programs.
     assert_eq!(two.instruction_metrics().total(), 27);
 
-    let three = execute_guest_push1_sequence(&[1, 2, 3]).expect("execute three PUSH1 operations");
+    let three = execute_guest_evm_bytecode(&[0x60, 1, 0x60, 2, 0x60, 3])
+        .expect("execute three PUSH1 operations");
     assert_eq!(
         three.guest_result().stack(),
         &[U256::from(1), U256::from(2), U256::from(3)]
@@ -47,7 +46,8 @@ fn two_and_three_push1_operations_preserve_insertion_order_in_one_run() {
 
 #[test]
 fn zero_and_maximum_push1_immediates_are_guest_stack_words() {
-    let result = execute_guest_push1_sequence(&[0, u8::MAX]).expect("execute byte boundaries");
+    let result =
+        execute_guest_evm_bytecode(&[0x60, 0, 0x60, u8::MAX]).expect("execute byte boundaries");
     assert_eq!(
         result.guest_result().stack(),
         &[U256::ZERO, U256::from(u8::MAX)]
@@ -59,7 +59,7 @@ fn overflow_in_first_or_later_push1_is_exceptional_without_overflowing_write() {
     let full = (0..EVM_STACK_CAPACITY)
         .map(|value| U256::from(value + 1))
         .collect::<Vec<_>>();
-    let first = execute_guest_push1_sequence_with_initial_stack(&[5], &full)
+    let first = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &full)
         .expect("first PUSH1 overflow reaches guest exception exit");
     assert_eq!(
         first.guest_result().status(),
@@ -72,7 +72,7 @@ fn overflow_in_first_or_later_push1_is_exceptional_without_overflowing_write() {
     assert_eq!(first.guest_result().stack(), full);
 
     let almost_full = full[..EVM_STACK_CAPACITY as usize - 1].to_vec();
-    let later = execute_guest_push1_sequence_with_initial_stack(&[5, 3], &almost_full)
+    let later = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5, 0x60, 3], &almost_full)
         .expect("later PUSH1 overflow reaches guest exception exit");
     let mut expected = almost_full;
     expected.push(U256::from(5));
@@ -86,13 +86,14 @@ fn overflow_in_first_or_later_push1_is_exceptional_without_overflowing_write() {
 
 #[test]
 fn linked_program_has_no_fallthrough_to_handlers_or_unpatched_trampoline() {
-    let program = compile_push1_program(&[5, 3]).expect("compile PUSH1 program");
+    let bytecode = [0x60, 5, 0x60, 3];
+    let program = compile_evm_bytecode(&bytecode).expect("compile PUSH1 program");
     assert!(!program.assembly().contains("jal zero, 0"));
     assert_eq!(
         assemble(program.assembly(), Arch::Rv64).expect("reassemble generated assembly"),
         program.machine_code()
     );
-    let result = execute_guest_push1_sequence(&[5, 3]).expect("normal execution");
+    let result = execute_guest_evm_bytecode(&bytecode).expect("normal execution");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().exception_code(), 0);
 }
@@ -311,11 +312,12 @@ fn mixed_linker_keeps_the_generated_sub_core_machine_code_unchanged() {
 }
 
 #[test]
-fn bytecode_compilation_reuses_the_push1_program_linker() {
-    let from_bytecode = compile_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("compile bytecode");
-    let from_sequence = compile_push1_program(&[5, 3]).expect("compile sequence");
-    assert_eq!(from_bytecode.machine_code(), from_sequence.machine_code());
-    assert_eq!(from_bytecode.assembly(), from_sequence.assembly());
+fn push1_execution_uses_the_compiled_bytecode_image() {
+    let bytecode = [0x60, 5, 0x60, 3];
+    let compiled = compile_evm_bytecode(&bytecode).expect("compile bytecode");
+    let executed = execute_guest_evm_bytecode(&bytecode).expect("execute bytecode");
+    assert_eq!(compiled.machine_code(), executed.machine_code());
+    assert_eq!(compiled.assembly(), executed.assembly());
 }
 
 #[test]

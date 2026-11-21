@@ -329,11 +329,11 @@ fn public_publisher_inventory_counts_resident_exceptional_bodies() {
 
 #[test]
 fn short_artifacts_and_execution_match_legacy() {
-    for immediates in [&[][..], &[2], &[2, 3], &[0, 127, 128, 255, 96]] {
+    for immediates in [&[][..], &[2], &[2, 3], &[5, 3], &[0, 127, 128, 255, 96]] {
         for stop in [false, true] {
             let input = bytecode(immediates, stop);
             let fragments = make_fragments(immediates, stop);
-            let candidate = compile(&input).unwrap();
+            let candidate = compile_evm_bytecode(&input).unwrap();
             assert_eq!(candidate, compose(&fragments).unwrap());
             let legacy = compile_evm_bytecode_legacy(&input).unwrap();
             if !stop {

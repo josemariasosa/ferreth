@@ -1,9 +1,9 @@
 use alloy_primitives::U256;
 use ferreth_compiler::{
-    compiler::{compile_evm_bytecode, compile_push1_program, CompiledRv64Program},
+    compiler::{compile_evm_bytecode, CompiledRv64Program},
     orchestrator::{
         execute_guest_add_with_initial_stack, execute_guest_evm_bytecode,
-        execute_guest_push1_sequence, execute_guest_sub_with_initial_stack,
+        execute_guest_sub_with_initial_stack,
     },
     rv64::{guest::GuestExecutionStatus, memory::ENTRY_PC},
 };
@@ -54,8 +54,8 @@ fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publi
 
 #[test]
 fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
-    let push = compile_push1_program(&[2]).unwrap();
-    assert_eq!(push, compile_evm_bytecode(&[0x60, 2]).unwrap());
+    let bytecode = [0x60, 2];
+    let push = compile_evm_bytecode(&bytecode).unwrap();
     assert_eq!(push.termination_entry_pcs(), [ENTRY_PC + 44, ENTRY_PC + 72]);
     assert_publishers(
         push.machine_code(),
@@ -63,7 +63,7 @@ fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
         44,
         &[Normal, Overflow],
     );
-    let executed = execute_guest_push1_sequence(&[2]).unwrap();
+    let executed = execute_guest_evm_bytecode(&bytecode).unwrap();
     assert_eq!(executed.machine_code(), push.machine_code());
     assert_eq!(executed.assembly(), push.assembly());
     assert_eq!(executed.instruction_metrics().total(), 17);
