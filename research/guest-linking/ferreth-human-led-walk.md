@@ -1,13 +1,42 @@
 # Ferreth — Human-Led Walk
 
 **Independent architecture and correctness review after Phase 2**  
-**Status:** walkthrough not yet performed · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset  
+**Status:** parked at Checkpoint E · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset
+
 **Starting checkpoint reported:** `feat/symbolic-guest-composer`, Phase 2.4 commit `3eb4a94`; Phase 2.5 pending maintainer commit at the time this guide was prepared  
 **Read this file first when returning to Ferreth.**
 
 > **Mission.** We built a compiler path that transforms supported EVM bytecode into an executable RV64 guest, then runs that guest and compares observable behavior against trusted expectations. The human-led walk is **not** another automated green-test gate. It is an attempt to understand the entire trust chain, challenge assumptions, distinguish independent evidence from self-consistency, and decide what must be stabilized before a first `v0.1.0` baseline.
 >
 > **Operating rule:** the human reviewer leads; assistants are copilots. Do not begin by asking an agent to audit the project or summarize what it thinks is correct. Read code and trace a specimen first, write down your own hypothesis, then use the assistant to test it.
+
+---
+
+## Session Handoff — 2026-11-21
+
+Branch `feat/symbolic-guest-composer` was at HEAD `ffe67f3a3c6bc61265a57ac8d38ca80e63bd4f0b`. Before this edit, the only worktree change was the unstaged H-WALK-003 entry in this file.
+
+### Completed investigations
+
+- **A — Compiler entry and decoding.** Public bytecode compilation routes through the symbolic compiler. The current decoding and compilation path supports six sequential opcodes. Decoder reachability and broader opcode support remain future architectural concerns. [H-WALK-001](human-led-walk-findings.md#h-walk-001--decoder-mixes-decoding-and-reachability)
+- **B — Opcode generation.** Reviewed the symbolic PUSH1 capacity guard and stores for the 32-byte EVM word. This was inspection of generated RV64 instructions. Runtime behavior remains part of the execution review.
+- **C — Symbolic composition.** Reviewed `compose()`, `emit()`, `assemble_image()`, `verified_program()`, and index-based symbol names. `asm-rs` resolves the assembly, and dependency source shows that version `0.2.0` rejects duplicate named labels. [H-WALK-002](#h-walk-002--symbol-naming-and-namespace-ownership)
+- **D — Final-image verification.** Reviewed `verify_declared_transfers()`, `verify_transfer()`, `decode_transfer()`, `verify_block()`, and `verify_final_image()`. These checks decode machine-code transfers, compare their targets with declarations, and independently enforce fixed-layout destinations. Reviewed the fixed 34-word ADD and SUB core byte-identity checks and existing mutation tests. The test `matching_push1_continuation_cannot_skip_the_next_fragment` is committed at HEAD. It checks that declaration verification accepts a matching redirection while fixed-layout verification rejects the skipped fragment. H-WALK-003 records a prior focused pass. The handoff confirmed the committed test by source inspection and ran no tests or benchmarks. [H-WALK-003](#h-walk-003--independent-continuation-verification)
+
+### Stopping point — Checkpoint E is in progress
+
+In `orchestrator.rs`, the walkthrough reached `execute_guest_evm_bytecode()`, `execute_guest_evm_bytecode_with_initial_stack()`, `execute_linked_program()`, and `execute_raw_program()`. The orchestrator compiles the complete supported program, loads its RV64 code into `RvemuExecutor`, initializes guest memory and registers, and seeds the optional EVM stack. It runs the body to a termination publisher, runs the publisher to `EXIT_PC`, and reads the guest result. The orchestrator does not interpret individual EVM opcodes. The executor implementation is still pending review.
+
+### Exact next action
+
+```bash
+sed -n '1,175p' \
+  crates/ferreth-compiler/src/rv64/executor/rvemu.rs
+```
+
+- **E — Runtime and ABI.** Trace how `execute_until()` advances RV64 execution, recognizes stop PCs, and propagates faults. Check where Rust intervenes and how the body hands off to the publisher. Then review guest initialization, stack memory, termination, error reporting, and ABI result extraction.
+- **F — Arithmetic.** Review ADD/SUB semantics and U256 correctness.
+- **G — Validation.** Review REVM conformance, benchmarks, and validation boundaries.
 
 ---
 
@@ -431,6 +460,13 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 - **Open question:** A unique, valid symbol may still be the wrong existing continuation. Whether final-image verification independently detects that semantic error remains **OPEN** for the final-image verifier investigation; `verify_declared_transfers()` is not evidence that it does.
 - **Decision:** No refactor or centralized allocator during this walkthrough; preserve naming conventions, continue reviewing final-image transfer validation and independent negative controls, and reassess namespace ownership in Phase 3 if evidence warrants it.
 
+## H-WALK-003 — Independent Continuation Verification
+
+- **Evidence:** `verify_declared_transfers()` scans the assembled fragment region in four-byte increments, decodes JAL/BRANCH/JALR sites, and compares encoded kind, registers, and resolved destination against declarations. It rejects undeclared, duplicate, and unmatched declarations. `verify_final_image()` separately verifies each expected fixed layout, including required transfer sites and destinations, publisher ordering/boundaries, and executable-image end.
+- **Adversarial control:** `matching_push1_continuation_cannot_skip_the_next_fragment` assembles three sequential PUSH1 fragments after redirecting the first continuation from `push1_continue_0` to `guest_push1_2` and updating its declaration to match. The test confirms assembly succeeds and `verify_declared_transfers()` accepts the consistent transfer, while `verify_final_image()` rejects it: `transfer at 0x80000024 targets 0x80000058, expected 0x8000002c`. The focused test passed.
+- **Finding / classification:** Declaration consistency and structural correctness are complementary properties. A consistent but incorrectly directed PUSH1 continuation cannot bypass fixed-layout verification. **Verified correctness property — no v0.1 blocker identified.** This closes the H-WALK-002 continuation-independence question for this three-fragment PUSH1 case; it does not establish arbitrary EVM control-flow or ordinary RV64 semantic correctness. Layout identities still derive from requested operations, and dynamic EVM JUMP/JUMPI require separate verification design.
+- **Decision:** Preserve both verification layers and the adversarial regression; no production refactor is required. Continue the Human-Led Walk with remaining verifier boundaries and negative controls, and revisit generalized control-flow verification when implementing JUMP/JUMPI.
+
 ### Findings categories
 
 | Category | Meaning | Immediate effect |
@@ -488,7 +524,7 @@ Record a question about ownership, a claim verified from code, and the exact nex
 
 ### Where to resume on the following day
 
-Read the most recent finding, state its unresolved question aloud, then continue with Session D (**verify the verifier**). Never restart from an agent summary alone.
+Use the [2026-11-21 handoff](#session-handoff--2026-11-21) to resume at Checkpoint E and trace the executor directly in source.
 
 ---
 
