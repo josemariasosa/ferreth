@@ -147,18 +147,6 @@ pub(crate) fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileErr
     compose(&fragments)
 }
 
-pub(crate) fn compile_push1_sequence(
-    immediates: &[u8],
-) -> Result<CompiledRv64Program, CompileError> {
-    let fragments = immediates
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, immediate)| generate_symbolic_push1(immediate, index))
-        .collect::<Vec<_>>();
-    compose(&fragments)
-}
-
 fn stop_fragment() -> SymbolicFragment {
     let entry = "guest_stop";
     let role = PublisherRole::Normal;

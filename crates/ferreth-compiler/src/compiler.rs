@@ -590,16 +590,6 @@ fn linked_sub_assembly(
     Ok(source)
 }
 
-/// Compiles a sequence of `PUSH1` immediates into one RV64 executable.
-///
-/// Each opcode body is a symbolic fragment linked by the single symbolic
-/// composer. Successful bodies skip only their own exceptional transfer and
-/// fall through to the next body; every transfer targets the single shared
-/// exceptional exit.
-pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, CompileError> {
-    symbolic::compile_push1_sequence(immediates)
-}
-
 #[cfg(test)]
 pub(crate) fn compile_push1_program_legacy(
     immediates: &[u8],
