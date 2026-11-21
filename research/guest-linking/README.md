@@ -184,5 +184,5 @@ verification for maintainer review.
 The [Phase 2.5 cleanup report](phase-2.5-final-cleanup.md) records the legacy
 linker inventory, the narrowed dead-code allowances, the test-oracle
 disposition and the full validation gate. The
-[human-led walk](human-led-walk.md) lists what the maintainer should inspect,
-without stating conclusions.
+[human-led walk](ferreth-human-led-walk.md) records the checkpoint evidence
+and the remaining maintainer exit-gate obligations.

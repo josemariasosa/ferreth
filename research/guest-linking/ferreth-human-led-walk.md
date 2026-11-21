@@ -1,9 +1,10 @@
 # Ferreth — Human-Led Walk
 
 **Independent architecture and correctness review after Phase 2**  
-**Status:** parked at Checkpoint E · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset
+**Status:** Checkpoints A–G investigated, human exit gate pending · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset
 
-**Starting checkpoint reported:** `feat/symbolic-guest-composer`, Phase 2.4 commit `3eb4a94`; Phase 2.5 pending maintainer commit at the time this guide was prepared  
+**Branch history** — Phase 2.4 cutover `3eb4a94`, Phase 2.5 cleanup `831ac85` on `feat/symbolic-guest-composer`.
+
 **Read this file first when returning to Ferreth.**
 
 > **Mission.** We built a compiler path that transforms supported EVM bytecode into an executable RV64 guest, then runs that guest and compares observable behavior against trusted expectations. The human-led walk is **not** another automated green-test gate. It is an attempt to understand the entire trust chain, challenge assumptions, distinguish independent evidence from self-consistency, and decide what must be stabilized before a first `v0.1.0` baseline.
@@ -14,29 +15,39 @@
 
 ## Session Handoff — 2026-11-21
 
-Branch `feat/symbolic-guest-composer` was at HEAD `ffe67f3a3c6bc61265a57ac8d38ca80e63bd4f0b`. Before this edit, the only worktree change was the unstaged H-WALK-003 entry in this file.
+The A–D handoff was parked at `df0d1f7`, immediately after the H-WALK-003 regression commit `ffe67f3`. The documentation consolidation checked a clean `feat/symbolic-guest-composer` worktree at `df0d1f7e08fdb0168a4fc2e6bc1dcbe4152cce4a`. The human-led continuation completed the E–G investigations and reported the runs below. No production code changed during the walkthrough.
 
 ### Completed investigations
 
 - **A — Compiler entry and decoding.** Public bytecode compilation routes through the symbolic compiler. The current decoding and compilation path supports six sequential opcodes. Decoder reachability and broader opcode support remain future architectural concerns. [H-WALK-001](human-led-walk-findings.md#h-walk-001--decoder-mixes-decoding-and-reachability)
-- **B — Opcode generation.** Reviewed the symbolic PUSH1 capacity guard and stores for the 32-byte EVM word. This was inspection of generated RV64 instructions. Runtime behavior remains part of the execution review.
+- **B — Opcode generation.** Reviewed the symbolic PUSH1 capacity guard and stores for the 32-byte EVM word. This was inspection of generated RV64 instructions. The later execution review adds focused runtime evidence.
 - **C — Symbolic composition.** Reviewed `compose()`, `emit()`, `assemble_image()`, `verified_program()`, and index-based symbol names. `asm-rs` resolves the assembly, and dependency source shows that version `0.2.0` rejects duplicate named labels. [H-WALK-002](#h-walk-002--symbol-naming-and-namespace-ownership)
-- **D — Final-image verification.** Reviewed `verify_declared_transfers()`, `verify_transfer()`, `decode_transfer()`, `verify_block()`, and `verify_final_image()`. These checks decode machine-code transfers, compare their targets with declarations, and independently enforce fixed-layout destinations. Reviewed the fixed 34-word ADD and SUB core byte-identity checks and existing mutation tests. The test `matching_push1_continuation_cannot_skip_the_next_fragment` is committed at HEAD. It checks that declaration verification accepts a matching redirection while fixed-layout verification rejects the skipped fragment. H-WALK-003 records a prior focused pass. The handoff confirmed the committed test by source inspection and ran no tests or benchmarks. [H-WALK-003](#h-walk-003--independent-continuation-verification)
+- **D — Final-image verification.** Reviewed `verify_declared_transfers()`, `verify_transfer()`, `decode_transfer()`, `verify_block()`, and `verify_final_image()`. These checks decode machine-code transfers, compare their targets with declarations, and independently enforce fixed-layout destinations. Reviewed the fixed 34-word ADD and SUB core byte-identity checks and existing mutation tests. Commit `ffe67f3` added `matching_push1_continuation_cannot_skip_the_next_fragment`. It checks that declaration verification accepts a matching redirection while fixed-layout verification rejects the skipped fragment. H-WALK-003 records a prior focused pass. The A–D handoff confirmed the committed test by source inspection. [H-WALK-003](#h-walk-003--independent-continuation-verification)
 
-### Stopping point — Checkpoint E is in progress
+### E–G evidence from the November 21 continuation
 
-In `orchestrator.rs`, the walkthrough reached `execute_guest_evm_bytecode()`, `execute_guest_evm_bytecode_with_initial_stack()`, `execute_linked_program()`, and `execute_raw_program()`. The orchestrator compiles the complete supported program, loads its RV64 code into `RvemuExecutor`, initializes guest memory and registers, and seeds the optional EVM stack. It runs the body to a termination publisher, runs the publisher to `EXIT_PC`, and reads the guest result. The orchestrator does not interpret individual EVM opcodes. The executor implementation is still pending review.
+**E — Execution and ADR-001 ABI, checked in source.** The symbolic compiler obtains publisher PCs from assembler-resolved labels using `AssemblyResult::label_address()` and verifies the final image before returning the executable artifact. The orchestrator loads the image, initializes the guest and optionally seeds its stack. It runs the body until the PC reaches a resident publisher, then runs that publisher to `EXIT_PC`. The rvemu executor checks stop PCs before fetch, calls `cpu.execute()` for one instruction at a time and counts only completed instructions. Instruction-limit exhaustion and backend faults return executor errors.
 
-### Exact next action
+The guest uses `s0` as the EVM stack base and `s1` as the next free slot, with 32 bytes per word. The publisher stores final `s1`, exception code and terminal status in that order. It reaches `EXIT_PC` via `jalr zero, -4(t1)`, independently of `ra`. After the publisher run returns, `read_guest_result()` validates the metadata, checks live `s0` against the ABI base and live `s1` against the published pointer, then reconstructs the stack. The isolated arithmetic runner places operand/result pointers in `a0`–`a2` and seeds `ra` with its halt PC. The guest uses a stack-aware wrapper and reserves `ra` for the leaf's local return. The focused runs below exercise selected outcomes. The extent of runtime fault coverage remains open. [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) · [Composer](../../crates/ferreth-compiler/src/compiler/symbolic.rs) · [Orchestrator](../../crates/ferreth-compiler/src/orchestrator.rs) · [Executor contract](../../crates/ferreth-compiler/src/rv64/executor/mod.rs) · [rvemu executor](../../crates/ferreth-compiler/src/rv64/executor/rvemu.rs) · [Memory layout](../../crates/ferreth-compiler/src/rv64/memory.rs) · [Guest ABI](../../crates/ferreth-compiler/src/rv64/guest.rs) · [Publisher](../../crates/ferreth-compiler/src/compiler/publisher.rs) · [Isolated runner](../../crates/ferreth-compiler/src/execution.rs)
 
-```bash
-sed -n '1,175p' \
-  crates/ferreth-compiler/src/rv64/executor/rvemu.rs
-```
+**F — ADD/SUB, checked in source and exercised by the reported integration runs.** Both use the shared wrapper, which checks for two words before any operand access. It passes the top item via `a0`, the next item via `a1`, and writes into the second item's slot through `a2`. SUB therefore computes top minus next. The cores process four little-endian 64-bit limbs, propagating carry or borrow and discarding the final bit for arithmetic modulo 2²⁵⁶. The wrapper's `jal ra, leaf` returns to the `s1` decrement by 32. Test assertions cover normal publication, wraparound and cross-limb propagation, explicit SUB order, empty and one-item underflow, preservation of live stack and `s1` on those underflows, and instruction counts of 42+7 on success and 3+8 on underflow in the singleton guests. The core fingerprint fixtures are ADD `0xf1fff32ff47962f3` and SUB `0x9f008f320eeb7a7b`. The fingerprint values come from the unit-test fixture. [ADD generator](../../crates/ferreth-compiler/src/rv64/opcodes/add.rs) · [Shared wrapper](../../crates/ferreth-compiler/src/rv64/opcodes/arithmetic.rs) · [Leaf cores](../../crates/ferreth-compiler/src/lib.rs) · [ADD tests](../../crates/ferreth-compiler/tests/rv64_guest_add_orchestrator.rs) · [SUB tests](../../crates/ferreth-compiler/tests/rv64_guest_sub_orchestrator.rs) · [Fingerprint fixtures](../../crates/ferreth-compiler/src/compiler/symbolic/tests/arithmetic.rs)
 
-- **E — Runtime and ABI.** Trace how `execute_until()` advances RV64 execution, recognizes stop PCs, and propagates faults. Check where Rust intervenes and how the body hands off to the publisher. Then review guest initialization, stack memory, termination, error reporting, and ABI result extraction.
-- **F — Arithmetic.** Review ADD/SUB semantics and U256 correctness.
-- **G — Validation.** Review REVM conformance, benchmarks, and validation boundaries.
+**G — Conformance, checked in source and exercised by the reported reference runs.** The transaction-based differential suite uses REVM 43.0.3 with Cancun and a transaction gas limit of 1,000,000. It combines directed cases with a deterministic, stack-aware generator for the supported subset. Its fixed seed `0xFE77_E7A0_0000_0001` drives quotas of 1,000 valid and 100 intentionally invalid programs. The comparison checks expected terminal success or halt, Ferreth's own status and exception code, and stack equality on success. Exceptional stacks are diagnostic. A dedicated empty-stack DUP1 regression pins the REVM `StackOverflow` label and the Ferreth `StackUnderflow` code. EELS reports `StackUnderflowError` for the same empty-stack instruction. The labels differ for an agreed exceptional halt. EELS runs an isolated frame, so its gas observations belong to that reference execution alone. [REVM differential tests](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs) · [Conformance library](../../crates/ferreth-conformance/src/lib.rs) · [Conformance research](../../docs/research/ferreth-evm-conformance.md) · [EELS CLI](../eels-cancun/run_frame.py) · [EELS setup and pin](../eels-cancun/README.md) · [Direct REVM frame experiment](../revm-frame/README.md#2-empty-stack-dup1)
+
+| November 21 command | Reported observation |
+|---|---|
+| `cargo test -p ferreth-compiler --test rv64_guest_add_orchestrator` | Passed |
+| `cargo test -p ferreth-compiler --test rv64_guest_sub_orchestrator` | Passed |
+| `cargo test -p ferreth-conformance --test rc_revm_conformance` | Passed, including the dedicated empty-stack DUP1 regression |
+| `uv run run_frame.py --code 600560030100 --gas 100` | Success `True`, stack `[8]`, frame gas consumed `9`, remaining `91`, PC `6` |
+| `uv run run_frame.py --code 80 --gas 100` | Success `False`, `StackUnderflowError`, remaining frame gas `0`, stack `[]` |
+| `cargo run -q -p ferreth-conformance -- bench guest --format json` | Opcode and program instruction metrics matched the full tracked guest baseline after removing warning lines and sorting JSON keys. See [H-WALK-005](human-led-walk-findings.md#h-walk-005--guest-benchmark-warnings-on-json-stdout). |
+
+Cargo commands were run from the repository root. EELS commands were run from `research/eels-cancun/` with an empty initial stack. The command outcomes come from the human session record. The documentation pass checked source, pins and references. Historical Phase 2 workspace totals, opt-in probes and the arithmetic benchmark remain separate evidence.
+
+### Resume at the human exit gate
+
+Bring the source traces and this evidence ledger to [the five challenges](#10-the-human-led-walks-five-deliberate-challenges) and [the exit gate](#12-the-exit-gate-what-we-decide-after-the-walk). Review the [findings notebook](human-led-walk-findings.md) for the Phase 3 candidates and their pending decisions.
 
 ---
 
@@ -63,9 +74,9 @@ Historically, Ferreth had several overlapping ways to link small RV64 guests: a 
 
 The Phase 1 experiments explored symbolic assembler targets; Phase 2 built a single composer, added independently decoded final-image verification, moved six opcodes to the symbolic path privately, then switched the public APIs in Phase 2.4. Phase 2.5 checked that the old linkers had already become `#[cfg(test)]`-only oracles and made **documentation/attribute cleanup**, rather than deleting valuable independent tests.
 
-### What the latest reports claim — verify rather than assume
+### What Phase 2 reported
 
-- Public `compile_evm_bytecode` and `compile_push1_program` use `symbolic::compile` and `symbolic::compile_push1_sequence` respectively.
+- Public `compile_evm_bytecode` and `compile_push1_program` used `symbolic::compile` and `symbolic::compile_push1_sequence` respectively at the Phase 2 cutover. The branch subsequently retired the specialized public PUSH1 compile and sequence execution APIs (`0f70552`, `4a61790`). The current public whole-program route is bytecode-based. [Compiler entry](../../crates/ferreth-compiler/src/compiler.rs) · [Orchestrator entry](../../crates/ferreth-compiler/src/orchestrator.rs)
 - Active guest production uses one symbolic composer, one assembled final image and final-image verification before execution.
 - Legacy whole-image linkers are isolated under `#[cfg(test)]` and retained as independent oracles.
 - At the Phase 2.4/2.5 gate: **215 discovered, 212 passed, 0 failed, 3 ignored**; all three opt-in capacity probes passed separately.
@@ -73,7 +84,7 @@ The Phase 1 experiments explored symbolic assembler targets; Phase 2 built a sin
 - The public *resident exceptional publisher* count is `0`, `8`, or `16` words. **Dynamic execution** uses only one terminal publisher: normal `7` instructions or exceptional `8` instructions.
 - The 34-word ADD and SUB leaf-core fingerprints are `0xf1fff32ff47962f3` and `0x9f008f320eeb7a7b` (FNV-1a64 as reported).
 
-These are **reported Phase 2 findings**, not conclusions established by this walkthrough. Some filenames, line numbers or Git state may have changed. Inspect the real checkout.
+Phase 2 test totals, capacity results and benchmark comparisons describe their recorded revisions. The November 21 ledger identifies the later source checks and focused runs. [Public cutover review](phase-2.4-public-cutover.md) · [Final cleanup](phase-2.5-final-cleanup.md)
 
 ### What Phase 2.5 actually changed
 
@@ -111,7 +122,7 @@ If you are not on the expected branch or worktree is dirty, **stop before writin
 4. `research/guest-linking/phase-2.5-final-cleanup.md` — retained legacy oracles, test matrix and known debt.
 5. `research/guest-linking/phase-2.3d-integration-review.md` — private six-opcode proof obligations and prior defects RF-023–RF-025.
 6. `docs/research/ferreth-linking-architecture.md` — architecture/roadmap; distinguish historical design from current implementation.
-7. ADR-001 (locate its actual path via `rg -n 'ADR-001' docs research`). Proposed ADR-002 is context, **not** an approved gas implementation.
+7. [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) governs the guest ABI. [ADR-002](../../docs/adr/002-cancun-evm-gas-metering.md) remains proposed.
 
 If any document contradicts current code, mark the contradiction; don't silently fix it during the reading session.
 
@@ -122,10 +133,10 @@ If any document contradicts current code, mark the contradiction; don't silently
 The expected production pipeline is:
 
 ```text
-EVM bytecode or PUSH1 immediate slice
+EVM bytecode
                   │
                   ▼
-Public entry points (compiler.rs)
+Public compiler entry (compiler.rs)
                   │
                   ▼
 Decoder / symbolic frontend (compiler/symbolic.rs)
@@ -180,10 +191,10 @@ If you can only recite this diagram but cannot locate the responsibility in sour
 
 ```text
 Bytecode route: 60 05 60 03 01 00
-PUSH1-slice route: [0x05, 0x03]
+PUSH1-only bytecode: 60 05 60 03
 ```
 
-The first means `PUSH1 5; PUSH1 3; ADD; STOP` and should finish with `[8]` (assuming conventional stack-display order). The second is **not bytecode**: it means two immediates supplied to the PUSH1 sequence API, and should leave `[5,3]` in bottom-to-top order.
+The first means `PUSH1 5; PUSH1 3; ADD; STOP` and should finish with `[8]`. The second reaches EOF with `[5, 3]` in bottom-to-top order. Both enter through the bytecode API.
 
 **Write down, from code:**
 
@@ -197,11 +208,11 @@ The first means `PUSH1 5; PUSH1 3; ADD; STOP` and should finish with `[8]` (assu
 **Commands for finding calls, not proving them:**
 
 ```bash
-rg -n 'pub fn compile|fn compile|compile_push1_sequence|compile_evm_bytecode' crates/ferreth-compiler/src
+rg -n 'pub fn compile|fn compile|compile_evm_bytecode|decode_detailed' crates/ferreth-compiler/src
 rg -n 'compile_.*legacy|link_guest_arithmetic|encode_jal_zero' crates/ferreth-compiler/src
 ```
 
-**Checkpoint A:** draw the entry-point call chain in your own words, including the difference between bytecode decoding and immediate-slice enumeration. Do not proceed until you can explain why decoding PUSH1 immediate bytes as opcodes would be a serious bug.
+**Checkpoint A:** draw the entry-point call chain in your own words, including how the decoder consumes PUSH1 immediates without reinterpreting them as opcodes.
 
 ---
 
@@ -303,7 +314,7 @@ Locate tests that intentionally change source/declarations or machine words to c
 - A swapped publisher role with otherwise plausible PCs.
 - A missing publisher body or invalid zero-address declaration (RF-024).
 - A declaration whose instruction site belongs to another fragment (RF-025).
-- A POP that skips a necessary live operation even when the declaration agrees with the wrong continuation.
+- The PUSH1 continuation that skips a live fragment even when its declaration agrees with the wrong target. See [H-WALK-003](#h-walk-003--independent-continuation-verification).
 - An incorrect arithmetic call target or return anchor.
 
 Do not assume these are the exact test function names. Locate the actual tests and record names/results.
@@ -327,7 +338,7 @@ Underflow: 50                    # POP from empty stack
 
 Record:
 
-- Where `s0` (stack base), `s1` (live pointer), `sp` and `ra` are initialized.
+- Where `s0` and `s1` are initialized and which registers the stack access and exit paths actually depend on. Compare the isolated runner’s explicit `ra` setup.
 - Where stack lower/upper bounds and reserved code/exit regions are enforced.
 - What the executor considers a publisher PC, and why it must accept the actual role-specific PC set.
 - How the guest reaches the exit sentinel, why the sentinel is not counted as a guest body instruction, and what `ra` means for guest-local arithmetic leaf returns versus host exit.
@@ -368,9 +379,9 @@ Reconstruct for `ADD` and `SUB`:
 
 ### Runtime and conformance
 
-Clarify which tests compare public behavior against an **independent reference** (e.g., REVM), and which merely compare symbolic to legacy or run the generated image through the same internal executor. Historical EELS captures are useful context; do not claim they were rerun unless there is fresh evidence.
+Clarify which tests compare public behavior against an **independent reference** (e.g., REVM), and which merely compare symbolic to legacy or run the generated image through the same internal executor. Use the November 21 ledger for the two EELS CLI runs and the linked frame research for earlier captures.
 
-The report's known diagnostic caveat: a REVM empty-DUP1 exception-classification detail may differ while the relevant Ferreth underflow behavior remains an explicit accepted contract. Record any such discrepancy precisely, without disguising semantic differences as harmless diagnostics.
+Use the empty-stack DUP1 regression to explain the diagnostic distinction. Keep the observed labels and the shared exceptional termination explicit.
 
 ### Capacity is a stated implementation boundary, not an Ethereum consensus rule
 
@@ -381,9 +392,9 @@ The report's known diagnostic caveat: a REVM empty-DUP1 exception-classification
 
 Don't reopen label-density optimization during this walk. Instead ask whether rejection is deterministic, has the correct `Link`/`Layout` class, and produces no partial artifact.
 
-### Reproduction commands
+### Full validation commands for the exit gate
 
-Run from repository root; use a fresh target directory if practical:
+The ledger above covers the focused November 21 runs. The commands below reproduce the wider Phase 2 gate on the current branch. Run from the repository root with a fresh target directory.
 
 ```bash
 export CARGO_TARGET_DIR=target/human-led-walk-validation
@@ -397,7 +408,7 @@ cargo run --frozen -q -p ferreth-conformance -- bench guest --format json
 cargo run --frozen -q -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
 ```
 
-**Don't count ignored capacity probes as workspace passes.** Reconcile discovery + executed + ignored: Phase 2 handoff was **215 = 212 + 3**; all three opt-in probes were rerun separately. When comparing benchmark JSON, account for any prefixed rvemu warning lines transparently and compare **complete parsed JSON objects** to tracked baselines; do not silently regenerate baselines.
+Reconcile current test discovery, executed tests and ignored tests. Phase 2 historically recorded **215 = 212 + 3**, with separate passes for all three opt-in probes. For benchmark comparisons, preserve raw stdout and account for the warning prefix before comparing complete parsed JSON objects to the tracked baselines.
 
 **Checkpoint G:** create a table of claims, independent source, invocation and observed result. Flag missing independent evidence even if the test suite is green.
 
@@ -431,7 +442,7 @@ What exactly could the project truthfully promise at `v0.1.0`? Write an explicit
 
 ## 11. Write findings as you go (not at the end)
 
-Create a separate review notebook in your repo only **after** you decide where it should live, for example `research/guest-linking/human-led-walk-findings.md`. Suggested entries:
+Record new findings in the [review notebook](human-led-walk-findings.md). H-WALK-002 and H-WALK-003 remain below with their original review context. Suggested entry format:
 
 ```markdown
 ## H-WALK-001 — Short, neutral title
@@ -457,7 +468,7 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 - **Assembler evidence:** `Cargo.lock` pins `asm-rs 0.2.0`. In that dependency's `src/linker.rs`, `Linker::add_label()` rejects duplicate named labels with `AsmError::DuplicateLabel`; the dependency has a `duplicate_label_error` negative unit test. Numeric labels may be redefined. This is dependency source evidence, not a Ferreth negative test for duplicate local labels.
 - **Distinct safeguard:** `crates/ferreth-compiler/src/rv64/verify.rs::verify_declared_transfers()` sorts transfer declarations by site PC and rejects duplicate declared sites. This does not reject duplicate label definitions or prove that a transfer targets the intended continuation.
 - **Finding / classification:** Occurrence indices and generator-specific prefixes prevent ordinary collisions in the current six-opcode subset, while duplicate named labels are ultimately rejected by `asm-rs`. This is reasonable for v0.1, with no demonstrated incorrect binary or active collision, but namespace uniqueness is not guaranteed by a centralized Ferreth allocator and the shared naming conventions are a maintainability and extensibility concern. **Phase 3 hardening candidate — non-blocking for v0.1.**
-- **Open question:** A unique, valid symbol may still be the wrong existing continuation. Whether final-image verification independently detects that semantic error remains **OPEN** for the final-image verifier investigation; `verify_declared_transfers()` is not evidence that it does.
+- **Continuation question:** A unique, valid symbol may still be the wrong existing continuation. [H-WALK-003](#h-walk-003--independent-continuation-verification) resolves the three-fragment PUSH1 case. The broader verification design for future dynamic control flow remains open.
 - **Decision:** No refactor or centralized allocator during this walkthrough; preserve naming conventions, continue reviewing final-image transfer validation and independent negative controls, and reassess namespace ownership in Phase 3 if evidence warrants it.
 
 ## H-WALK-003 — Independent Continuation Verification
@@ -480,7 +491,17 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 
 ## 12. The exit gate: what we decide after the walk
 
-Only when Sessions A–G have been attempted and the five challenges answered:
+The walkthrough is ready to bring to the human exit-gate review. Passing the gate still requires the maintainer to record answers to all five challenges and decide how to close each evidence gap below.
+
+- **Responsibility boundaries:** Confirm the owner map against the bytecode pipeline and the namespace concern in H-WALK-002.
+- **Shared mistake:** Use H-WALK-003 as the concrete adversarial control. Record the independent JAL calculation and the Session D trust-boundary diagram, including the limits of fixed-layout checks. Record which remaining suggested negative controls have supporting evidence or still need a focused check.
+- **Failure atomicity:** Reconcile guards, stack writes, final `s1` and publication for PUSH1, POP, DUP1, ADD and SUB. Identify where the review relies on instruction inspection, current focused runs or earlier tests. Close the two Checkpoint E specimen traces with Ferreth runtime results or cite matching evidence.
+- **Seventh opcode:** Record the modules and tests the hypothetical opcode would touch and whether the composer would need an opcode-specific branch.
+- **First version tag:** Write the supported-domain claim and exclusions, including resource limits and EVM features outside the current subset.
+
+Current-revision workspace format/lint, full discovery and test totals, opt-in capacity reruns and the arithmetic benchmark comparison are pending on the supplied November 21 evidence. The focused ADD/SUB and REVM runs, two EELS observations and guest benchmark payload comparison are recorded above. Decide the disposition of each pending check explicitly and record ownership for H-WALK-004 and H-WALK-005 before closing the walk.
+
+### Maintainer sign-off
 
 - [ ] We can trace EVM input to final emitted RV64 words, and then to observed execution state.
 - [ ] We can independently decode at least one JAL and verify its resolved target.
@@ -524,7 +545,7 @@ Record a question about ownership, a claim verified from code, and the exact nex
 
 ### Where to resume on the following day
 
-Use the [2026-11-21 handoff](#session-handoff--2026-11-21) to resume at Checkpoint E and trace the executor directly in source.
+Use the [2026-11-21 handoff](#session-handoff--2026-11-21) to resume at the human exit gate.
 
 ---
 
@@ -532,19 +553,11 @@ Use the [2026-11-21 handoff](#session-handoff--2026-11-21) to resume at Checkpoi
 
 These documents are navigation and historical evidence, **not substitutes for current source**:
 
-- `research/guest-linking/README.md`
-- `research/guest-linking/phase-2.3d-integration-review.md`
-- `research/guest-linking/phase-2.4-cutover-plan.md`
-- `research/guest-linking/phase-2.4-public-cutover.md`
-- `research/guest-linking/phase-2.5-final-cleanup.md`
-- `research/guest-linking/phase-1/` (experimental symbolic linker and independent mixed-program comparisons)
-- `docs/research/ferreth-linking-architecture.md`
-- `docs/runbooks/benchmark.md`
-- `runs/phase-0/guest-benchmarks.json`
-- `runs/rv64-arithmetic.json`
-- ADR-001 and proposed ADR-002 at their actual repository locations
-
-**Important epistemic boundary:** this guide was assembled from the Phase 2.3d/2.4/2.5 reports and conversation evidence, **not** by checking out the current source repository. Precise symbol names and code paths must be confirmed during the human walk. Treat an unresolved mismatch as a finding, not as permission to guess.
+- [Guest-linking research index](README.md) and [Phase 1 experiments](phase-1/)
+- [Phase 2.3d integration review](phase-2.3d-integration-review.md), [Phase 2.4 cutover plan](phase-2.4-cutover-plan.md), [Phase 2.4 review](phase-2.4-public-cutover.md) and [Phase 2.5 cleanup](phase-2.5-final-cleanup.md)
+- [Linking roadmap](../../docs/research/ferreth-linking-architecture.md) and [conformance research](../../docs/research/ferreth-evm-conformance.md)
+- [Benchmark runbook](../../docs/runbooks/benchmark.md), [guest baseline](../../runs/phase-0/guest-benchmarks.json) and [arithmetic baseline](../../runs/rv64-arithmetic.json)
+- [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) and [proposed ADR-002](../../docs/adr/002-cancun-evm-gas-metering.md)
 
 ---
 

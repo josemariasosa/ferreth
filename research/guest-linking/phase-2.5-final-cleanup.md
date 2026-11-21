@@ -92,4 +92,4 @@ Run with `CARGO_TARGET_DIR=target/phase-2.5-validation`. Logs are in `target/pha
 
 ## 9. Next logical action
 
-Maintainer review of this report and [human-led-walk.md](./human-led-walk.md). No commit has been made.
+Maintainer review of this report and [human-led walk](ferreth-human-led-walk.md). No commit has been made.
