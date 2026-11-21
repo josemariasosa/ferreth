@@ -421,6 +421,16 @@ Create a separate review notebook in your repo only **after** you decide where i
 
 Prefer *one concrete counterexample* over paragraphs of general concern. If a question cannot be settled by inspection, write the smallest test that would settle it **as a proposal**, and save implementation for Phase 3 unless the worktree has a demonstrable critical defect that requires intervention.
 
+## H-WALK-002 — Symbol Naming and Namespace Ownership
+
+- **Evidence:** `crates/ferreth-compiler/src/compiler/symbolic.rs` enumerates decoded instructions and passes occurrence indices to opcode generators. Generators use deterministic, opcode-prefixed named labels, e.g. `guest_push1_{index}` / `push1_overflow_{index}`, `guest_pop_{index}` / `pop_underflow_{index}`, `guest_dup1_{index}` and its underflow/overflow labels, and `guest_arithmetic_{index}` with arithmetic-local labels. ADD and SUB share `generate_symbolic_arithmetic`.
+- **Ownership:** `compose()` rejects duplicate fragment entry symbols; `emit()` concatenates fragment sources and required publishers; `assemble_image()` assembles the complete source through `asm-rs`. The composer does not centrally allocate local labels, and frontend continuation generation shares opcode-specific entry-label conventions with generators.
+- **Assembler evidence:** `Cargo.lock` pins `asm-rs 0.2.0`. In that dependency's `src/linker.rs`, `Linker::add_label()` rejects duplicate named labels with `AsmError::DuplicateLabel`; the dependency has a `duplicate_label_error` negative unit test. Numeric labels may be redefined. This is dependency source evidence, not a Ferreth negative test for duplicate local labels.
+- **Distinct safeguard:** `crates/ferreth-compiler/src/rv64/verify.rs::verify_declared_transfers()` sorts transfer declarations by site PC and rejects duplicate declared sites. This does not reject duplicate label definitions or prove that a transfer targets the intended continuation.
+- **Finding / classification:** Occurrence indices and generator-specific prefixes prevent ordinary collisions in the current six-opcode subset, while duplicate named labels are ultimately rejected by `asm-rs`. This is reasonable for v0.1, with no demonstrated incorrect binary or active collision, but namespace uniqueness is not guaranteed by a centralized Ferreth allocator and the shared naming conventions are a maintainability and extensibility concern. **Phase 3 hardening candidate — non-blocking for v0.1.**
+- **Open question:** A unique, valid symbol may still be the wrong existing continuation. Whether final-image verification independently detects that semantic error remains **OPEN** for the final-image verifier investigation; `verify_declared_transfers()` is not evidence that it does.
+- **Decision:** No refactor or centralized allocator during this walkthrough; preserve naming conventions, continue reviewing final-image transfer validation and independent negative controls, and reassess namespace ownership in Phase 3 if evidence warrants it.
+
 ### Findings categories
 
 | Category | Meaning | Immediate effect |
