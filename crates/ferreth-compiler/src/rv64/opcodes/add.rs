@@ -6,8 +6,11 @@
 
 use asm_rs::{assemble, Arch};
 
+use super::arithmetic::generate_symbolic_arithmetic;
 use crate::rv64::codegen::{GeneratedRv64, GeneratedRv64LinkMetadata};
-use crate::Opcode;
+use crate::{
+    compiler::symbolic::SymbolicFragment, rv64::verify::ArithmeticCore, write_add_core, Opcode,
+};
 
 /// Generates one stack-aware RV64 implementation of EVM `ADD`.
 ///
@@ -69,4 +72,8 @@ pub fn generate_guest_add() -> GeneratedRv64 {
             exceptional_trampoline_offset: UNDERFLOW_TRAMPOLINE_OFFSET,
         }),
     }
+}
+
+pub(crate) fn generate_symbolic_add(index: usize, continuation: String) -> SymbolicFragment {
+    generate_symbolic_arithmetic(index, continuation, write_add_core, ArithmeticCore::Add)
 }

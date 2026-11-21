@@ -15,13 +15,104 @@ const S1: u32 = 9;
 const BLTU: u32 = 6;
 const BGEU: u32 = 7;
 
+const STACK_DECREMENT: u32 = 0xfe04_8493; // addi s1, s1, -32
+const LEAF_RETURN: u32 = 0x0000_8067; // jalr zero, 0(ra)
+
 #[derive(Clone, Copy)]
 pub(crate) enum Fragment {
     Push1,
     Pop,
     Dup1,
     Arithmetic,
+    SymbolicArithmetic(ArithmeticCore),
     Stop,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ArithmeticCore {
+    Add,
+    Sub,
+}
+
+impl ArithmeticCore {
+    fn words(self) -> &'static [u32; 34] {
+        // Standalone core words at the accepted Phase 2.3b.1 revision.
+        // See phase-2.3c-symbolic-arithmetic.md for the byte comparison.
+        match self {
+            Self::Add => &[
+                0x0000_0e13,
+                0x0005_3283,
+                0x0005_b303,
+                0x0062_83b3,
+                0x0053_beb3,
+                0x01c3_83b3,
+                0x01c3_bf33,
+                0x01ee_ee33,
+                0x0076_3023,
+                0x0085_3283,
+                0x0085_b303,
+                0x0062_83b3,
+                0x0053_beb3,
+                0x01c3_83b3,
+                0x01c3_bf33,
+                0x01ee_ee33,
+                0x0076_3423,
+                0x0105_3283,
+                0x0105_b303,
+                0x0062_83b3,
+                0x0053_beb3,
+                0x01c3_83b3,
+                0x01c3_bf33,
+                0x01ee_ee33,
+                0x0076_3823,
+                0x0185_3283,
+                0x0185_b303,
+                0x0062_83b3,
+                0x0053_beb3,
+                0x01c3_83b3,
+                0x01c3_bf33,
+                0x01ee_ee33,
+                0x0076_3c23,
+                0x0000_8067,
+            ],
+            Self::Sub => &[
+                0x0000_0e13,
+                0x0005_3283,
+                0x0005_b303,
+                0x4062_83b3,
+                0x0062_beb3,
+                0x41c3_82b3,
+                0x0053_bf33,
+                0x01ee_ee33,
+                0x0056_3023,
+                0x0085_3283,
+                0x0085_b303,
+                0x4062_83b3,
+                0x0062_beb3,
+                0x41c3_82b3,
+                0x0053_bf33,
+                0x01ee_ee33,
+                0x0056_3423,
+                0x0105_3283,
+                0x0105_b303,
+                0x4062_83b3,
+                0x0062_beb3,
+                0x41c3_82b3,
+                0x0053_bf33,
+                0x01ee_ee33,
+                0x0056_3823,
+                0x0185_3283,
+                0x0185_b303,
+                0x4062_83b3,
+                0x0062_beb3,
+                0x41c3_82b3,
+                0x0053_bf33,
+                0x01ee_ee33,
+                0x0056_3c23,
+                0x0000_8067,
+            ],
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +203,7 @@ pub(crate) fn verify_final_image(
 pub(crate) enum Transfer {
     Jal { rd: u32 },
     Branch { funct3: u32, rs1: u32, rs2: u32 },
+    LeafReturn,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -123,7 +215,7 @@ pub(crate) struct DeclaredTransfer {
 
 /// Checks every control transfer in the fragment area against fragment-owned
 /// declarations. The fixed-layout verifier remains the independent completeness
-/// check for the current PUSH1 candidate.
+/// check for required sites, destinations, and arithmetic core identity.
 pub(crate) fn verify_declared_transfers(
     bytes: &[u8],
     publisher_start: u64,
@@ -216,7 +308,7 @@ impl Fragment {
             Self::Push1 => 11,
             Self::Pop => 4,
             Self::Dup1 => 16,
-            Self::Arithmetic => 9 + 34,
+            Self::Arithmetic | Self::SymbolicArithmetic(_) => 9 + 34,
             Self::Stop => 1,
         };
         let next = pc_at_word(start, words)?;
@@ -252,16 +344,16 @@ impl Fragment {
                     Site::jal(15, ZERO, overflow()?),
                 ],
             ),
-            Self::Arithmetic => image.verify_block(
+            Self::Arithmetic | Self::SymbolicArithmetic(_) => image.verify_block(
                 start,
                 words,
                 &[
                     Site::branch(1, BLTU, S1, T0, pc_at_word(start, 8)?),
                     Site::jal(5, RA, pc_at_word(start, 9)?),
-                    Site::fixed(6, 0xfe04_8493), // Call's PC+4, addi s1, s1, -32.
+                    Site::fixed(6, STACK_DECREMENT), // The call's PC+4.
                     Site::jal(7, ZERO, next),
                     Site::jal(8, ZERO, underflow()?),
-                    Site::fixed(words - 1, 0x0000_8067), // ret
+                    Site::fixed(words - 1, LEAF_RETURN),
                 ],
             ),
             Self::Stop if next == normal => {
@@ -271,6 +363,27 @@ impl Fragment {
                 "STOP at {start:#x} must precede the normal publisher"
             )),
         }?;
+        if let Self::SymbolicArithmetic(core) = self {
+            // This contract is independent of resolved labels and declarations.
+            // Require the preflight and pointer setup as well as the leaf bytes.
+            for (index, expected) in [
+                (0, 0x0404_0293), // addi t0, s0, 64
+                (2, 0xfe04_8513), // addi a0, s1, -32
+                (3, 0xfc04_8593), // addi a1, s1, -64
+                (4, 0xfc04_8613), // addi a2, s1, -64
+            ]
+            .into_iter()
+            .chain((9..).zip(core.words().iter().copied()))
+            {
+                let pc = pc_at_word(start, index)?;
+                let word = image.word(pc)?;
+                if word != expected {
+                    return Err(format!(
+                        "arithmetic at {pc:#x}: word {word:#010x}, expected {expected:#010x}"
+                    ));
+                }
+            }
+        }
         Ok(next)
     }
 }
@@ -416,6 +529,29 @@ impl Image<'_> {
         kind: &Transfer,
         target_pc: u64,
     ) -> Result<(), String> {
+        if *kind == Transfer::LeafReturn {
+            if word != LEAF_RETURN {
+                return Err(format!(
+                    "at {pc:#x}: word {word:#010x}, expected leaf return"
+                ));
+            }
+            let call_pc = target_pc
+                .checked_sub(RV64_INSTRUCTION_SIZE)
+                .ok_or_else(|| format!("invalid leaf return anchor {target_pc:#x}"))?;
+            let (call, displacement) = decode_transfer(call_pc, self.word(call_pc)?)?;
+            let leaf = call_pc
+                .checked_add_signed(i64::from(displacement))
+                .ok_or_else(|| format!("invalid leaf call at {call_pc:#x}"))?;
+            if call != (Transfer::Jal { rd: RA })
+                || pc_at_word(leaf, 33)? != pc
+                || self.word(target_pc)? != STACK_DECREMENT
+            {
+                return Err(format!("invalid leaf return anchor {target_pc:#x}"));
+            }
+            // The fixed layout also identifies the required entry and call sites
+            // without using these declarations.
+            return Ok(());
+        }
         let (actual, displacement) = decode_transfer(pc, word)?;
         if actual != *kind {
             return Err(format!("at {pc:#x}: {actual:?}, expected {kind:?}"));

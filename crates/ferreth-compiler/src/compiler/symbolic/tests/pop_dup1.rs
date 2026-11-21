@@ -7,7 +7,7 @@ const POP_UNDERFLOW: &[(u64, u32)] = &[(0, 0x63), (12, 0x6f)];
 const DUP1_UNDERFLOW: &[(u64, u32)] = &[(0, 0x63), (56, 0x6f)];
 const DUP1_OVERFLOW: &[(u64, u32)] = &[(0, 0x63), (4, 0x37), (8, 0x33), (12, 0x63), (60, 0x6f)];
 
-type FaultPath = (u64, &'static [(u64, u32)]);
+pub(super) type FaultPath = (u64, &'static [(u64, u32)]);
 
 fn observe_stack_ops(
     program: &CompiledRv64Program,
@@ -15,6 +15,17 @@ fn observe_stack_ops(
     publisher: u64,
     code: u64,
     fault: Option<FaultPath>,
+) -> Observation {
+    observe_guest(program, initial, publisher, code, fault, &[])
+}
+
+pub(super) fn observe_guest(
+    program: &CompiledRv64Program,
+    initial: &[U256],
+    publisher: u64,
+    code: u64,
+    fault: Option<FaultPath>,
+    calls: &[(u64, usize)],
 ) -> Observation {
     let mut executor = RvemuExecutor::new().unwrap();
     executor.load_code(program.machine_code()).unwrap();
@@ -32,9 +43,18 @@ fn observe_stack_ops(
     let reserved = [
         (IntegerRegister::EVM_STACK_BASE, base),
         (IntegerRegister::STACK_POINTER, sp),
-        (IntegerRegister::RETURN_ADDRESS, 0x1234_5670),
-    ];
-    for (register, value) in reserved {
+    ]
+    .into_iter()
+    .chain([3, 4, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].map(|index| {
+        (
+            IntegerRegister::new(index).unwrap(),
+            0xa5a5_0000 | u64::from(index),
+        )
+    }));
+    let ra = IntegerRegister::RETURN_ADDRESS;
+    let mut expected_ra = 0x1234_5670;
+    executor.write_register(ra, expected_ra);
+    for (register, value) in reserved.clone() {
         executor.write_register(register, value);
     }
 
@@ -43,15 +63,65 @@ fn observe_stack_ops(
     executor
         .write_memory(EVM_STACK_REGION.end(), &guard)
         .unwrap();
+    executor.write_memory(base - 32, &guard).unwrap();
     executor.write_memory(sp - 32, &native).unwrap();
 
     let mut stops = program.termination_entry_pcs().to_vec();
     stops.push(program.exit_pc());
-    let body = if let Some((start_offset, path)) = fault {
+    let mut cursor = program.entry_pc();
+    let mut call_prefix = 0;
+    for &(offset, depth) in calls {
+        let call = program.entry_pc() + offset + 5 * 4;
+        let leaf = program.entry_pc() + offset + 9 * 4;
+        let mut checkpoints = stops.clone();
+        checkpoints.push(call);
+        let prefix = executor
+            .execute_until(cursor, &checkpoints, program.instruction_limit())
+            .unwrap();
+        assert_eq!(prefix.exit_pc, call);
+        assert_eq!(executor.read_register(ra), expected_ra);
+        assert_eq!(
+            executor
+                .execute(call, leaf, 1)
+                .unwrap()
+                .executed_instructions,
+            1
+        );
+        expected_ra = call + 4;
+        assert_eq!(executor.read_register(ra), expected_ra);
+        let next_free = base + depth as u64 * EVM_WORD_SIZE;
+        assert_eq!(executor.read_register(s1), next_free);
+        for (index, slots_below) in [(10, 1), (11, 2), (12, 2)] {
+            assert_eq!(
+                executor.read_register(IntegerRegister::new(index).unwrap()),
+                next_free - slots_below * EVM_WORD_SIZE
+            );
+        }
+        assert_eq!(
+            executor
+                .execute(leaf, expected_ra, 34)
+                .unwrap()
+                .executed_instructions,
+            34
+        );
+        assert_eq!(executor.read_register(ra), expected_ra);
+        assert_eq!(executor.read_register(s1), next_free);
+        cursor = expected_ra + 4;
+        assert_eq!(
+            executor
+                .execute(expected_ra, cursor, 1)
+                .unwrap()
+                .executed_instructions,
+            1
+        );
+        assert_eq!(executor.read_register(s1), next_free - EVM_WORD_SIZE);
+        call_prefix += prefix.executed_instructions + 36;
+    }
+    let mut body = if let Some((start_offset, path)) = fault {
         let start = program.entry_pc() + start_offset;
         stops.push(start);
         let prefix = executor
-            .execute_until(program.entry_pc(), &stops, program.instruction_limit())
+            .execute_until(cursor, &stops, program.instruction_limit())
             .unwrap();
         assert_eq!(prefix.exit_pc, start);
         let before_s1 = executor.read_register(s1);
@@ -89,9 +159,10 @@ fn observe_stack_ops(
         }
     } else {
         executor
-            .execute_until(program.entry_pc(), &stops, program.instruction_limit())
+            .execute_until(cursor, &stops, program.instruction_limit())
             .unwrap()
     };
+    body.executed_instructions += call_prefix;
     assert_eq!(body.exit_pc, publisher);
     let words = if code == 0 { 7 } else { 8 };
     let (termination, trace) = observe_publication(&mut executor, program, publisher, words);
@@ -100,10 +171,13 @@ fn observe_stack_ops(
         assert_eq!(executor.read_register(register), value, "{register:?}");
     }
     assert_eq!(executor.read_register(s1), guest.final_s1());
+    assert_eq!(executor.read_register(ra), expected_ra);
     let mut actual_guard = [0; 32];
     executor
         .read_memory(EVM_STACK_REGION.end(), &mut actual_guard)
         .unwrap();
+    assert_eq!(actual_guard, guard);
+    executor.read_memory(base - 32, &mut actual_guard).unwrap();
     assert_eq!(actual_guard, guard);
     let mut actual_native = [0; 64];
     executor.read_memory(sp - 32, &mut actual_native).unwrap();

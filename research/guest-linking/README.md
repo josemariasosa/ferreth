@@ -161,8 +161,10 @@ and rejects 50,000 for label count even though the layout fits. The
 maintainer closed RF-019 and accepted RF-020 as a known implementation
 capacity limit. Phase 2.3b.1 is reviewed and accepted.
 
-## Symbolic ADD and SUB planning
+## Symbolic ADD and SUB
 
-The [Phase 2.3c plan](phase-2.3c-plan.md) defines the private fragment scope,
-call and return verification, and parity gates. Implementation awaits
-maintainer authorization.
+The [Phase 2.3c report](phase-2.3c-symbolic-arithmetic.md) records RF-022,
+private ADD/SUB fragments, independent local call and return checks,
+exact core identity, and runtime parity with the public legacy route.
+The implementation followed the [Phase 2.3c plan](phase-2.3c-plan.md)
+and now awaits maintainer review.

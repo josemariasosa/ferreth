@@ -388,9 +388,11 @@ closes the oversized DUP1 JAL question and verifies directed runtime parity.
 The maintainer accepted Phase 2.3b.1, closed RF-019 and recorded RF-020 as
 a known implementation capacity limit. The default assembler limits and
 the ADR-001 executable bound apply independently.
-The [Phase 2.3c plan](../../research/guest-linking/phase-2.3c-plan.md)
-covers private ADD/SUB integration and awaits implementation authorization.
-Public compilation remains on the legacy routes.
+The [Phase 2.3c report](../../research/guest-linking/phase-2.3c-symbolic-arithmetic.md)
+records RF-022 and the private ADD/SUB integration, including exact leaf
+identity, fixed-layout call/return verification and directed runtime parity.
+Phase 2.3c awaits maintainer review. Public compilation remains on the legacy
+routes, with the four LF-026 controls still active.
 
 - Implement only the reviewed mechanism from Phase 1. Give one composer ownership of fragment placement, external transfers and publisher composition. Keep one consistent publication implementation for all applicable guests.
 - Route bytecode and sequence compilation through that composer. Route isolated ADD/SUB through ordinary single-op guest compilation with seeded initial stack, following POP/DUP1. Preserve useful convenience APIs as thin adapters where possible.

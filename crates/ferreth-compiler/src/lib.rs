@@ -218,9 +218,15 @@ fn generate_add() -> String {
          .p2align 2\n\
          .globl evm_add\n\
          .type evm_add, @function\n\
-         evm_add:\n\
-         \x20   li t3, 0\n",
+         evm_add:\n",
     );
+    write_add_core(&mut asm);
+    asm.push_str(".size evm_add, .-evm_add\n");
+    asm
+}
+
+fn write_add_core(asm: &mut String) {
+    asm.push_str("    li t3, 0\n");
     for offset in [0, 8, 16, 24] {
         writeln!(
             asm,
@@ -235,8 +241,7 @@ fn generate_add() -> String {
         )
         .expect("writing to a String cannot fail");
     }
-    asm.push_str("    ret\n.size evm_add, .-evm_add\n");
-    asm
+    asm.push_str("    ret\n");
 }
 
 /// Generates `evm_sub`, using a0/a1 as input pointers and a2 as the output
@@ -248,9 +253,15 @@ fn generate_sub() -> String {
          .p2align 2\n\
          .globl evm_sub\n\
          .type evm_sub, @function\n\
-         evm_sub:\n\
-         \x20   li t3, 0\n",
+         evm_sub:\n",
     );
+    write_sub_core(&mut asm);
+    asm.push_str(".size evm_sub, .-evm_sub\n");
+    asm
+}
+
+fn write_sub_core(asm: &mut String) {
+    asm.push_str("    li t3, 0\n");
     for offset in [0, 8, 16, 24] {
         writeln!(
             asm,
@@ -265,8 +276,7 @@ fn generate_sub() -> String {
         )
         .expect("writing to a String cannot fail");
     }
-    asm.push_str("    ret\n.size evm_sub, .-evm_sub\n");
-    asm
+    asm.push_str("    ret\n");
 }
 
 #[cfg(test)]

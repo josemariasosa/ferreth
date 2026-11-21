@@ -365,13 +365,6 @@ fn frontend_preserves_truncated_push_and_first_stop() {
         })
     );
     assert_eq!(
-        compile(&[0x60, 0, 0x01]),
-        Err(CompileError::UnsupportedInstruction {
-            opcode: 0x01,
-            offset: 2
-        })
-    );
-    assert_eq!(
         compile(&[0x60, 0, 0xfe]),
         Err(CompileError::Decode(DecodeError::UnsupportedOpcode {
             opcode: 0xfe,
@@ -569,6 +562,7 @@ fn declarations_and_namespaces_reject_incomplete_or_corrupted_images() {
     ));
 }
 
+mod arithmetic;
 mod pop_dup1;
 
 #[test]
