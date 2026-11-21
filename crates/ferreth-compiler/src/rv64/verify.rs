@@ -18,12 +18,15 @@ const BGEU: u32 = 7;
 const STACK_DECREMENT: u32 = 0xfe04_8493; // addi s1, s1, -32
 const LEAF_RETURN: u32 = 0x0000_8067; // jalr zero, 0(ra)
 
-#[allow(dead_code, reason = "Phase 2.4 legacy-layout and rollback coverage")]
 #[derive(Clone, Copy)]
 pub(crate) enum Fragment {
     Push1,
     Pop,
     Dup1,
+    #[allow(
+        dead_code,
+        reason = "constructed only by the test-only legacy linker oracles"
+    )]
     Arithmetic,
     SymbolicArithmetic(ArithmeticCore),
     Stop,
@@ -116,15 +119,26 @@ impl ArithmeticCore {
     }
 }
 
-#[allow(dead_code, reason = "Phase 2.4 legacy-layout and rollback coverage")]
 #[derive(Clone, Copy)]
 pub(crate) enum PublisherLayout {
+    #[allow(
+        dead_code,
+        reason = "constructed only by the test-only legacy linker oracles"
+    )]
     PushOnly,
     Symbolic,
     SymbolicNormalOverflow,
     SymbolicNormalUnderflow,
     SymbolicNormalUnderflowOverflow,
+    #[allow(
+        dead_code,
+        reason = "constructed only by the test-only legacy linker oracles"
+    )]
     Mixed,
+    #[allow(
+        dead_code,
+        reason = "constructed only by the test-only legacy linker oracles"
+    )]
     IsolatedArithmetic,
 }
 

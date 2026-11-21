@@ -178,3 +178,11 @@ the routing and public compatibility decisions. The
 [Phase 2.4 public cutover review](phase-2.4-public-cutover.md) records the
 RF-026 regression repair, the RF-027 resident-word policy approval and
 verification for maintainer review.
+
+## Final cleanup
+
+The [Phase 2.5 cleanup report](phase-2.5-final-cleanup.md) records the legacy
+linker inventory, the narrowed dead-code allowances, the test-oracle
+disposition and the full validation gate. The
+[human-led walk](human-led-walk.md) lists what the maintainer should inspect,
+without stating conclusions.

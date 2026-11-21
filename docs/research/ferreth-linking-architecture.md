@@ -403,8 +403,11 @@ record the current routing and verification. RF-026 restores independent
 publisher, label and isolated arithmetic image checks. RF-027 establishes the
 public static accessor as the resident exceptional publisher word count
 (0 with neither role, 8 with either role alone, 16 with both). One selected
-exceptional publisher executes eight instructions. Phase 2.4 awaits maintainer
-review. Legacy linkers remain test oracles.
+exceptional publisher executes eight instructions. Phase 2.4 was accepted as the
+baseline. The [Phase 2.5 cleanup report](../../research/guest-linking/phase-2.5-final-cleanup.md)
+removes stale production allowances and corrects the public PUSH1 documentation.
+Legacy linkers remain isolated test-only oracles, retained by documented
+disposition. Replacing them with immutable fixtures is deferred.
 
 - Implement only the reviewed mechanism from Phase 1. Give one composer ownership of fragment placement, external transfers and publisher composition. Keep one consistent publication implementation for all applicable guests.
 - Route bytecode and sequence compilation through that composer. Route isolated ADD/SUB through ordinary single-op guest compilation with seeded initial stack, following POP/DUP1. Preserve useful convenience APIs as thin adapters where possible.

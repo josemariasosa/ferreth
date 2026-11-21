@@ -1,0 +1,507 @@
+# Ferreth — Human-Led Walk
+
+**Independent architecture and correctness review after Phase 2**  
+**Status:** walkthrough not yet performed · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset  
+**Starting checkpoint reported:** `feat/symbolic-guest-composer`, Phase 2.4 commit `3eb4a94`; Phase 2.5 pending maintainer commit at the time this guide was prepared  
+**Read this file first when returning to Ferreth.**
+
+> **Mission.** We built a compiler path that transforms supported EVM bytecode into an executable RV64 guest, then runs that guest and compares observable behavior against trusted expectations. The human-led walk is **not** another automated green-test gate. It is an attempt to understand the entire trust chain, challenge assumptions, distinguish independent evidence from self-consistency, and decide what must be stabilized before a first `v0.1.0` baseline.
+>
+> **Operating rule:** the human reviewer leads; assistants are copilots. Do not begin by asking an agent to audit the project or summarize what it thinks is correct. Read code and trace a specimen first, write down your own hypothesis, then use the assistant to test it.
+
+---
+
+## 0. Five-minute re-entry: where are we?
+
+### What Ferreth is
+
+Ferreth is an **experimental Rust EVM-bytecode → RV64 compiler and execution/conformance system**, not a full Ethereum Virtual Machine and not a production-ready engine. Its current supported instruction subset is:
+
+| EVM instruction | Purpose in this project | Important edge |
+|---|---|---|
+| `STOP` | Normal termination | EOF also ends normally; unreachable trailing bytes must not be decoded as reachable instructions |
+| `PUSH1` | Write a 256-bit stack word containing a byte immediate | Truncated immediate at EOF is right-zero-padded; full stack overflows |
+| `POP` | Remove the top stack item | Empty stack underflows without reading memory |
+| `DUP1` | Duplicate the top 256-bit word | Empty underflows; full stack overflows |
+| `ADD` | 256-bit modular sum | Requires two operands; carries across four 64-bit limbs |
+| `SUB` | 256-bit modular subtraction | Requires two operands; borrow/order and wraparound matter |
+
+This project does **not yet** claim full EVM control flow (`JUMP`, `JUMPI`, `JUMPDEST`), complete EVM memory and storage semantics, gas/OOG accounting, or `KECCAK256`. Work related to ADR-002 gas metering belongs **after** this walk and Phase 3 stabilization, subject to later planning.
+
+### Why Phase 2 happened
+
+Historically, Ferreth had several overlapping ways to link small RV64 guests: a PUSH1-only linker, a mixed-opcode linker, and isolated arithmetic linkers. Some constructed assembly text and then patched displacements or machine-code words manually. **LF-026** exposed a real problem: a 47-`PUSH1` program required a distant JAL displacement (`+2056` or `+2060` bytes), and the old numeric-JAL assembler path rejected it. **LF-027** concerned incorrect signed backward-JAL encoding in the former manual strategy.
+
+The Phase 1 experiments explored symbolic assembler targets; Phase 2 built a single composer, added independently decoded final-image verification, moved six opcodes to the symbolic path privately, then switched the public APIs in Phase 2.4. Phase 2.5 checked that the old linkers had already become `#[cfg(test)]`-only oracles and made **documentation/attribute cleanup**, rather than deleting valuable independent tests.
+
+### What the latest reports claim — verify rather than assume
+
+- Public `compile_evm_bytecode` and `compile_push1_program` use `symbolic::compile` and `symbolic::compile_push1_sequence` respectively.
+- Active guest production uses one symbolic composer, one assembled final image and final-image verification before execution.
+- Legacy whole-image linkers are isolated under `#[cfg(test)]` and retained as independent oracles.
+- At the Phase 2.4/2.5 gate: **215 discovered, 212 passed, 0 failed, 3 ignored**; all three opt-in capacity probes passed separately.
+- The four 47-PUSH LF-026 public regression cases passed; benchmarks matched the accepted JSON baselines.
+- The public *resident exceptional publisher* count is `0`, `8`, or `16` words. **Dynamic execution** uses only one terminal publisher: normal `7` instructions or exceptional `8` instructions.
+- The 34-word ADD and SUB leaf-core fingerprints are `0xf1fff32ff47962f3` and `0x9f008f320eeb7a7b` (FNV-1a64 as reported).
+
+These are **reported Phase 2 findings**, not conclusions established by this walkthrough. Some filenames, line numbers or Git state may have changed. Inspect the real checkout.
+
+### What Phase 2.5 actually changed
+
+According to the handoff, it removed a stale `#[allow(dead_code)]` annotation from the active symbolic module, narrowed `dead_code` allowances in `rv64/verify.rs` to test-only variants, corrected outdated PUSH1 Rustdoc, and created/updated research documentation. It **did not rewrite production algorithms**. Test-only legacy linkers and duplicated test-only JAL helpers remain intentionally. This is not a failed cleanup; deleting the only independent oracles would have made the system less trustworthy.
+
+---
+
+## 1. Start with Git, not an agent
+
+At the repository root:
+
+```bash
+git status --short --branch
+git log -5 --oneline --decorate
+git branch --merged
+git branch --no-merged
+git diff --check
+```
+
+**Checkpoint 1 — record without editing:**
+
+- [ ] Current branch and HEAD recorded: `________________________`
+- [ ] Phase 2.4 cutover commit found (reported `3eb4a94`): `________________`
+- [ ] Phase 2.5 commit found (if already created): `________________`
+- [ ] Working tree condition: `________________`
+- [ ] Decide whether this is a clean review session; do not perform broad merges or cleanup here.
+
+If you are not on the expected branch or worktree is dirty, **stop before writing changes** and inspect why. Do not use `git reset --hard`, `git clean`, or blanket staging to get a clean state.
+
+**Recommended reading: source of truth, in order**
+
+1. `AGENTS.md` — repository rules.
+2. `docs/bitacora/README.md` and the relevant November 2026 entry — how to navigate the historical context.
+3. `research/guest-linking/phase-2.4-public-cutover.md` — latest public acceptance evidence and RF-026/RF-027 repair.
+4. `research/guest-linking/phase-2.5-final-cleanup.md` — retained legacy oracles, test matrix and known debt.
+5. `research/guest-linking/phase-2.3d-integration-review.md` — private six-opcode proof obligations and prior defects RF-023–RF-025.
+6. `docs/research/ferreth-linking-architecture.md` — architecture/roadmap; distinguish historical design from current implementation.
+7. ADR-001 (locate its actual path via `rg -n 'ADR-001' docs research`). Proposed ADR-002 is context, **not** an approved gas implementation.
+
+If any document contradicts current code, mark the contradiction; don't silently fix it during the reading session.
+
+---
+
+## 2. The map you must be able to explain
+
+The expected production pipeline is:
+
+```text
+EVM bytecode or PUSH1 immediate slice
+                  │
+                  ▼
+Public entry points (compiler.rs)
+                  │
+                  ▼
+Decoder / symbolic frontend (compiler/symbolic.rs)
+  • reachable STOP / EOF / truncated PUSH1 / diagnostics
+                  │
+                  ▼
+Opcode-specific generators (rv64/opcodes/*)
+  • fixed guest body + labels + declared transfer sites
+                  │
+                  ▼
+Typed SymbolicFragment contract
+  • source, entry, external roles, local transfers, layout
+                  │
+                  ▼
+Single symbolic compose step
+  • combines fragments, appends required publishers
+  • assembles once via asm-rs
+                  │
+                  ▼
+Final RV64 image + bound label PCs
+                  │
+                  ▼
+Independent final-image verifier (rv64/verify.rs)
+  • decode actual instructions and check control-flow/layout
+                  │
+                  ▼
+CompiledRv64Program / executable artifact
+                  │
+                  ▼
+Orchestrator → rvemu executor → ADR-001 publication
+                  │
+                  ▼
+Observed stack, status, error, registers, counts
+                  │
+                  ▼
+Independent conformance / runtime expectations
+```
+
+### Mandatory distinction
+
+**Compiler/generator** decides what bytes to emit. **Assembler** resolves symbols and emits encoded RV64 instructions. **Verifier** inspects the final image and rejects mismatches; it must **not** repair bytes or generate linker addresses. **Executor** runs the guest and reports state. **Tests/oracles** must check facts that are not merely copied from the same candidate.
+
+If you can only recite this diagram but cannot locate the responsibility in source, the walk is not complete.
+
+---
+
+## 3. Session A — Enter through the public APIs
+
+**Read:** `crates/ferreth-compiler/src/compiler.rs`, then `crates/ferreth-compiler/src/compiler/symbolic.rs`.
+
+**Goal:** trace two inputs without invoking the emulator:
+
+```text
+Bytecode route: 60 05 60 03 01 00
+PUSH1-slice route: [0x05, 0x03]
+```
+
+The first means `PUSH1 5; PUSH1 3; ADD; STOP` and should finish with `[8]` (assuming conventional stack-display order). The second is **not bytecode**: it means two immediates supplied to the PUSH1 sequence API, and should leave `[5,3]` in bottom-to-top order.
+
+**Write down, from code:**
+
+1. Which public function receives each input? Which internal function is called next?
+2. Where is reachability terminated at the first `STOP`? What if bytes follow it?
+3. Where is incomplete `PUSH1` right-padded? Does `60` at EOF become `PUSH1 0`?
+4. How is unsupported `PUSH2` reported — opcode and original byte offset? What about an unknown opcode after `STOP`?
+5. Which function owns the decision to append Normal at EOF?
+6. Does any production branch still invoke `compile_*_legacy`?
+
+**Commands for finding calls, not proving them:**
+
+```bash
+rg -n 'pub fn compile|fn compile|compile_push1_sequence|compile_evm_bytecode' crates/ferreth-compiler/src
+rg -n 'compile_.*legacy|link_guest_arithmetic|encode_jal_zero' crates/ferreth-compiler/src
+```
+
+**Checkpoint A:** draw the entry-point call chain in your own words, including the difference between bytecode decoding and immediate-slice enumeration. Do not proceed until you can explain why decoding PUSH1 immediate bytes as opcodes would be a serious bug.
+
+---
+
+## 4. Session B — Follow one opcode into machine code
+
+**Read:** `crates/ferreth-compiler/src/rv64/opcodes/` (actual file names in tree), especially PUSH, POP, DUP and arithmetic; inspect the type implementing the fragment contract in `compiler/symbolic.rs`.
+
+Choose `PUSH1 0x05` and track it **without taking the generator's comments on faith**:
+
+- [ ] Locate stack-capacity preflight: which registers/pointers are used? Is the comparison unsigned?
+- [ ] Locate the four 64-bit limb stores representing one 256-bit EVM word.
+- [ ] Locate the `s1` update by 32 bytes on success.
+- [ ] Locate the path to Overflow **before** any stack write on failure.
+- [ ] Locate each local label and exceptional external role declaration.
+- [ ] Locate the fragment's expected layout or transfer descriptor.
+
+Repeat the critical steps for `POP` and `DUP1`:
+
+- `POP` empty stack: no memory read; Underflow status.
+- `DUP1` empty: Underflow; full: Overflow; normal: preserve original top and append an exact 256-bit copy.
+
+**Questions that should feel uncomfortable:**
+
+- Does the declaration of a transfer site originate from the same generator that emits it? If so, what independent evidence detects a generator that declares its own wrong jump?
+- What is checked independently after assembly versus merely asserted by metadata?
+- Could a fragment declare a transfer instruction belonging to a *different* fragment? This was RF-025.
+- Which invariants rely on the ABI's initial register state and are not proven for arbitrary RV64 states?
+
+**Checkpoint B:** hand-sketch the success and fault control flow for one `PUSH1` fragment and a `DUP1` fragment. Identify the exact guard that prevents a fault path from modifying stack data.
+
+---
+
+## 5. Session C — Understand the composer and the linker contract
+
+**Read:** `compiler/symbolic.rs` and `compiler/publisher.rs` (or their actual paths).
+
+Do not begin with the 47-PUSH program. First understand **two adjacent fragments**:
+
+```text
+PUSH1 0x05  →  POP  →  normal EOF
+```
+
+Ask:
+
+1. How does fragment N name its continuation into fragment N+1?
+2. How are symbol names kept unique across repeated opcode occurrences?
+3. Who gathers required exceptional roles? Does unused code get emitted?
+4. In which physical order are publishers appended? Expected: Normal, Underflow if required, Overflow if required.
+5. How does the composer obtain actual publisher PCs after assembly — resolved labels or guessed offsets?
+6. Does `compose` contain opcode-specific linking branches, patch a numeric JAL, or edit emitted bytes? It should not.
+7. What causes a duplicate label, missing target, out-of-fragment declaration, or oversized image to be rejected?
+
+**Publisher table you should derive by reading source:**
+
+| Sample program | Expected resident roles | Resident exceptional words | Executed terminal publisher |
+|---|---|---:|---|
+| Empty input / STOP alone | Normal | 0 | Normal, 7 |
+| PUSH1 only | Normal, Overflow | 8 | Normal 7 or Overflow 8 |
+| POP only | Normal, Underflow | 8 | Normal 7 or Underflow 8 |
+| PUSH1 then POP | Normal, Underflow, Overflow | 16 | Normal 7 or selected exceptional 8 |
+
+These are **contract expectations**. Confirm them against actual program metadata, compiled bytes and tests. Do not assume both exceptional bodies execute because both are resident.
+
+### The long-jump exercise — LF-026
+
+Examine the exact four original public 47-PUSH tests in `crates/ferreth-compiler/tests/rv64_push1_program.rs` and the private independent transfer decoder.
+
+- With 47 pushes and implicit EOF, the first distant JAL at `ENTRY_PC + 40` has expected displacement `+2056`.
+- With 47 pushes followed by STOP, expected displacement is `+2060`.
+- Successful execution: 47 stack words each equal to 2; `s1=0x801015e0`; dynamic body/publisher counts `470+7` or `471+7`.
+- Seeded full-stack overflow: preserve 1,024 words; `s1=0x80109000`; exception code 1; counts `4+8`.
+
+**Crucial:** do not accept an assembly label or metadata PC as proof of the target. Independently decode the signed J-type immediate from the *final word*, calculate `source PC + displacement` and compare it to the intended role address.
+
+**Checkpoint C:** explain in one paragraph why symbolic JAL fixed LF-026 and why a signed-immediate mistake (LF-027) could evade simplistic positive-only tests.
+
+---
+
+## 6. Session D — Verify the verifier
+
+**Read:** `crates/ferreth-compiler/src/rv64/verify.rs` plus `rv64/verify/tests.rs` and `tests/rv64_final_image.rs`.
+
+This is the highest-priority reasoning session.
+
+**Separate three questions:**
+
+1. *Structural integrity:* Is the final machine code a well-formed aligned image inside the ADR-001 code reservation?
+2. *Declared control-flow integrity:* Do decoded JAL/B-type/JALR instructions have valid families, destination registers, sites, signed targets and expected roles?
+3. *Semantic integrity:* Does each supported opcode actually perform the intended 256-bit stack operation on all relevant states?
+
+The current verifier is **not a general proof of arbitrary RV64 semantic correctness**. The reports say it checks fixed layout, exact protected arithmetic words and publishers, transfer sites and ownership, while other straight-line instruction semantics rely on runtime and independent fixture coverage. Verify these boundaries rather than calling everything “verified.”
+
+### Reconstruct the negative controls
+
+Locate tests that intentionally change source/declarations or machine words to check rejection. Include at least:
+
+- An incorrect signed backward JAL.
+- A JAL to an unaligned/invalid target.
+- A swapped publisher role with otherwise plausible PCs.
+- A missing publisher body or invalid zero-address declaration (RF-024).
+- A declaration whose instruction site belongs to another fragment (RF-025).
+- A POP that skips a necessary live operation even when the declaration agrees with the wrong continuation.
+- An incorrect arithmetic call target or return anchor.
+
+Do not assume these are the exact test function names. Locate the actual tests and record names/results.
+
+**Adversarial thought experiment:** “If the generator and transfer declaration both make the **same** mistake, which independent test or verifier invariant catches it?” Write one concrete scenario and its expected failure. If none exists, record a gap; do not invent a guarantee.
+
+**Checkpoint D:** produce a trust-boundary diagram with two columns: “checked by decoding final bytes” and “still dependent on runtime/oracle evidence.” This is a mandatory output of the walk.
+
+---
+
+## 7. Session E — Trace execution and ADR-001 publication
+
+**Read:** `crates/ferreth-compiler/src/orchestrator.rs`, executor under `src/rv64/executor/`, guest memory/register layout (e.g., `rv64/guest.rs`, `rv64/memory.rs`), and ADR-001.
+
+Trace **one successful** and **one failing** guest:
+
+```text
+Success:   60 05 60 03 01 00     # PUSH1 5, PUSH1 3, ADD, STOP
+Underflow: 50                    # POP from empty stack
+```
+
+Record:
+
+- Where `s0` (stack base), `s1` (live pointer), `sp` and `ra` are initialized.
+- Where stack lower/upper bounds and reserved code/exit regions are enforced.
+- What the executor considers a publisher PC, and why it must accept the actual role-specific PC set.
+- How the guest reaches the exit sentinel, why the sentinel is not counted as a guest body instruction, and what `ra` means for guest-local arithmetic leaf returns versus host exit.
+- Exact order of publication stores: final pointer, exception code, terminal status last.
+- What a normal result and an exception report to the public orchestrator.
+- Whether a failure could partially change the EVM stack before underflow/overflow is detected.
+
+**Checkpoint E:** hand-draw both instruction paths through the selected publisher and sentinel. Check the expected stack and terminal status against an execution result, not just a compiled artifact.
+
+---
+
+## 8. Session F — Understand ADD/SUB's local calls and 256-bit behavior
+
+**Read:** arithmetic generator/wrapper and protected leaf routines; compare `compiler/symbolic/tests/arithmetic.rs` with standalone arithmetic oracle checks.
+
+The Phase 2.3d report describes a **43-word complete arithmetic fragment**, including a **34-word protected leaf core**. Typical normal path executes **42 body instructions + 7 Normal publisher instructions**; the underflow path takes **3 + 8**. The local `jal ra, leaf` must return to the correct stack-pointer-update instruction without clobbering the host sentinel behavior.
+
+Reconstruct for `ADD` and `SUB`:
+
+1. Which stack element is `a` and which `b`? Read the implementation; don't infer from Rust names.
+2. What checks ensure a depth of at least two before any operand access?
+3. How are the four 64-bit limbs loaded/written to represent 256 bits?
+4. Where does carry propagate in ADD and borrow propagate in SUB?
+5. Where is the leaf call encoded, and which instruction is the return target?
+6. How is `s1` decremented after successful arithmetic?
+7. Does the isolated public arithmetic entry produce the same image as the retained **independent legacy isolated linker**, or is the test comparing the symbolic path to itself?
+8. What exactly do the FNV hashes cover (protected leaf words, not necessarily whole guest image)?
+
+**Suggested concrete arithmetic oracles:** `MAX + 1 = 0 mod 2^256`; subtraction underflow/wraparound; carry/borrow across limbs; repeated ADD/SUB; one-operand underflow without stack writes.
+
+**Checkpoint F:** describe the guest-local call/return and explain why `ra` is safe despite its special role in host exit. Provide the actual core hash values as verified from test output or source fixtures.
+
+---
+
+## 9. Session G — Conformance, benchmarks and accepted limits
+
+**Read:** `crates/ferreth-compiler/tests/`, conformance crate tests, `docs/runbooks/benchmark.md`, `runs/phase-0/guest-benchmarks.json` and `runs/rv64-arithmetic.json`.
+
+### Runtime and conformance
+
+Clarify which tests compare public behavior against an **independent reference** (e.g., REVM), and which merely compare symbolic to legacy or run the generated image through the same internal executor. Historical EELS captures are useful context; do not claim they were rerun unless there is fresh evidence.
+
+The report's known diagnostic caveat: a REVM empty-DUP1 exception-classification detail may differ while the relevant Ferreth underflow behavior remains an explicit accepted contract. Record any such discrepancy precisely, without disguising semantic differences as harmless diagnostics.
+
+### Capacity is a stated implementation boundary, not an Ethereum consensus rule
+
+- ADR-001 executable interval: reported `[0x80000000, 0x800ffffc)`, maximum **1,048,572 bytes**.
+- Under the pinned `asm-rs` defaults, POP: **49,999** occurrences accepted at the reported 100,000-label limit; 50,000 rejected by assembler resources.
+- DUP1: **16,382** accepted; 16,383 exceeds image reservation.
+- PUSH1: **23,829** accepted, 23,830 exceeds image reservation (with EOF or STOP).
+
+Don't reopen label-density optimization during this walk. Instead ask whether rejection is deterministic, has the correct `Link`/`Layout` class, and produces no partial artifact.
+
+### Reproduction commands
+
+Run from repository root; use a fresh target directory if practical:
+
+```bash
+export CARGO_TARGET_DIR=target/human-led-walk-validation
+cargo fmt --all -- --check
+cargo clippy --frozen --workspace --all-targets -- -D warnings
+cargo test --frozen --workspace -- --list
+cargo test --frozen --workspace --no-fail-fast
+cargo test --frozen -p ferreth-compiler --lib capacity -- --ignored --nocapture --test-threads=1
+cargo test --frozen -p ferreth-linking-spike --test capacity_probe -- --ignored --nocapture --test-threads=1
+cargo run --frozen -q -p ferreth-conformance -- bench guest --format json
+cargo run --frozen -q -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
+```
+
+**Don't count ignored capacity probes as workspace passes.** Reconcile discovery + executed + ignored: Phase 2 handoff was **215 = 212 + 3**; all three opt-in probes were rerun separately. When comparing benchmark JSON, account for any prefixed rvemu warning lines transparently and compare **complete parsed JSON objects** to tracked baselines; do not silently regenerate baselines.
+
+**Checkpoint G:** create a table of claims, independent source, invocation and observed result. Flag missing independent evidence even if the test suite is green.
+
+---
+
+## 10. The human-led walk's five deliberate challenges
+
+Do not outsource answers to these until you have attempted them from code.
+
+### Challenge 1 — Responsibility boundaries
+
+Can we identify **one owner per responsibility** for decode, lowering, fragment generation, composition, publisher creation, verification, execution and conformance? Are any two layers silently making incompatible assumptions?
+
+### Challenge 2 — A shared mistake
+
+Find at least one realistic error that generator **and** metadata declaration could agree on. Locate the independent check that prevents it. If there isn't one, record a focused test proposal for Phase 3.
+
+### Challenge 3 — Failure atomicity
+
+For PUSH1, POP, DUP1, ADD and SUB, prove from the instruction sequence that exceptional paths do not corrupt live stack contents or publish an inconsistent final pointer/status. Distinguish “proved by inspection” from “observed in tests.”
+
+### Challenge 4 — The seventh-opcode thought experiment
+
+Without implementing anything, trace what would be required to add a simple seventh opcode. Which modules and tests change? Does composer require a new opcode-specific branch? If yes, challenge the architecture. Do **not** turn this thought experiment into new opcode work.
+
+### Challenge 5 — The first version tag
+
+What exactly could the project truthfully promise at `v0.1.0`? Write an explicit supported-domain statement and exclusions. “Verified symbolic linker” must not be misconstrued as formally verified, complete EVM or production safety.
+
+---
+
+## 11. Write findings as you go (not at the end)
+
+Create a separate review notebook in your repo only **after** you decide where it should live, for example `research/guest-linking/human-led-walk-findings.md`. Suggested entries:
+
+```markdown
+## H-WALK-001 — Short, neutral title
+
+- **Session / date / reviewer:**
+- **Claim under examination:**
+- **Source / function / lines / commit:**
+- **Input specimen and initial state:**
+- **My expected behavior before running:**
+- **Observed machine words / PCs / stack / status:**
+- **Independent evidence (or absence):**
+- **Classification:** Blocker / phase-3 hardening / accepted limitation / future work
+- **Action proposal:**
+- **Status:** Open / confirmed / rejected / deferred
+```
+
+Prefer *one concrete counterexample* over paragraphs of general concern. If a question cannot be settled by inspection, write the smallest test that would settle it **as a proposal**, and save implementation for Phase 3 unless the worktree has a demonstrable critical defect that requires intervention.
+
+### Findings categories
+
+| Category | Meaning | Immediate effect |
+|---|---|---|
+| **Blocker** | Incorrect supported-domain semantics, unverifiable control flow, broken ABI, loss of independent evidence, or an uncontrolled failure | No stable baseline/tag until resolved |
+| **Phase 3 hardening** | Missing focused test, inadequate diagnostics, duplicated assumptions, cleanup with bounded impact | Prioritize in stabilization plan |
+| **Accepted limitation** | Explicit resource bound or out-of-scope EVM behavior, correctly rejected/documented | Document; do not expand scope |
+| **Future work** | Gas, new opcodes, dynamic jumps, KECCAK256, performance experiments | Keep out of Phase 3 unless separately approved |
+
+---
+
+## 12. The exit gate: what we decide after the walk
+
+Only when Sessions A–G have been attempted and the five challenges answered:
+
+- [ ] We can trace EVM input to final emitted RV64 words, and then to observed execution state.
+- [ ] We can independently decode at least one JAL and verify its resolved target.
+- [ ] We can explain how all publisher roles are selected and why status is published last.
+- [ ] We can explain the arithmetic local call/return and exact 256-bit stack effects.
+- [ ] We know exactly where final-image verification is independent and where it is not.
+- [ ] We checked at least one positive and one adversarial control in source/tests.
+- [ ] We identified all remaining production-versus-test-only legacy distinctions.
+- [ ] We reconciled test discovery, opt-in probes and baseline benchmarks.
+- [ ] Every important finding has a classification and follow-up owner/decision.
+- [ ] We can state the precise, limited claim that a future `v0.1.0` would represent.
+
+**Possible conclusions:**
+
+1. **Ready to plan Phase 3:** bounded list of concrete stabilization tasks, no hidden architectural questions blocking the supported domain.
+2. **Walk incomplete:** one or more critical code paths still not understood; continue reading rather than requesting a broad agent rewrite.
+3. **Architecture blocker found:** write the shortest reproduction and pause the stability/tag decision until investigated.
+
+**Do not tag `v0.1.0` at the end of this walk.** The milestone candidate is **after** the human findings have informed Phase 3 and all release-blocking findings are closed.
+
+---
+
+## 13. First hour: a literal starting itinerary
+
+For a cold restart, do just this:
+
+**0–10 minutes — Establish location in history**  
+Open this file. Run `git status`, inspect HEAD, read the Phase 2.4 and 2.5 summaries and locate ADR-001. Write down three facts you believe and one you want to challenge.
+
+**10–25 minutes — Open the public API**  
+Read only the relevant portions of `compiler.rs` and `compiler/symbolic.rs`. Follow `60 05 60 03 01 00` by hand. Draw call arrows. Do **not** open the entire repo at once.
+
+**25–40 minutes — Read PUSH1 body**  
+Identify the stack check, stores, pointer update and exceptional jump. Find exact fragment declarations. Sketch the instruction flow.
+
+**40–55 minutes — Read composer/publishers**  
+Trace the two-fragment example to symbol resolution and publisher PC binding. Distinguish `Normal`, `Underflow`, `Overflow` and resident-vs-dynamic counts.
+
+**55–60 minutes — Write your first finding**  
+Record a question about ownership, a claim verified from code, and the exact next source file to inspect. Stop here if attention is fading; progress in this walk is *understanding*, not volume of lines read.
+
+### Where to resume on the following day
+
+Read the most recent finding, state its unresolved question aloud, then continue with Session D (**verify the verifier**). Never restart from an agent summary alone.
+
+---
+
+## 14. Context anchors / historical references
+
+These documents are navigation and historical evidence, **not substitutes for current source**:
+
+- `research/guest-linking/README.md`
+- `research/guest-linking/phase-2.3d-integration-review.md`
+- `research/guest-linking/phase-2.4-cutover-plan.md`
+- `research/guest-linking/phase-2.4-public-cutover.md`
+- `research/guest-linking/phase-2.5-final-cleanup.md`
+- `research/guest-linking/phase-1/` (experimental symbolic linker and independent mixed-program comparisons)
+- `docs/research/ferreth-linking-architecture.md`
+- `docs/runbooks/benchmark.md`
+- `runs/phase-0/guest-benchmarks.json`
+- `runs/rv64-arithmetic.json`
+- ADR-001 and proposed ADR-002 at their actual repository locations
+
+**Important epistemic boundary:** this guide was assembled from the Phase 2.3d/2.4/2.5 reports and conversation evidence, **not** by checking out the current source repository. Precise symbol names and code paths must be confirmed during the human walk. Treat an unresolved mismatch as a finding, not as permission to guess.
+
+---
+
+**The promise of this walk is modest but serious:** by the end, the human maintainer should be able to say *what Ferreth compiles, how control flow is linked, how the guest exits, what is actually verified, and which risks remain*. Only then should Phase 3 attempt to stabilize it.
+
+*One linker in production. Six supported opcodes. Independent evidence retained. Human eyes open.*
