@@ -174,5 +174,7 @@ and now awaits maintainer review.
 The [Phase 2.3d audit](phase-2.3d-integration-review.md) records the six-opcode
 matrix, RF-023 through RF-025, frozen verification and isolated arithmetic
 image identity. The [Phase 2.4 plan](phase-2.4-cutover-plan.md) identifies
-the routing and public compatibility decisions awaiting maintainer review.
-The legacy public route still reproduces LF-026.
+the routing and public compatibility decisions. The
+[Phase 2.4 public cutover review](phase-2.4-public-cutover.md) records the
+RF-026 regression repair, the RF-027 resident-word policy approval and
+verification for maintainer review.

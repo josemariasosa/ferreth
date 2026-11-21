@@ -8,20 +8,24 @@
 use std::fmt;
 
 use alloy_primitives::U256;
+#[cfg(test)]
 use asm_rs::{assemble, Arch};
 
+#[cfg(test)]
+use crate::rv64::{
+    codegen::GeneratedRv64,
+    opcodes::{add::generate_guest_add, sub::generate_guest_sub},
+    verify::{verify_final_image, Fragment, PublisherLayout},
+};
 use crate::{
     compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},
     rv64::{
-        codegen::GeneratedRv64,
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
             initialize_guest_state, read_guest_result, write_evm_word, GuestInitializationError,
             GuestMemoryError, GuestResult, GuestResultError,
         },
         memory::{LayoutError, ENTRY_PC, EVM_STACK_CAPACITY, EVM_STACK_REGION, EXIT_PC},
-        opcodes::{add::generate_guest_add, sub::generate_guest_sub},
-        verify::{verify_final_image, Fragment, PublisherLayout},
     },
 };
 
@@ -219,11 +223,11 @@ pub fn execute_guest_add(a: U256, b: U256) -> Result<OrchestratorResult, Orchest
 pub fn execute_guest_add_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    let linked = link_guest_add()?;
+    let linked = compile_evm_bytecode(&[0x01]).map_err(map_compilation_error)?;
     execute_raw_program(
-        linked.assembly,
-        linked.machine_code,
-        &linked.termination_entry_pcs,
+        linked.assembly().to_owned(),
+        linked.machine_code().to_vec(),
+        linked.termination_entry_pcs(),
         initial_stack,
     )
 }
@@ -243,13 +247,21 @@ pub fn execute_guest_sub(a: U256, b: U256) -> Result<OrchestratorResult, Orchest
 pub fn execute_guest_sub_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    let linked = link_guest_sub()?;
+    let linked = compile_evm_bytecode(&[0x03]).map_err(map_compilation_error)?;
     execute_raw_program(
-        linked.assembly,
-        linked.machine_code,
-        &linked.termination_entry_pcs,
+        linked.assembly().to_owned(),
+        linked.machine_code().to_vec(),
+        linked.termination_entry_pcs(),
         initial_stack,
     )
+}
+
+fn map_compilation_error(error: CompileError) -> OrchestratorError {
+    match error {
+        CompileError::Layout(error) => OrchestratorError::Layout(error),
+        CompileError::Link { description } => OrchestratorError::Link { description },
+        error => OrchestratorError::Compile(error),
+    }
 }
 
 /// Executes one isolated EVM `POP` through the shared compiled RV64 body.
@@ -374,6 +386,7 @@ fn execute_raw_program(
     })
 }
 
+#[cfg(test)]
 struct LinkedGuestArithmetic {
     assembly: String,
     machine_code: Vec<u8>,
@@ -381,6 +394,7 @@ struct LinkedGuestArithmetic {
 }
 
 /// Links the reusable ADD wrapper to its two isolated execution exits.
+#[cfg(test)]
 fn link_guest_add() -> Result<LinkedGuestArithmetic, OrchestratorError> {
     link_guest_arithmetic(
         generate_guest_add(),
@@ -392,6 +406,7 @@ fn link_guest_add() -> Result<LinkedGuestArithmetic, OrchestratorError> {
 }
 
 /// Links the reusable SUB wrapper to the same isolated execution exits as ADD.
+#[cfg(test)]
 fn link_guest_sub() -> Result<LinkedGuestArithmetic, OrchestratorError> {
     link_guest_arithmetic(
         generate_guest_sub(),
@@ -403,6 +418,7 @@ fn link_guest_sub() -> Result<LinkedGuestArithmetic, OrchestratorError> {
 }
 
 /// Links a binary arithmetic wrapper to normal and stack-underflow publishers.
+#[cfg(test)]
 fn link_guest_arithmetic(
     generated: GeneratedRv64,
     operation: &str,
@@ -497,6 +513,7 @@ fn link_guest_arithmetic(
     })
 }
 
+#[cfg(test)]
 fn arithmetic_normal_exit_assembly(label: &str) -> String {
     format!(
         "{label}:\n\
@@ -510,6 +527,7 @@ fn arithmetic_normal_exit_assembly(label: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn arithmetic_underflow_exit_assembly(label: &str) -> String {
     format!(
         "{label}:\n\
@@ -524,6 +542,7 @@ fn arithmetic_underflow_exit_assembly(label: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, OrchestratorError> {
     machine_code
         .get(offset..offset + 4)
@@ -534,12 +553,14 @@ fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, Orchestrato
         })
 }
 
+#[cfg(test)]
 fn assembly_error(error: impl fmt::Debug) -> OrchestratorError {
     OrchestratorError::Link {
         description: format!("RV64 assembly failed: {error:?}"),
     }
 }
 
+#[cfg(test)]
 fn relative_jal_offset(from_pc: u64, target_pc: u64) -> Result<i64, OrchestratorError> {
     let offset = i64::try_from(i128::from(target_pc) - i128::from(from_pc)).map_err(|_| {
         OrchestratorError::Link {
@@ -550,6 +571,7 @@ fn relative_jal_offset(from_pc: u64, target_pc: u64) -> Result<i64, Orchestrator
     Ok(offset)
 }
 
+#[cfg(test)]
 fn encode_jal_zero(offset: i64) -> Result<u32, OrchestratorError> {
     const MIN_JAL_OFFSET: i64 = -(1 << 20);
     const MAX_JAL_OFFSET: i64 = (1 << 20) - 2;
@@ -605,6 +627,39 @@ mod tests {
             assert_eq!(result.instruction_metrics().opcode_body(), 10);
             assert_eq!(result.instruction_metrics().guest_termination(), 7);
             assert_eq!(result.instruction_metrics().total(), 17);
+        }
+    }
+
+    #[test]
+    fn isolated_arithmetic_images_match_legacy_singleton_linkers() {
+        for (opcode, execute, link_legacy) in [
+            (
+                0x01,
+                execute_guest_add as fn(U256, U256) -> _,
+                link_guest_add as fn() -> _,
+            ),
+            (0x03, execute_guest_sub, link_guest_sub),
+        ] {
+            let legacy = link_legacy().unwrap();
+            let compiled = compile_evm_bytecode(&[opcode]).unwrap();
+            let isolated = execute(U256::from(2), U256::from(3)).unwrap();
+
+            assert_eq!(
+                compiled.machine_code(),
+                legacy.machine_code,
+                "opcode {opcode:#04x}"
+            );
+            assert_eq!(
+                compiled.termination_entry_pcs(),
+                legacy.termination_entry_pcs
+            );
+            assert_eq!(
+                compiled.termination_entry_pcs(),
+                [ENTRY_PC + 172, ENTRY_PC + 200]
+            );
+            assert_ne!(compiled.assembly(), legacy.assembly);
+            assert_eq!(isolated.machine_code(), compiled.machine_code());
+            assert_eq!(isolated.assembly(), compiled.assembly());
         }
     }
 

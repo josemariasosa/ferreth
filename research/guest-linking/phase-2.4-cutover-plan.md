@@ -1,15 +1,15 @@
 # Phase 2.4 public cutover plan
 
-**Decision requested.** Approve the public artifact and diagnostic policy below before changing routing. Phase 2.3d establishes private readiness. LF-026 remains open on the public route. The [integration review](phase-2.3d-integration-review.md) gives the comparison baseline.
+**Phase 2.4 cutover gate.** The [Phase 2.3d integration review](phase-2.3d-integration-review.md) gives the private baseline. The table records the original compatibility proposal with the maintainer-approved RF-027 static-count policy. The [public cutover review](phase-2.4-public-cutover.md) records current verification.
 
 ## Compatibility decisions
 
-| Observable | Proposed public policy |
+| Observable | Public cutover policy |
 |---|---|
 | Input and errors | Preserve signatures, decode the reachable prefix through the first STOP, zero-fill truncated PUSH1, accept EOF including empty, reject decoded PUSH2–32 with the first unsupported instruction's opcode and byte offset. Preserve decode-stage precedence for an unknown reachable opcode. Exercise RF-023. Assembler/default-limit and final verification errors return Link, ADR-001 image violations return Layout. Preserve error context. The obsolete numeric-JAL parser failure disappears for valid long inputs. |
-| Assembly text | Return exactly the symbolic source used to assemble the loaded bytes. Labels and numeric displacements in legacy display text change. Keep deterministic rendering, round-trip equality, one-instruction STOP and no unresolved trampolines. Approve this observable CLI/API text change. |
+| Assembly text | Return exactly the symbolic source used to assemble the loaded bytes. Labels and numeric displacements in legacy display text change. Keep deterministic rendering, round-trip equality, one-instruction STOP and no unresolved trampolines. |
 | Publisher PCs and bytes | At the end of the body, P, emit Normal. Append Underflow if declared, then Overflow if declared. Each exceptional body occupies 32 bytes. Publish the actual entry PCs in physical order. Mixed legacy emits Normal, Overflow, Underflow even for unused exits. Consumers that assign roles by index need a layout-aware expectation. The executor accepts the entire stop-PC set. Do not publish nonexistent addresses for compatibility. |
-| Static counts | Keep entry, sentinel and image-length/4 instruction limit. Normal takes 7 words. Private exceptional count is total resident exceptional words (0/8/16), public legacy reports 8 even with two or no reachable exceptional exits. Proposed adapter preserves the *single-path* count of 8 when an exceptional publisher exists, 0 when absent. Approve the new absent case explicitly and document it on the accessor. If callers require the historical unconditional 8, preserve it in the public adapter pending a separate API decision. |
+| Static counts | Keep entry, sentinel and image-length/4 instruction limit. Normal occupies 7 words. Under RF-027, the maintainer approved `exceptional_termination_instructions()` as the number of resident exceptional publisher words. The count is 0 with neither publisher, 8 with Underflow or Overflow alone, and 16 with both. |
 | Dynamic counts and ABI | Preserve actual body and selected publisher counts, total, live/published pointer, status, exception code, stack and pre-fetch sentinel. Successful execution adds 7 publisher instructions, faults add 8. Preserve the ADR-001 standalone pointer-ABI benchmark. |
 
 For nonempty PUSH1 at EOF, the existing two role addresses and bytes already agree. With STOP after only PUSH1, the legacy mixed route appends an unused Underflow. Empty input shrinks from 60 to 28 bytes, STOP alone from 96 to 32. Arithmetic/POP with only Underflow shrinks the legacy mixed image by 32 bytes. Bodies requiring both exceptional roles keep their length and move the exception JAL targets to the corresponding new PCs. The isolated arithmetic linker already uses Normal/Underflow at P/P+28. Full isolated images are byte-identical today. Assembly text differs.
@@ -32,6 +32,7 @@ cargo fmt --all -- --check
 cargo clippy --frozen --workspace --all-targets -- -D warnings
 cargo test --frozen -p ferreth-compiler --lib
 cargo test --frozen -p ferreth-compiler --test rv64_push1_program
+cargo test --frozen -p ferreth-compiler --test rv64_final_image
 cargo test --frozen -p ferreth-conformance --test rc_revm_conformance
 cargo test --frozen -p ferreth-linking-spike
 cargo test --frozen --workspace -- --list

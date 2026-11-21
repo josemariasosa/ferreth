@@ -1,5 +1,5 @@
 use super::*;
-use crate::compiler::compile_evm_bytecode;
+use crate::compiler::{compile_evm_bytecode, compile_evm_bytecode_legacy};
 use asm_rs::{assemble, Arch};
 
 const NOP: u32 = 0x0000_0013;
@@ -225,7 +225,7 @@ fn rejects_undeclared_indirect_transfers_and_non_base_widths() {
 
 #[test]
 fn rejects_wrong_roles_and_local_anchors_in_reassembled_mixed_image() {
-    let compiled = compile_evm_bytecode(MIXED_INPUT).unwrap();
+    let compiled = compile_evm_bytecode_legacy(MIXED_INPUT).unwrap();
     let publishers = compiled.termination_entry_pcs();
     assert_eq!(publishers, [ENTRY_PC + 472, ENTRY_PC + 500, ENTRY_PC + 532]);
     for (original, mutated, diagnostic) in [
@@ -282,7 +282,7 @@ fn rejects_wrong_roles_and_local_anchors_in_reassembled_mixed_image() {
 
 #[test]
 fn verifies_fragment_and_publisher_inventory_and_publication_roles() {
-    let compiled = compile_evm_bytecode(MIXED_INPUT).unwrap();
+    let compiled = compile_evm_bytecode_legacy(MIXED_INPUT).unwrap();
     let code = compiled.machine_code();
     let publishers = compiled.termination_entry_pcs();
     let verify = |bytes: &[u8], fragments: &[Fragment], pcs: &[u64]| {

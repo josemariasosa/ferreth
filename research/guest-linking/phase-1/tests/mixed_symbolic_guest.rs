@@ -22,17 +22,15 @@ use ferreth_compiler::{
 const NORMAL: &str = "normal_exit";
 const OVERFLOW: &str = "push1_stack_overflow_exit";
 const UNDERFLOW: &str = "binary_stack_underflow_exit";
-const PUBLISHERS: [&str; 3] = [NORMAL, OVERFLOW, UNDERFLOW];
 type Word = [u64; 4];
 
 fn entry_name(op: Instruction, index: usize) -> String {
     match op {
-        Instruction::Stop => "evm_stop".to_owned(),
+        Instruction::Stop => "guest_stop".to_owned(),
         Instruction::Push(_) => format!("guest_push1_{index}"),
         Instruction::Pop => format!("guest_pop_{index}"),
         Instruction::Dup1 => format!("guest_dup1_{index}"),
-        Instruction::Add => format!("guest_add_{index}"),
-        Instruction::Sub => format!("guest_sub_{index}"),
+        Instruction::Add | Instruction::Sub => format!("guest_arithmetic_{index}"),
     }
 }
 
@@ -51,7 +49,7 @@ fn assemble(source: &str) -> AssemblyResult {
     assembler.finish().unwrap()
 }
 
-fn assemble_symbolic(ops: &[Instruction]) -> AssemblyResult {
+fn experimental_source(ops: &[Instruction]) -> String {
     let mut source = String::new();
     for (index, &op) in ops.iter().enumerate() {
         let entry = entry_name(op, index);
@@ -170,7 +168,7 @@ return_{index}:
         )
         .unwrap();
     }
-    assemble(&source)
+    source
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -240,7 +238,17 @@ struct Layout {
     traps: Vec<(usize, u64, u64)>,
 }
 
-fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> Layout {
+fn check_label_inventory(labels: &[(String, u64)], expected: &BTreeSet<String>) {
+    let actual: BTreeSet<_> = labels.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(actual.len(), labels.len(), "duplicate label names");
+    assert_eq!(
+        actual,
+        expected.iter().map(String::as_str).collect(),
+        "unexpected or omitted labels"
+    );
+}
+
+fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool) -> Layout {
     let code = image.bytes();
     validate_generated_code(ENTRY_PC, code.len()).unwrap();
     assert_eq!(image.base_address(), ENTRY_PC);
@@ -250,13 +258,44 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
         assert!(names.insert(name.to_owned()), "duplicate lookup for {name}");
         image.label_address(name).unwrap()
     };
-    let [normal, overflow, underflow] = PUBLISHERS.map(&mut label);
+    let normal = label(NORMAL);
+    let overflow = if experimental
+        || ops
+            .iter()
+            .any(|op| matches!(op, Instruction::Push(_) | Instruction::Dup1))
+    {
+        label(OVERFLOW)
+    } else {
+        0
+    };
+    let underflow = if experimental
+        || ops.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::Pop | Instruction::Dup1 | Instruction::Add | Instruction::Sub
+            )
+        }) {
+        label(UNDERFLOW)
+    } else {
+        0
+    };
+    let mut expected_pc = ENTRY_PC;
     let entries: Vec<_> = ops
         .iter()
         .enumerate()
-        .map(|(i, &op)| label(&entry_name(op, i)))
+        .map(|(i, &op)| {
+            let entry = label(&entry_name(op, i));
+            assert_eq!(entry, expected_pc, "fragment {i} ({op:?})");
+            expected_pc += match op {
+                Instruction::Stop => 4,
+                Instruction::Push(_) => 44,
+                Instruction::Pop => 16,
+                Instruction::Dup1 => 64,
+                Instruction::Add | Instruction::Sub => 172,
+            };
+            entry
+        })
         .collect();
-    assert_eq!(entries.first().copied(), Some(ENTRY_PC));
     let mut layout = Layout {
         publishers: [normal, overflow, underflow],
         calls: vec![],
@@ -270,7 +309,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
     for (i, (&op, &entry)) in ops.iter().zip(&entries).enumerate() {
         let next = entries.get(i + 1).copied().unwrap_or(normal);
         assert!(sites.insert(entry));
-        if symbolic && op != Instruction::Stop {
+        if experimental && op != Instruction::Stop {
             assert_eq!(label(&format!("continue_{i}")), next);
         }
         let mut trap = |pc, publisher| {
@@ -280,33 +319,32 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
         };
         match op {
             Instruction::Push(_) => {
-                // The legacy display assembly leaves PUSH1's last word unlabeled.
-                let over = if symbolic {
+                let over = if experimental {
                     label(&format!("overflow_{i}"))
                 } else {
-                    next - 4
+                    label(&format!("push1_overflow_{i}"))
                 };
+                if !experimental {
+                    assert_eq!(label(&format!("push1_continue_{i}")), next);
+                }
                 let edges = [Branch(FULL, over), Jal(0, next), trap(over, overflow)];
                 assert_eq!(check_transfers(code, entry..next, &edges)[2], over);
             }
             Instruction::Pop => {
-                let name = if symbolic {
+                let name = if experimental {
                     format!("underflow_{i}")
                 } else {
-                    format!("guest_pop_underflow_{i}")
+                    format!("pop_underflow_{i}")
                 };
                 let under = label(&name);
                 let edges = [Branch(EMPTY, under), Jal(0, next), trap(under, underflow)];
                 assert_eq!(check_transfers(code, entry..next, &edges)[2], under);
             }
             Instruction::Dup1 => {
-                let (under_name, over_name) = if symbolic {
+                let (under_name, over_name) = if experimental {
                     (format!("underflow_{i}"), format!("overflow_{i}"))
                 } else {
-                    (
-                        format!("guest_dup1_underflow_{i}"),
-                        format!("guest_dup1_overflow_{i}"),
-                    )
+                    (format!("dup1_underflow_{i}"), format!("dup1_overflow_{i}"))
                 };
                 let under = label(&under_name);
                 let over = label(&over_name);
@@ -328,13 +366,17 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
                 } else {
                     (Opcode::Sub, "sub", 0x9f00_8f32_0eeb_7a7b)
                 };
-                let under_name = if symbolic {
+                let under_name = if experimental {
                     format!("underflow_{i}")
                 } else {
-                    format!("guest_{name}_underflow_{i}")
+                    format!("arith_underflow_{i}")
                 };
                 let under = label(&under_name);
-                let core = label(&format!("evm_{name}_{i}"));
+                let core = if experimental {
+                    label(&format!("evm_{name}_{i}"))
+                } else {
+                    label(&format!("arith_core_{i}"))
+                };
                 let edges = [
                     Branch(BELOW_TWO, under),
                     Jal(1, core),
@@ -344,9 +386,12 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
                 let jump_sites = check_transfers(code, entry..core, &edges);
                 assert_eq!(jump_sites[3], under);
                 let return_pc = jump_sites[1] + 4;
-                if symbolic {
-                    assert_eq!(label(&format!("return_{i}")), return_pc);
-                }
+                let update = if experimental {
+                    format!("return_{i}")
+                } else {
+                    format!("arith_update_{i}")
+                };
+                assert_eq!(label(&update), return_pc);
                 assert_eq!(
                     bytes_at(code, return_pc..return_pc + 4),
                     0xfe04_8493_u32.to_le_bytes()
@@ -373,23 +418,33 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
             }
         }
     }
-    let end = ENTRY_PC + code.len() as u64;
-    for (i, range) in [normal..overflow, overflow..underflow, underflow..end]
-        .into_iter()
-        .enumerate()
-    {
-        assert!(sites.insert(range.start));
+    let publishers = if experimental {
+        [
+            (NORMAL, normal),
+            (OVERFLOW, overflow),
+            (UNDERFLOW, underflow),
+        ]
+    } else {
+        [
+            (NORMAL, normal),
+            (UNDERFLOW, underflow),
+            (OVERFLOW, overflow),
+        ]
+    };
+    for (name, pc) in publishers.into_iter().filter(|&(_, pc)| pc != 0) {
+        assert_eq!(pc, expected_pc, "{name} publisher PC");
+        assert!(sites.insert(pc), "duplicate publisher site for {name}");
         let prefix = [0x8004_0313_u32, 0x8003_0313, 0x0093_3823];
-        let suffix: &[u32] = match i {
-            0 => &[0x0003_3423, 0x0010_0293, 0x0053_3023, 0xffc3_0067],
-            1 => &[
+        let suffix: &[u32] = match name {
+            NORMAL => &[0x0003_3423, 0x0010_0293, 0x0053_3023, 0xffc3_0067],
+            OVERFLOW => &[
                 0x0010_0293,
                 0x0053_3423,
                 0x0020_0293,
                 0x0053_3023,
                 0xffc3_0067,
             ],
-            2 => &[
+            UNDERFLOW => &[
                 0x0020_0293,
                 0x0053_3423,
                 0x0020_0293,
@@ -403,18 +458,22 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], symbolic: bool) -> 
             .chain(suffix)
             .flat_map(|word| word.to_le_bytes())
             .collect();
-        assert_eq!(bytes_at(code, range.clone()), words);
+        expected_pc += words.len() as u64;
+        let range = pc..expected_pc;
         assert_eq!(
-            check_transfers(code, range.clone(), &[Jalr(0xffc3_0067)]),
-            [range.end - 4]
+            bytes_at(code, range.clone()),
+            words,
+            "{name} publisher bytes"
+        );
+        assert_eq!(
+            check_transfers(code, range, &[Jalr(0xffc3_0067)]),
+            [expected_pc - 4],
+            "{name} terminal JALR site"
         );
     }
+    assert_eq!(expected_pc, ENTRY_PC + code.len() as u64, "publisher tail");
+    check_label_inventory(image.labels(), &names);
     assert_eq!(EVM_STACK_REGION.start() - 2048 - 2048 - 4, EXIT_PC);
-    assert_eq!(
-        names.len(),
-        image.labels().len(),
-        "unexpected or omitted labels"
-    );
     println!(
         "  publishers {:08x?}, {} labels",
         layout.publishers,
@@ -486,7 +545,11 @@ fn execute(
     let mut body_count = 0;
     let budget = code.len() as u64 / 4;
     let mut run_to = |executor: &mut RvemuExecutor, boundary| {
-        let active: Vec<_> = stops.iter().copied().filter(|&stop| stop != pc).collect();
+        let active: Vec<_> = stops
+            .iter()
+            .copied()
+            .filter(|&stop| stop != 0 && stop != pc)
+            .collect();
         let report = executor
             .execute_until(pc, &active, budget - body_count)
             .unwrap();
@@ -608,7 +671,7 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
         initial.len()
     );
     let ops = decode(bytecode).unwrap();
-    let symbolic = assemble_symbolic(&ops);
+    let symbolic = assemble(&experimental_source(&ops));
     let compiled = compile_evm_bytecode(bytecode).unwrap();
     let production = assemble(compiled.assembly());
     assert_eq!(production.bytes(), compiled.machine_code());
@@ -622,10 +685,12 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
     let symbolic_counts = execute(symbolic.bytes(), &symbolic_layout, initial, expected, fault);
     println!("production:");
     let production_layout = check_layout(&production, &ops, false);
-    assert_eq!(
-        production_layout.publishers,
-        compiled.termination_entry_pcs()
-    );
+    let [normal, overflow, underflow] = production_layout.publishers;
+    let published: Vec<_> = [normal, underflow, overflow]
+        .into_iter()
+        .filter(|&pc| pc != 0)
+        .collect();
+    assert_eq!(compiled.termination_entry_pcs(), published);
     let production_counts = execute(
         compiled.machine_code(),
         &production_layout,
@@ -716,4 +781,50 @@ fn arithmetic_across_limbs_and_standalone_core_hashes() {
         &[[u64::MAX, u64::MAX, u64::MAX, 0]],
         None,
     );
+}
+
+#[test]
+fn normal_only_and_overflow_only_production_inventories() {
+    compare(&[0x00], &[], &[], None);
+    compare(&[0x60, 2], &[], &[word(2)], None);
+}
+
+#[test]
+#[should_panic(expected = "push1_stack_overflow_exit publisher bytes")]
+fn experimental_layout_rejects_a_wrong_unreachable_publisher_body() {
+    let ops = [Instruction::Stop];
+    let source = experimental_source(&ops);
+    check_layout(&assemble(&source), &ops, true);
+    let mutated = source.replacen(
+        "addi t0, zero, 1\n    sd t0, 8(t1)",
+        "addi t0, zero, 2\n    sd t0, 8(t1)",
+        1,
+    );
+    check_layout(&assemble(&mutated), &ops, true);
+}
+
+#[test]
+#[should_panic(expected = "unexpected or omitted labels")]
+fn production_layout_rejects_an_unexpected_label_alias() {
+    let bytecode = [0x00];
+    let compiled = compile_evm_bytecode(&bytecode).unwrap();
+    let ops = decode(&bytecode).unwrap();
+    check_layout(&assemble(compiled.assembly()), &ops, false);
+    let source = format!("unexpected_alias:\n{}", compiled.assembly());
+    let mutated = assemble(&source);
+    assert_eq!(mutated.bytes(), compiled.machine_code());
+    check_layout(&mutated, &ops, false);
+}
+
+#[test]
+#[should_panic(expected = "duplicate label names")]
+fn label_inventory_rejects_duplicate_names() {
+    let mut labels = vec![
+        (NORMAL.to_owned(), ENTRY_PC),
+        (OVERFLOW.to_owned(), ENTRY_PC + 28),
+    ];
+    let expected = labels.iter().map(|(name, _)| name.clone()).collect();
+    check_label_inventory(&labels, &expected);
+    labels[1] = labels[0].clone();
+    check_label_inventory(&labels, &expected);
 }

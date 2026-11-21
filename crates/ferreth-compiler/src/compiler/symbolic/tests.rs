@@ -2,7 +2,7 @@ use alloy_primitives::U256;
 
 use super::*;
 use crate::{
-    compiler::{compile_evm_bytecode, compile_push1_program},
+    compiler::{compile_evm_bytecode, compile_evm_bytecode_legacy, compile_push1_program_legacy},
     execution::random_u256,
     rv64::{
         executor::{ExecutionReport, IntegerRegister, Rv64Executor, RvemuExecutor},
@@ -309,6 +309,25 @@ fn full_stack() -> Vec<U256> {
 }
 
 #[test]
+fn public_publisher_inventory_counts_resident_exceptional_bodies() {
+    let cases = [
+        (&[][..], 0u64),
+        (&[0x00][..], 0),
+        (&[0x60, 1][..], 8),
+        (&[0x50][..], 8),
+        (&[0x60, 1, 0x50][..], 16),
+    ];
+    for (bytecode, expected) in cases {
+        let compiled = compile_evm_bytecode(bytecode).unwrap();
+        assert_eq!(
+            compiled.exceptional_termination_instructions(),
+            expected,
+            "input={bytecode:02x?}"
+        );
+    }
+}
+
+#[test]
 fn short_artifacts_and_execution_match_legacy() {
     for immediates in [&[][..], &[2], &[2, 3], &[0, 127, 128, 255, 96]] {
         for stop in [false, true] {
@@ -316,9 +335,9 @@ fn short_artifacts_and_execution_match_legacy() {
             let fragments = make_fragments(immediates, stop);
             let candidate = compile(&input).unwrap();
             assert_eq!(candidate, compose(&fragments).unwrap());
-            let legacy = compile_evm_bytecode(&input).unwrap();
+            let legacy = compile_evm_bytecode_legacy(&input).unwrap();
             if !stop {
-                assert_eq!(legacy, compile_push1_program(immediates).unwrap());
+                assert_eq!(legacy, compile_push1_program_legacy(immediates).unwrap());
             }
             let pushes = immediates.len();
             assert_layout(&candidate, pushes, stop);
@@ -344,8 +363,8 @@ fn frontend_preserves_truncated_push_and_first_stop() {
     ] {
         let candidate = compile(input).unwrap();
         assert_eq!(candidate, compile(canonical).unwrap());
-        let legacy = compile_evm_bytecode(input).unwrap();
-        assert_eq!(legacy, compile_evm_bytecode(canonical).unwrap());
+        let legacy = compile_evm_bytecode_legacy(input).unwrap();
+        assert_eq!(legacy, compile_evm_bytecode_legacy(canonical).unwrap());
         assert_legacy_layout(&candidate, &legacy, 1, stop);
         let actual = observe(&candidate, &[], 1, None);
         assert_eq!(actual, observe(&legacy, &[], 1, None));
@@ -395,7 +414,7 @@ fn long_layouts_match_phase_one_and_take_distant_overflow() {
         assert_result(&normal, &vec![U256::from(2); pushes], false, body_words);
         let exceptional = observe(&candidate, &full, pushes, Some(0));
         assert_result(&exceptional, &full, true, 4);
-        match compile_evm_bytecode(&input) {
+        match compile_evm_bytecode_legacy(&input) {
             Ok(legacy) if pushes == 46 => {
                 assert_legacy_layout(&candidate, &legacy, pushes, stop);
                 assert_eq!(normal, observe(&legacy, &[], pushes, None));
@@ -424,7 +443,7 @@ fn push_from_one_below_capacity_before_next_push_fails() {
     expected.push(U256::from(255));
     let input = [0x60, 255, 0x60, 1, 0];
     let candidate = compile(&input).unwrap();
-    let legacy = compile_evm_bytecode(&input).unwrap();
+    let legacy = compile_evm_bytecode_legacy(&input).unwrap();
     let actual = observe(&candidate, &initial, 2, Some(1));
     assert_eq!(actual, observe(&legacy, &initial, 2, Some(1)));
     assert_result(&actual, &expected, true, 14);

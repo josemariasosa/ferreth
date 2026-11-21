@@ -93,7 +93,7 @@ impl SymbolicFragment {
     }
 }
 
-fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
+pub(crate) fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
     let instructions = decode_detailed(bytecode)?;
     let fragments = instructions
         .iter()
@@ -144,6 +144,18 @@ fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    compose(&fragments)
+}
+
+pub(crate) fn compile_push1_sequence(
+    immediates: &[u8],
+) -> Result<CompiledRv64Program, CompileError> {
+    let fragments = immediates
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, immediate)| generate_symbolic_push1(immediate, index))
+        .collect::<Vec<_>>();
     compose(&fragments)
 }
 
@@ -310,9 +322,20 @@ fn verified_program(
         .position(|role| *role == PublisherRole::Normal)
         .expect("normal termination is always included");
     let normal_end = publisher_pcs.get(normal_index + 1).copied().unwrap_or(end);
-    let exceptional_termination_instructions = publisher_pcs
-        .get(normal_index + 1)
-        .map_or(0, |overflow_pc| (end - overflow_pc) / RV64_INSTRUCTION_SIZE);
+    let mut exceptional_termination_instructions = 0u64;
+    for (index, role) in publishers.iter().enumerate() {
+        if *role == PublisherRole::Normal {
+            continue;
+        }
+        let start = publisher_pcs[index];
+        let next = publisher_pcs.get(index + 1).copied().unwrap_or(end);
+        let words = next.checked_sub(start).ok_or_else(|| {
+            verification_error(format!("{role:?} publisher precedes next publisher"))
+        })? / RV64_INSTRUCTION_SIZE;
+        exceptional_termination_instructions = exceptional_termination_instructions
+            .checked_add(words)
+            .ok_or_else(|| verification_error("exceptional publisher count overflow".to_owned()))?;
+    }
     Ok(CompiledRv64Program {
         assembly,
         machine_code: image.into_bytes(),

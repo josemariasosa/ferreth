@@ -200,7 +200,7 @@ fn assert_parity(
     fault: Option<FaultPath>,
 ) {
     let candidate = compile(input).unwrap();
-    let legacy = compile_evm_bytecode(input).unwrap();
+    let legacy = crate::compiler::compile_evm_bytecode_legacy(input).unwrap();
     let normal = legacy.termination_entry_pcs()[0];
     assert_eq!(
         legacy.termination_entry_pcs(),
@@ -291,8 +291,8 @@ fn mixed_stack_operations_match_legacy() {
     let canonical = &success[..9];
     assert_eq!(compile(&success), compile(canonical));
     assert_eq!(
-        compile_evm_bytecode(&success),
-        compile_evm_bytecode(canonical)
+        crate::compiler::compile_evm_bytecode_legacy(&success),
+        crate::compiler::compile_evm_bytecode_legacy(canonical)
     );
     assert_parity(
         &success,
@@ -329,9 +329,9 @@ fn pop_dup1_capacity_probe() {
     // These smaller legacy specimens already reach the signed 12-bit
     // numeric parser ceiling, preventing capacity-scale runtime comparisons.
     for (opcode, last, displacement) in [(POP, 124, 2048), (DUP1, 31, 2052)] {
-        compile_evm_bytecode(&vec![opcode; last]).unwrap();
+        crate::compiler::compile_evm_bytecode_legacy(&vec![opcode; last]).unwrap();
         let CompileError::Link { description } =
-            compile_evm_bytecode(&vec![opcode; last + 1]).unwrap_err()
+            crate::compiler::compile_evm_bytecode_legacy(&vec![opcode; last + 1]).unwrap_err()
         else {
             panic!("expected legacy numeric JAL error");
         };

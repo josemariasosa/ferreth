@@ -18,6 +18,7 @@ const BGEU: u32 = 7;
 const STACK_DECREMENT: u32 = 0xfe04_8493; // addi s1, s1, -32
 const LEAF_RETURN: u32 = 0x0000_8067; // jalr zero, 0(ra)
 
+#[allow(dead_code, reason = "Phase 2.4 legacy-layout and rollback coverage")]
 #[derive(Clone, Copy)]
 pub(crate) enum Fragment {
     Push1,
@@ -115,6 +116,7 @@ impl ArithmeticCore {
     }
 }
 
+#[allow(dead_code, reason = "Phase 2.4 legacy-layout and rollback coverage")]
 #[derive(Clone, Copy)]
 pub(crate) enum PublisherLayout {
     PushOnly,

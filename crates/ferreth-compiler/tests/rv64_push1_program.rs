@@ -167,7 +167,15 @@ fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
     assert_eq!(stop.assembly().matches("normal_exit:").count(), 1);
     assert!(stop
         .assembly()
-        .contains("evm_stop:\n    jal zero, 4\nnormal_exit:"));
+        .contains("guest_stop:\n    jal zero, normal_exit\nnormal_exit:"));
+    assert_eq!(
+        u32::from_le_bytes(stop.machine_code()[0..4].try_into().unwrap()),
+        0x0040_006f
+    );
+    assert_eq!(
+        assemble(stop.assembly(), Arch::Rv64).expect("reassemble STOP"),
+        stop.machine_code()
+    );
 }
 
 #[test]

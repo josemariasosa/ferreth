@@ -6,18 +6,23 @@
 
 use std::fmt;
 
+#[cfg(test)]
 use asm_rs::{assemble, Arch};
 
+use crate::rv64::memory::{LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE};
+#[cfg(test)]
 use crate::rv64::{
     codegen::{GeneratedRv64, GeneratedRv64LinkMetadata},
-    memory::{validate_generated_code, LayoutError, ENTRY_PC, EXIT_PC, RV64_INSTRUCTION_SIZE},
+    memory::validate_generated_code,
     opcodes::{
         add::generate_guest_add, dup::generate_guest_dup1, pop::generate_guest_pop,
         push::generate_guest_push1, sub::generate_guest_sub,
     },
     verify::{verify_final_image, Fragment, PublisherLayout},
 };
-use crate::{decode_detailed, DecodeError, DecodedInstruction};
+use crate::DecodeError;
+#[cfg(test)]
+use crate::{decode_detailed, DecodedInstruction};
 
 mod publisher;
 #[allow(dead_code, reason = "Phase 2.2 candidate awaits public routing review")]
@@ -66,6 +71,11 @@ impl CompiledRv64Program {
         self.normal_termination_instructions
     }
 
+    /// Number of resident exceptional publisher words in the compiled image.
+    ///
+    /// Images contain 0 words with neither publisher, 8 with Underflow or
+    /// Overflow alone, and 16 with both. During exceptional execution only
+    /// the selected publisher runs, for eight dynamic instructions.
     pub const fn exceptional_termination_instructions(&self) -> u64 {
         self.exceptional_termination_instructions
     }
@@ -117,6 +127,13 @@ impl From<DecodeError> for CompileError {
 /// Reaching the end of bytecode falls through to the compatibility normal
 /// epilogue. An explicit `STOP` emits a direct transfer to that same epilogue.
 pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
+    symbolic::compile(bytecode)
+}
+
+#[cfg(test)]
+pub(crate) fn compile_evm_bytecode_legacy(
+    bytecode: &[u8],
+) -> Result<CompiledRv64Program, CompileError> {
     let instructions = decode_detailed(bytecode)?;
     let mut operations = Vec::with_capacity(instructions.len());
     let mut has_explicit_stop = false;
@@ -147,7 +164,7 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
             .iter()
             .all(|operation| matches!(operation, CompiledOperation::Push1(_)))
     {
-        return compile_push1_program(
+        return compile_push1_program_legacy(
             &operations
                 .iter()
                 .map(|operation| match operation {
@@ -160,9 +177,10 @@ pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, Comp
                 .collect::<Vec<_>>(),
         );
     }
-    compile_supported_program(&operations, has_explicit_stop)
+    compile_supported_program_legacy(&operations, has_explicit_stop)
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 enum CompiledOperation {
     Push1(u8),
@@ -174,7 +192,8 @@ enum CompiledOperation {
 
 /// Links a mixed sequence of supported opcode bodies. Reaching the end falls
 /// through to the compatibility normal epilogue; an explicit STOP jumps there.
-fn compile_supported_program(
+#[cfg(test)]
+fn compile_supported_program_legacy(
     operations: &[CompiledOperation],
     has_explicit_stop: bool,
 ) -> Result<CompiledRv64Program, CompileError> {
@@ -417,6 +436,7 @@ fn compile_supported_program(
     })
 }
 
+#[cfg(test)]
 enum GeneratedOperation {
     Push1 {
         code: GeneratedRv64,
@@ -440,6 +460,7 @@ enum GeneratedOperation {
     },
 }
 
+#[cfg(test)]
 impl GeneratedOperation {
     fn len(&self) -> usize {
         match self {
@@ -452,6 +473,7 @@ impl GeneratedOperation {
     }
 }
 
+#[cfg(test)]
 fn linked_dup1_assembly(
     source: &str,
     index: usize,
@@ -490,6 +512,7 @@ fn linked_dup1_assembly(
     Ok(source)
 }
 
+#[cfg(test)]
 fn linked_pop_assembly(
     source: &str,
     index: usize,
@@ -514,6 +537,7 @@ fn linked_pop_assembly(
     Ok(source)
 }
 
+#[cfg(test)]
 fn linked_add_assembly(
     source: &str,
     index: usize,
@@ -540,6 +564,7 @@ fn linked_add_assembly(
     Ok(source)
 }
 
+#[cfg(test)]
 fn linked_sub_assembly(
     source: &str,
     index: usize,
@@ -572,6 +597,13 @@ fn linked_sub_assembly(
 /// bodies skip only their own trampoline and fall through to the next body;
 /// every trampoline is patched to the single shared exceptional exit.
 pub fn compile_push1_program(immediates: &[u8]) -> Result<CompiledRv64Program, CompileError> {
+    symbolic::compile_push1_sequence(immediates)
+}
+
+#[cfg(test)]
+pub(crate) fn compile_push1_program_legacy(
+    immediates: &[u8],
+) -> Result<CompiledRv64Program, CompileError> {
     let generated = immediates
         .iter()
         .copied()
@@ -655,6 +687,7 @@ fn verification_error(error: String) -> CompileError {
     }
 }
 
+#[cfg(test)]
 fn instruction_count(machine_code: &[u8]) -> Result<u64, CompileError> {
     if !machine_code
         .len()
@@ -667,6 +700,7 @@ fn instruction_count(machine_code: &[u8]) -> Result<u64, CompileError> {
     Ok((machine_code.len() / RV64_INSTRUCTION_SIZE as usize) as u64)
 }
 
+#[cfg(test)]
 fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, CompileError> {
     machine_code
         .get(offset..offset + 4)
@@ -677,6 +711,7 @@ fn instruction_at(machine_code: &[u8], offset: usize) -> Result<u32, CompileErro
         })
 }
 
+#[cfg(test)]
 fn relative_jal_offset(from_pc: u64, target_pc: u64) -> Result<i64, CompileError> {
     let offset = i64::try_from(i128::from(target_pc) - i128::from(from_pc)).map_err(|_| {
         CompileError::Link {
@@ -687,6 +722,7 @@ fn relative_jal_offset(from_pc: u64, target_pc: u64) -> Result<i64, CompileError
     Ok(offset)
 }
 
+#[cfg(test)]
 fn encode_jal_zero(offset: i64) -> Result<u32, CompileError> {
     const MIN_JAL_OFFSET: i64 = -(1 << 20);
     const MAX_JAL_OFFSET: i64 = (1 << 20) - 2;

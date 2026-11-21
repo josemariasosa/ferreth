@@ -141,7 +141,7 @@ fn parity(
     failure: Option<(u64, FaultPath)>,
 ) {
     let candidate = compile(input).unwrap();
-    let legacy = compile_evm_bytecode(input).unwrap();
+    let legacy = crate::compiler::compile_evm_bytecode_legacy(input).unwrap();
     assert_artifacts(input, &candidate, &legacy);
     let normal = candidate.termination_entry_pcs()[0];
     let (code, fault) = failure.map_or((0, None), |(code, path)| (code, Some(path)));
@@ -544,24 +544,6 @@ fn repeated_arithmetic_rejects_colliding_entry_and_leaf_names() {
         compose(&fragments),
         Err(CompileError::Link { .. })
     ));
-}
-
-#[test]
-fn isolated_arithmetic_images_match_symbolic_singletons() {
-    use crate::orchestrator::{execute_guest_add, execute_guest_sub};
-    for (bytecode, execute) in [
-        (ADD, execute_guest_add as fn(U256, U256) -> _),
-        (SUB, execute_guest_sub),
-    ] {
-        let isolated = execute(U256::from(2), U256::from(3)).unwrap();
-        let symbolic = compile(&[bytecode]).unwrap();
-        assert_eq!(isolated.machine_code(), symbolic.machine_code());
-        assert_ne!(isolated.assembly(), symbolic.assembly());
-        assert_eq!(
-            symbolic.termination_entry_pcs(),
-            [ENTRY_PC + 172, ENTRY_PC + 200]
-        );
-    }
 }
 
 #[test]

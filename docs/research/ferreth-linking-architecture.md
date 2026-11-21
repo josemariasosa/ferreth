@@ -394,10 +394,17 @@ identity, fixed-layout call/return verification and directed runtime parity.
 The [Phase 2.3d integration review](../../research/guest-linking/phase-2.3d-integration-review.md)
 records corrected unsupported-PUSH error precedence (RF-023), required publisher
 PC validation (RF-024), and declaration-site ownership (RF-025). All six private
-opcodes passed the gate. The isolated arithmetic singleton images already match
-in full. Public compilation still reproduces the four LF-026 controls.
+opcodes passed the gate. At that review, the isolated arithmetic singleton
+images matched in full and public compilation still failed the four LF-026
+controls.
 The [bounded Phase 2.4 plan](../../research/guest-linking/phase-2.4-cutover-plan.md)
-awaits maintainer review of public artifact metadata and routing.
+and [public cutover review](../../research/guest-linking/phase-2.4-public-cutover.md)
+record the current routing and verification. RF-026 restores independent
+publisher, label and isolated arithmetic image checks. RF-027 establishes the
+public static accessor as the resident exceptional publisher word count
+(0 with neither role, 8 with either role alone, 16 with both). One selected
+exceptional publisher executes eight instructions. Phase 2.4 awaits maintainer
+review. Legacy linkers remain test oracles.
 
 - Implement only the reviewed mechanism from Phase 1. Give one composer ownership of fragment placement, external transfers and publisher composition. Keep one consistent publication implementation for all applicable guests.
 - Route bytecode and sequence compilation through that composer. Route isolated ADD/SUB through ordinary single-op guest compilation with seeded initial stack, following POP/DUP1. Preserve useful convenience APIs as thin adapters where possible.
@@ -437,11 +444,11 @@ These are proposed regression requirements. The existing workspace run verifies 
 
 - **Compatibility.** Does any maintained consumer require the exact historical PUSH1 display, exact machine bytes, the two-publisher layout, or just equality between sequence and bytecode APIs? The history establishes intent at introduction, but cannot answer for current consumers.
 - **ADR-002 policy.** Confirm deterministic diagnostic precedence, stable exception codes, live versus published gas fields, and exact extension offsets. The log’s example of two appended `u64`s is a plausible layout. ADR-002 remains the proposal under review.
-- **Artifact metrics.** Decide whether external users need a single static exceptional publisher length. Once publishers can differ, per-publisher information or the observed execution metrics is more precise.
+- **Artifact metrics.** RF-027 resolves the public static metric for Phase 2.4. Any additional per-publisher metrics are deferred.
 - **Public API.** Decide whether compile-once/run-many should be part of the supported high-level library interface and how legacy convenience calls would receive a frame budget.
 - **Deferred.** Opcode expansion beyond the proposed GAS milestone, dynamic gas, refunds, reversible state, nested frames, EVM control flow, shared arithmetic or gas subroutines, general relocation formats, and alternative execution backends.
 
-Additionally defer canonical opcode identity, duplicate CLI summary decoding, whole-bytecode translation CLI and public artifact execution API improvements unless needed for the selected composition work. Track benchmark stdout contamination independently. The exact implementation of static termination accounting for different publisher lengths remains open. The maintainer has relaxed exact textual compatibility; any actual external consumer constraints still need an inventory.
+Additionally defer canonical opcode identity, duplicate CLI summary decoding, whole-bytecode translation CLI and public artifact execution API improvements unless needed for the selected composition work. Track benchmark stdout contamination independently. The maintainer has relaxed exact textual compatibility; any actual external consumer constraints still need an inventory.
 
 ## 11. Reproducibility appendix
 
