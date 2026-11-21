@@ -62,7 +62,6 @@ assembly only; the `PUSH1` translation also prints machine-code words.
 | `cargo run -p ferreth-compiler -- execute --op SUB --a 5 --b 3` | Run isolated guest `SUB` with the same `U256` arguments and initial-stack order. `SUB` evaluates the top item minus the item below it (`b - a`). | For this example the result wraps to `2^256 - 2`; output includes the status, final stack, and dynamic count. |
 | `cargo run -p ferreth-compiler -- execute --op POP` | Run isolated guest `POP` with one initialized zero word. | Final status, empty final stack, and dynamic RV64 instruction count. |
 | `cargo run -p ferreth-compiler -- execute --op DUP1` | Run isolated guest `DUP1` with one initialized zero word. | Final status, duplicated stack, and dynamic RV64 instruction count. |
-| `cargo run -p ferreth-compiler -- execute --push1-sequence 5,3` | Run a comma-separated sequence of `PUSH1` immediates; each item must be a decimal or `0x`-prefixed byte value. | One linked executable's assembly, final stack, and total/opcode-body/termination counts. |
 | `cargo run -p ferreth-compiler -- execute --bytecode 600560035000` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. Supported source opcodes are `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP`, and `DUP1`; RC supports only `PUSH1` among the push widths. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
 
 `--op ADD` and `--op SUB` require both `--a` and `--b`. For the isolated

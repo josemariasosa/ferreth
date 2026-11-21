@@ -88,18 +88,9 @@ fn parse_u64(value: &str) -> Option<u64> {
     )
 }
 
-fn parse_push1_value(value: &str) -> Option<u8> {
-    u8::try_from(parse_u64(value)?).ok()
-}
-
 #[allow(dead_code)]
 fn parse_u256(value: &str) -> Option<revm::primitives::U256> {
     value.parse().ok()
-}
-
-#[allow(dead_code)]
-fn parse_push1_sequence(value: &str) -> Option<Vec<u8>> {
-    value.split(',').map(parse_push1_value).collect()
 }
 
 #[allow(dead_code)]

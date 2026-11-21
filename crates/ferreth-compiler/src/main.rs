@@ -6,7 +6,7 @@ use ferreth_compiler::{
     disassembler::{disassemble, format_disassembly, parse_hex},
     orchestrator::{
         execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
-        execute_guest_push1, execute_guest_push1_sequence, execute_guest_sub,
+        execute_guest_push1, execute_guest_sub,
     },
     rv64::opcodes::push::generate_guest_push1,
     Opcode,
@@ -150,29 +150,6 @@ fn execute(args: &[String]) -> ExitCode {
                 }
             }
         }
-        [option, values] if option == "--push1-sequence" => {
-            let Some(immediates) = parse_push1_sequence(values) else {
-                return usage_failure();
-            };
-            match execute_guest_push1_sequence(&immediates) {
-                Ok(result) => {
-                    println!("PUSH1 sequence {immediates:?} complete linked executable program:");
-                    print!("{}", result.assembly());
-                    println!("Final stack: {:?}", result.guest_result().stack());
-                    println!(
-                        "Instructions: {} (opcode body {}, termination {})",
-                        result.instruction_metrics().total(),
-                        result.instruction_metrics().opcode_body(),
-                        result.instruction_metrics().guest_termination(),
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("PUSH1 sequence execution failed: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         [option, operation, value_option, value]
             if option == "--op" && operation == "PUSH1" && value_option == "--value" =>
         {
@@ -240,10 +217,6 @@ fn parse_u256(value: &str) -> Option<U256> {
     value.parse().ok()
 }
 
-fn parse_push1_sequence(value: &str) -> Option<Vec<u8>> {
-    value.split(',').map(parse_push1_value).collect()
-}
-
 fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
     if !value.len().is_multiple_of(2) {
         return None;
@@ -255,6 +228,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --push1-sequence 5,3\n  ferreth-compiler execute --bytecode HEX\n  ferreth-compiler decode --bytecode HEX");
+    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --bytecode HEX\n  ferreth-compiler decode --bytecode HEX");
     ExitCode::FAILURE
 }

@@ -18,7 +18,7 @@ use crate::rv64::{
     verify::{verify_final_image, Fragment, PublisherLayout},
 };
 use crate::{
-    compiler::{compile_evm_bytecode, compile_push1_program, CompileError, CompiledRv64Program},
+    compiler::{compile_evm_bytecode, CompileError, CompiledRv64Program},
     rv64::{
         executor::{ExecutorError, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
@@ -185,26 +185,7 @@ impl From<CompileError> for OrchestratorError {
 /// is the linked program actually loaded into rvemu, not a separate display
 /// encoding of the opcode generator.
 pub fn execute_guest_push1(immediate: u8) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_guest_push1_sequence(&[immediate])
-}
-
-/// Compiles and executes a complete sequence of `PUSH1` operations once.
-pub fn execute_guest_push1_sequence(
-    immediates: &[u8],
-) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_guest_push1_sequence_with_initial_stack(immediates, &[])
-}
-
-/// Shared execution path with host-provided valid initial stack words.
-///
-/// This is intentionally limited to PUSH1 sequences so tests can construct a
-/// full-stack ABI entry state without emulating any EVM opcode on the host.
-pub fn execute_guest_push1_sequence_with_initial_stack(
-    immediates: &[u8],
-    initial_stack: &[U256],
-) -> Result<OrchestratorResult, OrchestratorError> {
-    let linked = compile_push1_program(immediates)?;
-    execute_linked_program(linked, initial_stack)
+    execute_guest_evm_bytecode(&[0x60, immediate])
 }
 
 /// Executes one isolated EVM `ADD` through the RV64 guest ABI.
