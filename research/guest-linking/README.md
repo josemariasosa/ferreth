@@ -150,3 +150,19 @@ and DUP1 fragments, declaration-derived three-role publisher inventory,
 fixed-layout and runtime verification, label-density probes, and workspace
 counts. Public compilation remains unchanged and the milestone stops for
 maintainer review.
+
+## POP/DUP1 boundary hardening
+
+The [Phase 2.3b.1 report](phase-2.3b.1-boundary-hardening.md) traces the large
+DUP1 errors to JAL relocations outside the executable domain, measures the
+POP label and image ceilings, and records the directed ADR-001 runtime parity
+and verifier regressions. The private POP path accepts 49,999 EOF fragments
+and rejects 50,000 for label count even though the layout fits. The
+maintainer closed RF-019 and accepted RF-020 as a known implementation
+capacity limit. Phase 2.3b.1 is reviewed and accepted.
+
+## Symbolic ADD and SUB planning
+
+The [Phase 2.3c plan](phase-2.3c-plan.md) defines the private fragment scope,
+call and return verification, and parity gates. Implementation awaits
+maintainer authorization.

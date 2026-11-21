@@ -176,37 +176,8 @@ fn observe(
         report
     };
 
-    let read_metadata = |executor: &mut RvemuExecutor| {
-        let mut bytes = [0; GUEST_METADATA_ENCODED_SIZE];
-        executor
-            .read_memory(METADATA_REGION.start(), &mut bytes)
-            .unwrap();
-        bytes
-    };
-    let mut trace = vec![read_metadata(&mut executor)];
     let words = if failing_push.is_some() { 8 } else { 7 };
-    let mut pc = body.exit_pc;
-    for index in 1..=words {
-        let next = if index == words {
-            program.exit_pc()
-        } else {
-            pc + 4
-        };
-        let step = executor.execute(pc, next, 1).unwrap();
-        assert_eq!(
-            step,
-            ExecutionReport {
-                exit_pc: next,
-                executed_instructions: 1
-            }
-        );
-        trace.push(read_metadata(&mut executor));
-        pc = step.exit_pc;
-    }
-    let termination = ExecutionReport {
-        exit_pc: pc,
-        executed_instructions: words,
-    };
+    let (termination, trace) = observe_publication(&mut executor, program, body.exit_pc, words);
     let guest = read_guest_result(&mut executor, &termination).unwrap();
     assert_eq!(executor.read_register(sp), 0x1234_5670);
     assert_eq!(
@@ -230,14 +201,83 @@ fn observe(
     }
 }
 
+fn observe_publication(
+    executor: &mut RvemuExecutor,
+    program: &CompiledRv64Program,
+    entry: u64,
+    words: u64,
+) -> (ExecutionReport, Vec<[u8; GUEST_METADATA_ENCODED_SIZE]>) {
+    // Check store words even when writing the initialized value makes a
+    // store invisible in the byte snapshots (e.g. normal exception code 0).
+    let stores = if words == 7 {
+        [(8, 0x0093_3823), (12, 0x0003_3423), (20, 0x0053_3023)]
+    } else {
+        [(8, 0x0093_3823), (16, 0x0053_3423), (24, 0x0053_3023)]
+    };
+    let entry_offset = (entry - program.entry_pc()) as usize;
+    for (offset, expected) in stores {
+        let start = entry_offset + offset;
+        let word = u32::from_le_bytes(program.machine_code()[start..start + 4].try_into().unwrap());
+        assert_eq!(
+            word,
+            expected,
+            "publisher store at {:#x}",
+            entry + offset as u64
+        );
+    }
+    let read_metadata = |executor: &mut RvemuExecutor| {
+        let mut bytes = [0; GUEST_METADATA_ENCODED_SIZE];
+        executor
+            .read_memory(METADATA_REGION.start(), &mut bytes)
+            .unwrap();
+        bytes
+    };
+    let mut trace = vec![read_metadata(executor)];
+    let mut pc = entry;
+    for index in 1..=words {
+        let next = if index == words {
+            program.exit_pc()
+        } else {
+            pc + 4
+        };
+        let step = executor.execute(pc, next, 1).unwrap();
+        assert_eq!(
+            step,
+            ExecutionReport {
+                exit_pc: next,
+                executed_instructions: 1
+            }
+        );
+        trace.push(read_metadata(executor));
+        pc = step.exit_pc;
+    }
+    (
+        ExecutionReport {
+            exit_pc: pc,
+            executed_instructions: words,
+        },
+        trace,
+    )
+}
+
 fn assert_result(observed: &Observation, expected_stack: &[U256], overflow: bool, body_words: u64) {
+    let code = u64::from(overflow);
+    assert_guest_result(observed, expected_stack, code, body_words);
+}
+
+fn assert_guest_result(
+    observed: &Observation,
+    expected_stack: &[U256],
+    code: u64,
+    body_words: u64,
+) {
     use GuestExecutionStatus::{GuestException, Normal, Running};
     let base = EVM_STACK_REGION.start();
     let s1 = base + EVM_WORD_SIZE * expected_stack.len() as u64;
-    let (status, code, publisher_words) = if overflow {
-        (GuestException, 1, 8)
+    let (status, publisher_words) = if code != 0 {
+        (GuestException, 8)
     } else {
-        (Normal, 0, 7)
+        (Normal, 7)
     };
     assert_eq!(observed.guest.status(), status);
     assert_eq!(observed.guest.exception_code(), code);
@@ -250,11 +290,11 @@ fn assert_result(observed: &Observation, expected_stack: &[U256], overflow: bool
     // after the pointer, exception-code and status stores at their ABI steps.
     let mut trace = vec![GuestMetadata::new(Running, 0, base).encode(); 3];
     trace.resize(
-        if overflow { 5 } else { 6 },
+        if code != 0 { 5 } else { 6 },
         GuestMetadata::new(Running, 0, s1).encode(),
     );
-    if overflow {
-        trace.extend([GuestMetadata::new(Running, 1, s1).encode(); 2]);
+    if code != 0 {
+        trace.extend([GuestMetadata::new(Running, code, s1).encode(); 2]);
     }
     trace.extend([GuestMetadata::new(status, code, s1).encode(); 2]);
     assert_eq!(observed.trace, trace);
@@ -529,176 +569,7 @@ fn declarations_and_namespaces_reject_incomplete_or_corrupted_images() {
     ));
 }
 
-#[test]
-fn pop_dup1_exceptional_publication() {
-    let pop = compose(&[generate_symbolic_pop(
-        0,
-        PublisherRole::Normal.label().to_owned(),
-    )])
-    .unwrap();
-    let mut executor = RvemuExecutor::new().unwrap();
-    executor.load_code(pop.machine_code()).unwrap();
-    executor
-        .write_memory(pop.exit_pc(), &0x0010_0073_u32.to_le_bytes())
-        .unwrap();
-    initialize_guest_state(&mut executor).unwrap();
-    let underflow_pc = pop.termination_entry_pcs()[1];
-    let body = executor
-        .execute_until(
-            ENTRY_PC,
-            &[underflow_pc, pop.exit_pc()],
-            pop.instruction_limit(),
-        )
-        .unwrap();
-    assert_eq!(body.exit_pc, underflow_pc);
-    assert_eq!(body.executed_instructions, 2);
-    let termination = executor
-        .execute_until(underflow_pc, &[pop.exit_pc()], 8)
-        .unwrap();
-    assert_eq!(termination.exit_pc, pop.exit_pc());
-    let report = ExecutionReport {
-        exit_pc: termination.exit_pc,
-        executed_instructions: body.executed_instructions + termination.executed_instructions,
-    };
-    let result = read_guest_result(&mut executor, &report).unwrap();
-    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
-    assert_eq!(result.exception_code(), 2);
-    assert_eq!(result.final_s1(), EVM_STACK_REGION.start());
-    assert!(result.stack().is_empty());
-
-    let dup = compose(&[generate_symbolic_dup1(
-        0,
-        PublisherRole::Normal.label().to_owned(),
-    )])
-    .unwrap();
-    let mut executor = RvemuExecutor::new().unwrap();
-    executor.load_code(dup.machine_code()).unwrap();
-    executor
-        .write_memory(dup.exit_pc(), &0x0010_0073_u32.to_le_bytes())
-        .unwrap();
-    initialize_guest_state(&mut executor).unwrap();
-    let underflow_pc = dup.termination_entry_pcs()[1];
-    let body = executor
-        .execute_until(
-            ENTRY_PC,
-            &[underflow_pc, dup.exit_pc()],
-            dup.instruction_limit(),
-        )
-        .unwrap();
-    assert_eq!(body.exit_pc, underflow_pc);
-    assert_eq!(body.executed_instructions, 2);
-    let termination = executor
-        .execute_until(underflow_pc, &[dup.exit_pc()], 8)
-        .unwrap();
-    assert_eq!(termination.exit_pc, dup.exit_pc());
-    let report = ExecutionReport {
-        exit_pc: termination.exit_pc,
-        executed_instructions: body.executed_instructions + termination.executed_instructions,
-    };
-    let result = read_guest_result(&mut executor, &report).unwrap();
-    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
-    assert_eq!(result.exception_code(), 2);
-    assert_eq!(result.final_s1(), EVM_STACK_REGION.start());
-    assert!(result.stack().is_empty());
-
-    let full = full_stack();
-    let mut executor = RvemuExecutor::new().unwrap();
-    executor.load_code(dup.machine_code()).unwrap();
-    executor
-        .write_memory(dup.exit_pc(), &0x0010_0073_u32.to_le_bytes())
-        .unwrap();
-    initialize_guest_state(&mut executor).unwrap();
-    for (slot, &word) in full.iter().enumerate() {
-        write_evm_word(&mut executor, slot, word).unwrap();
-    }
-    executor.write_register(
-        IntegerRegister::EVM_STACK_NEXT_FREE,
-        EVM_STACK_REGION.start() + full.len() as u64 * EVM_WORD_SIZE,
-    );
-    let overflow_pc = *dup.termination_entry_pcs().last().unwrap();
-    let body = executor
-        .execute_until(
-            ENTRY_PC,
-            &[overflow_pc, dup.exit_pc()],
-            dup.instruction_limit(),
-        )
-        .unwrap();
-    assert_eq!(body.exit_pc, overflow_pc);
-    assert_eq!(body.executed_instructions, 5);
-    let termination = executor
-        .execute_until(overflow_pc, &[dup.exit_pc()], 8)
-        .unwrap();
-    assert_eq!(termination.exit_pc, dup.exit_pc());
-    let report = ExecutionReport {
-        exit_pc: termination.exit_pc,
-        executed_instructions: body.executed_instructions + termination.executed_instructions,
-    };
-    let result = read_guest_result(&mut executor, &report).unwrap();
-    assert_eq!(result.status(), GuestExecutionStatus::GuestException);
-    assert_eq!(result.exception_code(), 1);
-    assert_eq!(result.final_s1(), EVM_STACK_REGION.end());
-    assert_eq!(result.stack(), full);
-}
-
-#[test]
-#[ignore = "bounded opt-in POP/DUP1 capacity probe"]
-fn pop_dup1_capacity_probe() {
-    for count in [33_332, 33_333, 65_535, 65_536] {
-        let fragments = (0..count)
-            .map(|index| {
-                let continuation = if index + 1 == count {
-                    PublisherRole::Normal.label().to_owned()
-                } else {
-                    format!("guest_pop_{}", index + 1)
-                };
-                generate_symbolic_pop(index, continuation)
-            })
-            .collect::<Vec<_>>();
-        let publishers = publisher_inventory(&fragments);
-        let source = emit(&fragments, &publishers);
-        match assemble_image(&source) {
-            Ok(image) => println!(
-                "POP fragments={count} labels_per_fragment=2 total_labels={} source_bytes={} assembled_image_bytes={} ferreth_accepts={}",
-                image.labels().len(),
-                source.len(),
-                image.len(),
-                verified_program(&fragments, &publishers, source, image).is_ok()
-            ),
-            Err(error) => println!(
-                "POP fragments={count} labels_per_fragment=2 source_bytes={} assembler={error}",
-                source.len()
-            ),
-        }
-    }
-
-    for count in [33_331, 33_332, 33_333] {
-        let fragments = (0..count)
-            .map(|index| {
-                let continuation = if index + 1 == count {
-                    PublisherRole::Normal.label().to_owned()
-                } else {
-                    format!("guest_dup1_{}", index + 1)
-                };
-                generate_symbolic_dup1(index, continuation)
-            })
-            .collect::<Vec<_>>();
-        let publishers = publisher_inventory(&fragments);
-        let source = emit(&fragments, &publishers);
-        match assemble_image(&source) {
-            Ok(image) => println!(
-                "DUP1 fragments={count} labels_per_fragment=3 total_labels={} source_bytes={} assembled_image_bytes={} ferreth_accepts={}",
-                image.labels().len(),
-                source.len(),
-                image.len(),
-                verified_program(&fragments, &publishers, source, image).is_ok()
-            ),
-            Err(error) => println!(
-                "DUP1 fragments={count} labels_per_fragment=3 source_bytes={} assembler={error}",
-                source.len()
-            ),
-        }
-    }
-}
+mod pop_dup1;
 
 #[test]
 fn pop_dup1_inventory_and_mixed_runtime() {
