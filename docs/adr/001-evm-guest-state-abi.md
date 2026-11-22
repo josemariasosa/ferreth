@@ -1,14 +1,14 @@
 # ADR-001: EVM Guest State and RV64 Runtime ABI
 
 - **Status:** Accepted
-- **Implementation:** Implemented (initial scope)
+- **Implementation:** Implemented for the six-opcode compiler subset
 - **Date:** 2026-11-17
 
 ## Implementation Summary
 
-ADR-001 is implemented for the initial `STOP`, `PUSH1`, `ADD`, and `SUB` subset. Ferreth provides a defined RV64 guest memory layout, an ascending U256 stack, a result-publication ABI, PC-sentinel termination, reusable arithmetic cores, and a backend-neutral executor interface.
+ADR-001 is implemented for `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, and `SUB`. Ferreth provides a defined RV64 guest memory layout, an ascending U256 stack, a result-publication ABI, PC-sentinel termination, reusable arithmetic cores, and a backend-neutral executor interface.
 
-Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 instructions through the shared guest ABI. The initial implementation is validated through unit tests, integration tests, deterministic whole-program RC-to-REVM differential tests, and reproducible instruction-count benchmarks.
+Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 instructions through the shared guest ABI. Recorded evidence includes unit tests, integration tests, deterministic whole-program RC-to-REVM differential tests, and instruction-count benchmarks. [Guest linking architecture and evidence](../research/ferreth-guest-linking.md)
 
 **Remaining work:** Broader EVM opcode coverage, stable exception-code definitions, and optional alternative execution backends. Native-stack execution and full EVM compatibility remain outside the initial ADR scope.
 
@@ -18,18 +18,21 @@ Both the Rust Orchestrator (RO) and Rust Compiler (RC) execute generated RV64 in
 | Guest stack layout and U256 representation | Implemented | `rv64/guest.rs` encodes four little-endian `u64` limbs per 32-byte word and validates the 1024-word ascending stack. |
 | Guest state initialization (`s0`, `s1`) | Implemented | `initialize_guest_state` initializes both registers to the EVM stack base and initializes metadata to `RUNNING`. |
 | Guest status and result-publication ABI | Implemented | The 24-byte metadata record is encoded, validated, and published by generated normal and exceptional termination paths. |
-| Normal completion and guest exceptions | Implemented | `STOP` transfers to the normal publisher; stack overflow and binary-operation underflow transfer to exceptional publishers with provisional codes. |
+| Normal completion and guest exceptions | Implemented | `STOP` and EOF lead to the normal publisher. Stack overflow and underflow lead to exceptional publishers with provisional codes. |
 | Backend-neutral `Rv64Executor` interface | Implemented | `rv64/executor/mod.rs` exposes load, memory/register access, bounded execution, completion, and metrics without rvemu types. |
 | rvemu execution backend | Implemented | `RvemuExecutor` provides the initial rvemu 0.0.11 adapter and pre-fetch exit-sentinel accounting. |
-| Shared RV64 arithmetic cores | Implemented | `rv64/add.rs` and `rv64/sub.rs` wrappers call the reusable pointer-based cores used by both RO and RC. |
-| Rust Orchestrator (RO) execution path | Implemented | `orchestrator.rs` runs isolated PUSH1, ADD, and SUB guest programs through the shared ABI. |
-| Rust Compiler (RC) whole-program execution path | Implemented | `compiler.rs` compiles supported bytecode to one linked RV64 executable; `orchestrator.rs` executes it without per-opcode Rust callbacks. |
-| Supported EVM opcodes | Partially implemented | RC supports `STOP`, `PUSH1`, `ADD`, and `SUB`; decoding additionally recognizes `PUSH2`–`PUSH32`, which RC rejects. Full EVM is not in initial scope. |
-| REVM differential validation | Implemented for initial subset | Directed and seeded randomized whole-program RC tests compare generated RV64 execution with REVM 43.0.3 configured for `CANCUN`; broader opcode coverage remains future work. |
+| Shared RV64 arithmetic cores | Implemented | `rv64/opcodes/add.rs` and `rv64/opcodes/sub.rs` wrappers call the reusable pointer-based cores used by both RO and RC. |
+| Rust Orchestrator (RO) execution path | Implemented | `orchestrator.rs` runs isolated PUSH1, POP, DUP1, ADD, and SUB guest programs through the shared ABI. |
+| Rust Compiler (RC) whole-program execution path | Implemented | `compiler::compile_evm_bytecode` produces one verified RV64 executable through the symbolic composer. `orchestrator::execute_guest_evm_bytecode` runs it and validates the published guest result. |
+| Supported EVM opcodes | Implemented for the bounded subset | RC supports `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, and `SUB`. Decoding additionally recognizes `PUSH2`–`PUSH32`, which RC rejects. |
+| REVM differential validation | Covered for the supported subset | Directed and seeded randomized whole-program RC tests compare generated RV64 execution with REVM 43.0.3 configured for `CANCUN`; broader opcode coverage remains future work. |
 | Benchmark scopes (`opcode_core`, `opcode_guest`, `program_guest`) | Implemented | `benchmark.rs` produces the arithmetic baseline and deterministic guest/program measurements with split body and termination counts. |
 | Native RV64 execution or alternative executor backends | Not in initial scope | The native stack is reserved but unused; rvemu is the only backend. ADR-001 explicitly leaves Unicorn/other backend work optional. |
 
 ## 1. Context
+
+The following context describes the arithmetic prototype at the time of the
+ADR decision. See the implementation summary above for the current guest route.
 
 `ferrum-eth-translator` currently supports a narrow experiment: it decodes
 `PUSH1`–`PUSH32`, `ADD`, and `SUB`; generates RV64 arithmetic routines for
@@ -309,12 +312,12 @@ emulator failure can leave partially changed registers or memory and does not
 produce a valid EVM result; no rollback is guaranteed. No full-state memory
 synchronization is required after every opcode.
 
-The current harness demonstrates code loading with `initialize_dram`,
+The pre-ADR arithmetic harness demonstrated code loading with `initialize_dram`,
 initialization of data using `cpu.bus.write`, direct integer-register setup,
-and `initialize_pc`. It constructs the emulator with `Emulator::new`; that
-constructor currently has DTB/DTS side effects relative to the process working
-directory. It does not demonstrate custom region setup, stack initialization,
-or a complete guest result protocol. In rvemu 0.0.11 the host can inspect CPU
+and `initialize_pc`. It constructed the emulator with `Emulator::new`, which
+has DTB/DTS side effects relative to the working directory. The prototype did
+not demonstrate custom region setup, stack initialization, or a complete guest
+result protocol. In rvemu 0.0.11 the host can inspect CPU
 registers and bus memory directly, while `cpu.execute()` returns a typed
 exception on instruction failure. These interfaces support the intended
 minimal executor boundary but still require runtime tests for result
@@ -601,14 +604,14 @@ choices if they preserve the accepted decisions and observable contract.
 Future Unicorn support and cross-engine metric equivalence are not
 prerequisites.
 
-The first implementation milestone should establish guest-state
-initialization, stack access, and result retrieval. Later milestones may add
-guest-side `PUSH1`, adapt `ADD` and `SUB` to use the guest stack, implement
-`STOP`, and execute `PUSH1 5; PUSH1 3; ADD; STOP` as one complete RV64 program.
-These are follow-on milestones, not work authorized by this documentation
-task.
+The original implementation plan called for guest-state initialization, stack
+access, and result retrieval first. It then called for guest-side `PUSH1`,
+`ADD`, `SUB`, and `STOP`, including execution of `PUSH1 5; PUSH1 3; ADD; STOP`
+as one complete RV64 program. See the implementation summary for status.
 
 ## 14. References to Existing Code
+
+The `translator/` paths below refer to the pre-ADR prototype.
 
 - `translator/src/lib.rs`: `Instruction`, `decode`, and `Opcode`; decoding
   accepts `PUSH1`–`PUSH32`, `ADD`, and `SUB`. `add_u256` and `sub_u256`

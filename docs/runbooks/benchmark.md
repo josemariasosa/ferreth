@@ -8,21 +8,38 @@ measurement.
 
 | Scope | What it measures | Command |
 | --- | --- | --- |
-| `opcode_core` | The arithmetic RV64 routine operating on 256-bit values through its pointer-based core interface. This is the historical ADD/SUB baseline. | `ferreth-conformance bench --op ADD|SUB|ALL --cases N --format json` |
+| `opcode_core` | The arithmetic RV64 routine operating on 256-bit values through its pointer-based core interface. This is the historical ADD/SUB baseline. | `ferreth-conformance bench --op ALL --cases 1000 --format json` |
 | `opcode_guest` | One isolated guest opcode, including guest stack handling and guest termination. | `ferreth-conformance bench guest --format json` |
 | `program_guest` | One complete supported EVM bytecode program compiled and executed as one guest program. | `ferreth-conformance bench guest --format json` |
 
 These scopes include different amounts of generated code and runtime work.
 Do not compare their totals as if they were the same workload.
 
+## JSON stdout
+
+Both benchmark commands require a working `dtc` (Device Tree Compiler) on
+`PATH` for clean JSON capture. From the repository root, check that it starts:
+
+```sh
+command -v dtc && dtc --version
+```
+
+The maintainer reported that the previously observed warning prefix disappeared
+after installing `dtc`. Without `dtc`, ROM initialization in `rvemu` 0.0.11
+can print device-tree warnings to stdout before the JSON report. The command
+can still exit successfully. Other device-tree file or launch errors can
+reach the same warning path. Validate the entire captured stdout as shown
+below. This is a known v0.1.0 limitation.
+[LF-031 reproduction and raw-stream evidence](../../research/lf-031/README.md)
+
 ## Historical arithmetic benchmarks
 
 Run commands from the workspace root:
 
 ```sh
-cargo run -p ferreth-conformance -- bench --op ADD --cases 1000 --seed 42 --format json
-cargo run -p ferreth-conformance -- bench --op SUB --cases 1000 --seed 42 --format json
-cargo run -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
+cargo run --locked -p ferreth-conformance -- bench --op ADD --cases 1000 --seed 42 --format json
+cargo run --locked -p ferreth-conformance -- bench --op SUB --cases 1000 --seed 42 --format json
+cargo run --locked -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
 ```
 
 The current CLI accepts the following options:
@@ -35,9 +52,8 @@ The current CLI accepts the following options:
 | `--format` | Yes | `json` only. |
 
 `ALL` resets the random generator to the same seed for each operation, so ADD
-and SUB receive the same ordered random operand pairs. JSON is the only stdout
-payload; diagnostics go to stderr. If differential parity fails, the command
-still writes the JSON evidence and exits unsuccessfully.
+and SUB receive the same ordered random operand pairs. If differential parity
+fails, the command still writes the JSON evidence and exits unsuccessfully.
 
 The versioned `rv64-arithmetic-baseline` JSON includes:
 
@@ -65,7 +81,7 @@ per operation, in addition to 12 directed cases. Generate a candidate for
 comparison with that reference using:
 
 ```sh
-cargo run -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
+cargo run --locked -p ferreth-conformance -- bench --op ALL --cases 1000 --seed 42 --format json
 ```
 
 | Operation | Successful cases | Dynamic instructions per case | Dynamic instructions total | Routine words | FNV-1a machine-code hash |
@@ -88,7 +104,7 @@ not establish byte-for-byte equivalence with the lost historical artifact.
 The current guest benchmark command is:
 
 ```sh
-cargo run -p ferreth-conformance -- bench guest --format json
+cargo run --locked -p ferreth-conformance -- bench guest --format json
 ```
 
 The equivalent `--format=json` spelling is also accepted. The JSON schema has
@@ -98,8 +114,8 @@ top-level `schema_version`, `experiment`, `executor`, `measurement`,
 `guest_termination`, and `total`.
 
 The current output identifies `rvemu 0.0.11`, and all following statuses are
-`normal`. These are historical reference values, verified against the current
-command:
+`normal`. The table records reference values from the tracked guest baseline.
+[Guest benchmark baseline](../../runs/phase-0/guest-benchmarks.json)
 
 | Scope | Case | Opcode body | Guest termination | Total |
 | --- | --- | ---: | ---: | ---: |
@@ -153,31 +169,27 @@ and instruction counts remain unchanged.
 ## Reproducing and comparing results
 
 Never redirect a new benchmark into the canonical artifact path. The following
-commands save a fresh candidate to a temporary file and pretty-print its JSON.
-Run the block from the workspace root; it requires `python3` only for
-inspection.
+commands save both reports in temporary files and parse each complete stdout
+stream. Run from the workspace root with `dtc` and `python3` available. Check
+both the benchmark and parser exit statuses.
 
 ```sh
-tmp_report="$(mktemp)"
-trap 'rm -f "$tmp_report"' EXIT
+capture="$(mktemp -d)"
 
-cargo run -p ferreth-conformance -- \
+cargo run --locked -p ferreth-conformance -- \
   bench --op ALL --cases 1000 --seed 42 --format json \
-  > "$tmp_report"
+  > "$capture/arithmetic.stdout"
+python3 -m json.tool "$capture/arithmetic.stdout"
 
-python3 -m json.tool "$tmp_report"
-
+cargo run --locked -p ferreth-conformance -- bench guest --format json \
+  > "$capture/guest.stdout"
+python3 -m json.tool "$capture/guest.stdout"
 ```
 
 Compare a candidate's configuration, schema, hashes, and measurement fields
 to the documented values above. Dependency metadata differs from the historical
 reference, so matching instruction counts do not prove byte-for-byte
-equivalence. To inspect just the guest JSON, run the guest benchmark and pipe
-or redirect stdout as needed:
-
-```sh
-cargo run -p ferreth-conformance -- bench guest --format json
-```
+equivalence.
 
 The CLI has no output-file option; shell redirection is the supported way to
 capture reports. Use a new temporary path for each run. Do not treat a
@@ -185,6 +197,7 @@ candidate as an approved baseline without explicit authorization.
 
 ## Regression checklist
 
+- [ ] Check `dtc` and validate the complete stdout of both benchmark commands.
 - [ ] Run the historical arithmetic command and confirm ADD and SUB each pass
       1,012 cases at 34 instructions per case (34,408 total).
 - [ ] Confirm the arithmetic machine-code hashes remain

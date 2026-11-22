@@ -23,17 +23,17 @@ semantics or gas accounting.
 
 - Run commands from the Ferreth workspace root, where the root `Cargo.toml`
   declares the workspace member `crates/ferreth-compiler`.
-- Install Rust and Cargo. The package uses Rust edition 2021; the manifests do
-  not declare a `rust-version` minimum.
+- Use the [recorded Rust and Cargo environment](../../README.md#getting-started)
+  for reproduction. The compiler uses Rust edition 2021.
 - Cargo resolves and builds the Rust dependencies from the manifests,
   including `alloy-primitives`, `asm-rs`, and `rvemu`. REVM is a dependency of
   the separate `ferreth-conformance` package, not the compiler CLI. No separate
   RV64 assembler command is used by these CLI operations.
 
-The command form used below is:
+Pass `--locked` to Cargo to use the checked-in dependency versions.
 
 ```sh
-cargo run -p ferreth-compiler -- <command> [arguments]
+cargo run --locked -p ferreth-compiler -- <command> [arguments]
 ```
 
 ## Command reference
@@ -46,9 +46,9 @@ command prints usage to stderr and exits unsuccessfully.
 
 | Invocation | Purpose and valid arguments | Output |
 | --- | --- | --- |
-| `cargo run -p ferreth-compiler -- translate --op ADD` | Generate the arithmetic `ADD` RV64 assembly. `--op` must be `ADD` or `SUB` for arithmetic translation. | GNU-style `.text` assembly for the routine. |
-| `cargo run -p ferreth-compiler -- translate --op SUB` | Generate the arithmetic `SUB` RV64 assembly. | GNU-style `.text` assembly for the routine. |
-| `cargo run -p ferreth-compiler -- translate --op PUSH1 --value 5` | Generate a `PUSH1` opcode body. The immediate is an unsigned byte, `0..255`. Decimal and `0x`-prefixed values are accepted. | An unlinked opcode-body assembly listing and its 32-bit machine-code words. The listing includes a patchable overflow trampoline; it is not the complete linked executable. |
+| `cargo run --locked -p ferreth-compiler -- translate --op ADD` | Generate the arithmetic `ADD` RV64 assembly. `--op` must be `ADD` or `SUB` for arithmetic translation. | GNU-style `.text` assembly for the routine. |
+| `cargo run --locked -p ferreth-compiler -- translate --op SUB` | Generate the arithmetic `SUB` RV64 assembly. | GNU-style `.text` assembly for the routine. |
+| `cargo run --locked -p ferreth-compiler -- translate --op PUSH1 --value 5` | Generate a `PUSH1` opcode body. The immediate is an unsigned byte, `0..255`. Decimal and `0x`-prefixed values are accepted. | An unlinked opcode-body assembly listing and its 32-bit machine-code words. The listing includes a patchable overflow trampoline; it is not the complete linked executable. |
 
 `translate` does not accept other opcodes. The arithmetic translation prints
 assembly only; the `PUSH1` translation also prints machine-code words.
@@ -57,12 +57,12 @@ assembly only; the `PUSH1` translation also prints machine-code words.
 
 | Invocation | Purpose and valid arguments | Output |
 | --- | --- | --- |
-| `cargo run -p ferreth-compiler -- execute --op PUSH1 --value 5` | Run an isolated `PUSH1` guest operation. `--value` is `0..255` (decimal or `0x`-prefixed). | Linked executable assembly, machine-code words, final guest stack, and total/body/termination instruction counts. |
-| `cargo run -p ferreth-compiler -- execute --op ADD --a 5 --b 3` | Run isolated guest `ADD`. `--a` and `--b` are values parseable as EVM `U256` words. The initial stack is `[a, b]`. | Opcode, initial stack, final guest status, final stack, and dynamic RV64 instruction count. |
-| `cargo run -p ferreth-compiler -- execute --op SUB --a 5 --b 3` | Run isolated guest `SUB` with the same `U256` arguments and initial-stack order. `SUB` evaluates the top item minus the item below it (`b - a`). | For this example the result wraps to `2^256 - 2`; output includes the status, final stack, and dynamic count. |
-| `cargo run -p ferreth-compiler -- execute --op POP` | Run isolated guest `POP` with one initialized zero word. | Final status, empty final stack, and dynamic RV64 instruction count. |
-| `cargo run -p ferreth-compiler -- execute --op DUP1` | Run isolated guest `DUP1` with one initialized zero word. | Final status, duplicated stack, and dynamic RV64 instruction count. |
-| `cargo run -p ferreth-compiler -- execute --bytecode 600560035000` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. Supported source opcodes are `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP`, and `DUP1`; RC supports only `PUSH1` among the push widths. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
+| `cargo run --locked -p ferreth-compiler -- execute --op PUSH1 --value 5` | Run an isolated `PUSH1` guest operation. `--value` is `0..255` (decimal or `0x`-prefixed). | Linked executable assembly, machine-code words, final guest stack, and total/body/termination instruction counts. |
+| `cargo run --locked -p ferreth-compiler -- execute --op ADD --a 5 --b 3` | Run isolated guest `ADD`. `--a` and `--b` are values parseable as EVM `U256` words. The initial stack is `[a, b]`. | Opcode, initial stack, final guest status, final stack, and dynamic RV64 instruction count. |
+| `cargo run --locked -p ferreth-compiler -- execute --op SUB --a 5 --b 3` | Run isolated guest `SUB` with the same `U256` arguments and initial-stack order. `SUB` evaluates the top item minus the item below it (`b - a`). | For this example the result wraps to `2^256 - 2`; output includes the status, final stack, and dynamic count. |
+| `cargo run --locked -p ferreth-compiler -- execute --op POP` | Run isolated guest `POP` with one initialized zero word. | Final status, empty final stack, and dynamic RV64 instruction count. |
+| `cargo run --locked -p ferreth-compiler -- execute --op DUP1` | Run isolated guest `DUP1` with one initialized zero word. | Final status, duplicated stack, and dynamic RV64 instruction count. |
+| `cargo run --locked -p ferreth-compiler -- execute --bytecode 600560035000` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. The compiler supports `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, and `SUB`. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
 
 `--op ADD` and `--op SUB` require both `--a` and `--b`. For the isolated
 guest wrappers, `--a` is the lower stack item and `--b` is the top item; EVM
@@ -80,17 +80,18 @@ generated RV64 assembly and machine-code words directly.
 Statically disassemble EVM bytecode:
 
 ```sh
-cargo run -p ferreth-compiler -- decode --bytecode 6005600350
+cargo run --locked -p ferreth-compiler -- decode --bytecode 6005600350
 ```
 
 See the [EVM Bytecode Disassembler](decode.md) runbook for output details,
 examples, and limitations.
 
-REVM-backed arithmetic and guest benchmarks are provided by the separate
-`ferreth-conformance` CLI. For example:
+The separate `ferreth-conformance` CLI provides arithmetic and guest benchmarks.
+Check the `dtc` prerequisite before capturing JSON output.
+[Benchmark stdout requirements](benchmark.md#json-stdout)
 
 ```sh
-cargo run -p ferreth-conformance -- bench --op ADD --cases 100 --format json
+cargo run --locked -p ferreth-conformance -- bench --op ADD --cases 100 --format json
 ```
 
 See the [Benchmark Runbook](benchmark.md) for supported options and report
@@ -108,11 +109,11 @@ details.
   for example, `60` executes as `PUSH1 0`.
 - **Decoded but uncompiled PUSH widths:** `PUSH2`–`PUSH32` are recognized by
   the decoder, but RC reports an unsupported instruction when asked to
-  compile them. For example, `cargo run -p ferreth-compiler -- execute
+  compile them. For example, `cargo run --locked -p ferreth-compiler -- execute
   --bytecode 610001` is decoded and then rejected by compilation.
 - **Guest stack underflow or overflow:** guest-detected stack errors are
   reported in `Final status` as `GuestException`, not as malformed CLI input.
-  For example, `cargo run -p ferreth-compiler -- execute --bytecode 600101`
+  For example, `cargo run --locked -p ferreth-compiler -- execute --bytecode 600101`
   leaves `[1]` on the stack and reports `GuestException` after 21 executed
   instructions. A program that tries to push beyond the 1024-word guest stack
   similarly takes the guest overflow path.

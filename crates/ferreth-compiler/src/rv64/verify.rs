@@ -1,4 +1,5 @@
-//! Final-byte checks for the fixed layouts of the three current guest linkers.
+//! Final-image control-transfer and layout checks for the symbolic guest composer.
+//! The retained legacy linker oracles also use the fixed-layout checks in tests.
 
 use super::memory::{ENTRY_PC, RV64_INSTRUCTION_SIZE};
 

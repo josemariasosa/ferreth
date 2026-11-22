@@ -1,27 +1,49 @@
-# EVM ADD and SUB to RV64IM
+# Ferreth compiler
 
-This experiment decodes the strict EVM PUSH1-PUSH32, ADD (`0x01`) and SUB
-(`0x03`) subset and emits complete GNU assembly functions implementing
-arithmetic modulo 2^256. Its execution harness manages the virtual stack on
-the host; it does not implement EVM stack manipulation in RV64, gas, or
-complete observable parity with revm.
+Ferreth compiles bounded, straight-line EVM bytecode to one RV64 guest.
+The compiler supports `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, and `SUB`.
+The decoder reads through the first `STOP` or EOF and zero-pads a missing
+`PUSH1` immediate. It also recognizes `PUSH2`–`PUSH32`, which the compiler
+rejects. The guest has finite stack and image capacity, and fitting the
+image reservation does not guarantee that the assembler can accept it.
+Dynamic EVM control flow and gas metering are outside this subset.
+
+Use `compiler::compile_evm_bytecode` to obtain assembly and machine code, or
+`orchestrator::execute_guest_evm_bytecode` to compile and run from an empty
+stack. The `execute_guest_evm_bytecode_with_initial_stack` variant accepts
+caller-provided stack words. Generated RV64 code performs stack operations
+and arithmetic. The host initializes the guest, runs it in `rvemu`, and
+validates its published result under ADR-001.
+[Guest linking architecture](../../docs/research/ferreth-guest-linking.md)
+
+Run from the repository root using the [recorded toolchain and lockfile versions](../../README.md#getting-started).
 
 ```sh
-cargo run -p ferreth-compiler -- translate --op ADD
-cargo run -p ferreth-compiler -- translate --op SUB
+cargo run --locked -p ferreth-compiler -- execute --bytecode 600560030100
 cargo test --locked -p ferreth-compiler
+```
+
+## Isolated ADD and SUB routines
+
+The original arithmetic experiment emits GNU-style assembly for ADD and SUB
+modulo 2^256. Use `translate` to inspect the standalone pointer-based routines.
+
+```sh
+cargo run --locked -p ferreth-compiler -- translate --op ADD
+cargo run --locked -p ferreth-compiler -- translate --op SUB
 ```
 
 ## Reproducible RV64 execution baseline
 
-The `bench` command uses the same differential path as the integration test:
-generated assembly is assembled with `asm-rs`, decoded instructions are executed
-in `rvemu`, and the complete 256-bit result is compared with `revm` under
-Cancun. It is an empirical retired-instruction baseline, not a cycle, energy,
-gas, or hardware-performance benchmark.
+The `bench --op` command uses the isolated arithmetic differential harness.
+It assembles the routines with `asm-rs`, executes them in `rvemu`, and compares
+the complete 256-bit result with REVM under Cancun. The baseline measures
+retired RV64 instructions. For machine-readable capture, check `dtc` before
+running the command and validate the complete stdout stream.
+[Benchmark stdout requirements](../../docs/runbooks/benchmark.md#json-stdout)
 
 ```sh
-cargo run --release -p ferreth-conformance -- \
+cargo run --locked --release -p ferreth-conformance -- \
   bench --op ALL --cases 1000 --seed 42 --format json \
   > runs/rv64-arithmetic-candidate.json
 ```
@@ -29,11 +51,10 @@ cargo run --release -p ferreth-conformance -- \
 `ADD`, `SUB`, and `ALL` are accepted values for `--op`; `ALL` applies the same
 shared directed vectors and the same seed-reset xorshift64 random operand pairs
 to each operation. `--cases` is the number of random pairs per operation; the
-JSON report separately identifies the 12 directed cases. When `--format json`
-is selected, stdout contains only the versioned JSON report. Diagnostics are
-written to stderr. A parity or execution failure produces a nonzero status but
-still writes JSON with operation, case index, operands, available results, seed,
-and execution error evidence in the operation's `failures` array.
+JSON report separately identifies the 12 directed cases. A parity or execution
+failure produces a nonzero status and writes JSON with operation, case index,
+operands, available results, seed, and execution error evidence in the
+operation's `failures` array.
 
 If omitted, `--seed` defaults to `0x123456789abcdef0`; always retain the
 reported seed with evidence so the exact random input sequence can be replayed.
@@ -74,11 +95,11 @@ For `a = [5, 0, 0, 0]` and `b = [7, 0, 0, 0]`, the written limbs are
 `[12, 0, 0, 0]` (hex: `000000000000000c 0000000000000000
 0000000000000000 0000000000000000`).
 
-## End-to-end differential test
+## Arithmetic differential tests
 
-The `ferreth-conformance` integration test assembles the compiler's generated
-source for RV64 with the documented `asm-rs` Rust assembler and executes its
-machine code instruction-by-instruction in the `rvemu` Rust emulator. It
+The `ferreth-conformance` arithmetic integration test assembles the generated
+RV64 source with `asm-rs` and executes the machine code instruction by
+instruction in `rvemu`. The harness
 removes only the GNU metadata directives, which do not encode instructions.
 The test initializes the emulator's memory and `a0`/`a1`/`a2` registers
 directly, uses an `EBREAK` return address for deterministic termination, and
@@ -115,13 +136,13 @@ operation. The top item is the first operand, so `PUSH 3; PUSH 7; ADD;
 PUSH 2; SUB` yields -8 modulo 2^256. Both paths return the top stack value,
 even when other values remain underneath.
 
-The library's `decode` function also accepts raw bytecode, rejecting unsupported
-opcodes and truncated PUSH immediates with byte offsets. For example,
-`6003600701601460050301` decodes to `PUSH 3; PUSH 7; ADD; PUSH 20;
-PUSH 5; SUB; ADD`. `execution::ProgramRunner` executes that sequence using
-the host stack and generated RV64 arithmetic, yielding 2^256 - 5. The revm
-comparison appends an MSTORE/RETURN wrapper only after decoding the original
-program; those instructions are not supported by the decoder.
+The library's `decode` function reports unsupported opcodes with byte offsets
+and zero-pads truncated PUSH immediates. The sequence `6003600701601460050301`
+decodes to `PUSH 3; PUSH 7; ADD; PUSH 20; PUSH 5; SUB; ADD`. The arithmetic
+harness uses `execution::ProgramRunner` to execute it with a host stack and
+generated RV64 arithmetic, yielding 2^256 - 5. The REVM comparison appends an
+`MSTORE`/`RETURN` wrapper after decoding the original program. Those two opcodes
+are outside the decoder's subset.
 
 These tests exercise arithmetic composition and data flow, not translation of
 EVM stack instructions into RISC-V or arbitrary EVM bytecode. The experiment
@@ -130,4 +151,5 @@ does not verify complete EVM stack semantics, transaction
 behavior, revert handling, other opcodes, or gas parity; the EVM bytecode
 consumes gas, but the RV64 function does not implement gas metering. Passing
 tests are experimental evidence, not a formal correctness proof or universal
-EVM parity.
+EVM parity. For the separate whole-program differential suite, see the
+[conformance findings](../../docs/research/ferreth-evm-conformance.md).

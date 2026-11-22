@@ -1,6 +1,6 @@
 # RV64 guest linking Phase 0 evidence
 
-Start with [How Ferreth links an RV64 guest](../../docs/research/ferreth-guest-linking.md) for the canonical account of the current architecture and pending Phase 3 work. The [original linking investigation](ferreth-linking-architecture.md) preserves the earlier design alternatives, LF findings and historical roadmap.
+Start with [How Ferreth links an RV64 guest](../../docs/research/ferreth-guest-linking.md) for the canonical account of the current architecture and pending Phase 3 work. The [original linking investigation](ferreth-linking-architecture.md) preserves the earlier design alternatives, LF findings and historical roadmap. The phase summaries below describe their original checkpoints. For current compiler and benchmark commands, see the [CLI runbook](../../docs/runbooks/cli.md) and [benchmark runbook](../../docs/runbooks/benchmark.md).
 
 Phase 0 established a reproducible artifact and execution baseline, isolated
 the long forward JAL failure (LF-026), and reproduced the signed JAL encoder
@@ -55,24 +55,32 @@ payloads began at bytes 326 and 2445 for the arithmetic and guest reports.
 The collector verifies the warning prefix and parses the remaining bytes
 through EOF. The raw streams remain available in the local captures.
 Instruction counts describe RV64 execution. The Cancun runner's remaining gas
-describes the EVM frame. [LF-031](ferreth-linking-architecture.md#additional-findings-from-independent-review)
+describes the EVM frame. [LF-031 evidence](../lf-031/README.md) · [Current stdout requirements](../../docs/runbooks/benchmark.md#json-stdout)
 
 ## Phases 0.4 and 0.5 boundary and regression capture
 
-Use the regression checkpoint or a checkout containing it. The probe runs
-Ferreth, the frozen direct REVM Cancun runner, and the EELS Cancun runner
-with Python 3.14.5 and execution-specs commit
-`d15ecf40062fcfe20d23b7b5ff1c078bcbe251c3`. The EELS interpreter defaults
-to `research/eels-cancun/.venv/bin/python`. Set `EELS_PYTHON` to use an
-equivalent pinned environment. [EELS setup](../eels-cancun/README.md)
+Use the detached regression checkpoint `2aa061cf46794588b8d95d3b252dda2e45c1f338`
+to reproduce the historical LF-026 failures. The current symbolic path repairs
+LF-026 and the historical probe depends on legacy functions and APIs from the
+checkpoint. The probe runs Ferreth, direct REVM Cancun, and EELS Cancun with
+Python 3.14.5 and execution-specs commit
+`d15ecf40062fcfe20d23b7b5ff1c078bcbe251c3`.
+
+Run the following from the current repository root. The commands default to
+its pinned EELS environment and pass it to the historical probe. Set
+`EELS_PYTHON` to an absolute interpreter path to use an equivalent environment.
+[EELS setup](../eels-cancun/README.md)
 
 ```sh
 repo="$PWD"
-out="$repo/runs/phase-0/local/boundary-replay"
+replay=$(mktemp -d)
 evidence="$repo/research/guest-linking/phase-0.4-0.5"
-bash "$evidence/reproduce-probes.sh" "$repo" "$out"
-bash "$evidence/reproduce-tests.sh" "$repo" "$out/tests"
-python3 "$evidence/verify.py" "$out" "$out/tests"
+export EELS_PYTHON="${EELS_PYTHON:-$repo/research/eels-cancun/.venv/bin/python}"
+git clone --shared --no-checkout "$repo" "$replay/source"
+git -C "$replay/source" switch --detach 2aa061cf46794588b8d95d3b252dda2e45c1f338
+bash "$evidence/reproduce-probes.sh" "$replay/source" "$replay/capture"
+bash "$evidence/reproduce-tests.sh" "$replay/source" "$replay/capture/tests"
+python3 "$evidence/verify.py" "$replay/capture" "$replay/capture/tests"
 ```
 
 Both 46-PUSH inputs complete normally. Both 47-PUSH lengths are within the
@@ -186,5 +194,5 @@ verification for maintainer review.
 The [Phase 2.5 cleanup report](phase-2.5-final-cleanup.md) records the legacy
 linker inventory, the narrowed dead-code allowances, the test-oracle
 disposition and the full validation gate. The
-[human-led walk](ferreth-human-led-walk.md) records the checkpoint evidence
-and the remaining maintainer exit-gate obligations.
+[completed Human-Led Walk](ferreth-human-led-walk.md) records the checkpoint
+evidence. Phase 3.3 validation and the release decision remain separate.
