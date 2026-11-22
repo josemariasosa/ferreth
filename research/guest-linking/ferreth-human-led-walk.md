@@ -1,7 +1,7 @@
 # Ferreth — Human-Led Walk
 
 **Independent architecture and correctness review after Phase 2**  
-**Status:** Checkpoints A–G investigated, human exit gate pending · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset
+**Status:** Exit review documented, maintainer sign-off pending · **Scope:** symbolic RV64 guest linking for the current six-opcode EVM subset
 
 **Branch history** — Phase 2.4 cutover `3eb4a94`, Phase 2.5 cleanup `831ac85` on `feat/symbolic-guest-composer`.
 
@@ -48,6 +48,30 @@ Cargo commands were run from the repository root. EELS commands were run from `r
 ### Resume at the human exit gate
 
 Bring the source traces and this evidence ledger to [the five challenges](#10-the-human-led-walks-five-deliberate-challenges) and [the exit gate](#12-the-exit-gate-what-we-decide-after-the-walk). Review the [findings notebook](human-led-walk-findings.md) for the Phase 3 candidates and their pending decisions.
+
+### November 22 public CLI observations
+
+The maintainer executed both commands on November 22, 2026. The CLI bytecode path starts with an empty stack. The documentation review started on a clean `feat/symbolic-guest-composer` worktree at `bf1e348`.
+
+`cargo run -p ferreth-compiler -- execute --bytecode 600560030100`
+
+```text
+Decoded instructions: [Push(5), Push(3), Add, Stop]
+Final status: Normal
+Final stack: [8]
+Dynamic RV64 instruction count: 70
+```
+
+`cargo run -p ferreth-compiler -- execute --bytecode 50`
+
+```text
+Decoded instructions: [Pop]
+Final status: GuestException
+Final stack: []
+Dynamic RV64 instruction count: 10
+```
+
+These human-executed CLI observations match the source-derived paths. Two pushes (10 each), ADD (42) and STOP (1) lead to the Normal publisher (7), for 70. Empty POP takes its guard and trampoline (2) to the Underflow publisher (8), for 10. The CLI reports the totals, terminal status and stack. The publisher selection, register values, exception codes and store order are substantiated separately by the Session E source trace and the directed tests in [Challenge 3](#challenge-3--failure-atomicity).
 
 ---
 
@@ -394,7 +418,7 @@ Don't reopen label-density optimization during this walk. Instead ask whether re
 
 ### Full validation commands for the exit gate
 
-The ledger above covers the focused November 21 runs. The commands below reproduce the wider Phase 2 gate on the current branch. Run from the repository root with a fresh target directory.
+The ledger above covers the focused November 21 runs. The commands below reproduce the wider Phase 2 gate at the Phase 3 stabilization revision. Run from the repository root with a fresh target directory. Their rerun is separate release validation. See [the exit gate](#12-the-exit-gate-what-we-decide-after-the-walk).
 
 ```bash
 export CARGO_TARGET_DIR=target/human-led-walk-validation
@@ -422,21 +446,78 @@ Do not outsource answers to these until you have attempted them from code.
 
 Can we identify **one owner per responsibility** for decode, lowering, fragment generation, composition, publisher creation, verification, execution and conformance? Are any two layers silently making incompatible assumptions?
 
+**Source-derived owner map**
+
+| Responsibility | Owner |
+|---|---|
+| Bytecode decoding | `decode_detailed()` preserves offsets, zero-pads truncated PUSH immediates and stops after the first STOP. [Decoder](../../crates/ferreth-compiler/src/lib.rs#L106) |
+| Opcode lowering | `symbolic::compile()` dispatches decoded instructions, rejects wider PUSHes and supplies continuation symbols where needed. [Frontend](../../crates/ferreth-compiler/src/compiler/symbolic.rs#L96) |
+| RV64 fragment generation | Opcode generators emit source and transfer/layout declarations in a `SymbolicFragment`. The frontend supplies the STOP fragment. [Generators](../../crates/ferreth-compiler/src/rv64/opcodes) · [STOP](../../crates/ferreth-compiler/src/compiler/symbolic.rs#L150) |
+| Composition and assembly | `compose()` checks entry names, emits one image source and binds the labels resolved by pinned `asm-rs`. [Composer](../../crates/ferreth-compiler/src/compiler/symbolic.rs#L166) |
+| Final-image verification | `verify_declared_transfers()` checks encoded transfers against declarations. `verify_final_image()` checks expected layouts and publishers. [Verifier](../../crates/ferreth-compiler/src/rv64/verify.rs) |
+| Publisher selection | The composer includes Normal and the exceptional roles requested by fragment declarations. `Publisher::assembly()` emits each body. Generated branches select the reached role at runtime, and the orchestrator runs the publisher at that PC. [Inventory](../../crates/ferreth-compiler/src/compiler/symbolic.rs#L183) · [Publisher](../../crates/ferreth-compiler/src/compiler/publisher.rs) · [Orchestrator](../../crates/ferreth-compiler/src/orchestrator.rs#L303) |
+| Guest execution | The orchestrator loads and seeds the guest and runs the body and publisher. `RvemuExecutor` steps instructions, stops before fetching the requested PC and reports counts or errors. [Orchestrator](../../crates/ferreth-compiler/src/orchestrator.rs#L303) · [Executor](../../crates/ferreth-compiler/src/rv64/executor/rvemu.rs) |
+| ABI result validation | `read_guest_result()` checks terminal metadata and live stack registers, then reconstructs the live stack. [Result reader](../../crates/ferreth-compiler/src/rv64/guest.rs#L588) |
+| Independent conformance comparisons | The conformance differential harness compares public execution against Cancun REVM transactions. The separate EELS and direct REVM frame experiments supply frame observations under their own conditions. [REVM suite](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs) · [Frame evidence](#eg-evidence-from-the-november-21-continuation) |
+
+The frontend and generators share occurrence-indexed entry names. The verifier relies on generator-supplied layout identities and checks encoded words against fixed layout rules. Generators, publishers and the host share ADR-001's stack, register, metadata and exit contract. These assumptions agree in the reviewed paths. [H-WALK-002](#h-walk-002--symbol-naming-and-namespace-ownership) · [ADR-001](../../docs/adr/001-evm-guest-state-abi.md)
+
 ### Challenge 2 — A shared mistake
 
 Find at least one realistic error that generator **and** metadata declaration could agree on. Locate the independent check that prevents it. If there isn't one, record a focused test proposal for Phase 3.
+
+**Independent calculation from archived final-image evidence.** For 47 copies of `6002` followed by EOF, Phase 2.2 recorded word `0x0090006f` at `0x80000028` and an expected Overflow publisher PC of `0x80000830`. These are historical candidate values. No new image was assembled for this review. [Phase 2.2 capture and RF-013 fixtures](phase-2.2-symbolic-guest-composer.md)
+
+```text
+opcode = word[6:0] = 0x6f (JAL), rd = word[11:7] = 0
+imm[20|10:1|11|19:12] = word[31|30:21|20|19:12] = 0 | 4 | 1 | 0
+imm[0] = 0
+signed byte offset = (0 << 20) | (4 << 1) | (1 << 11) | (0 << 12)
+                   = 0x808 = +2056 (sign bit clear)
+destination = 0x80000028 + 0x808 = 0x80000830 (matches Overflow)
+```
+
+**Historical adversarial result.** H-WALK-003 redirected the first of three PUSH1 continuations to the third fragment and changed its declaration to match. Declaration verification accepted the encoded jump, but fixed-layout verification rejected the target `0x80000058` because the next fragment began at `0x8000002c`. The recorded focused pass establishes independence from the transfer declaration for that case. Layout identities still come from lowering. Ordinary instruction semantics and future dynamic EVM jumps fall outside this witness. [H-WALK-003](#h-walk-003--independent-continuation-verification)
+
+| Checked against final bytes | Relies on runtime or oracle evidence |
+|---|---|
+| Aligned image bounds, encoded transfer fields and destinations, required successor and publisher locations, publisher words and protected ADD/SUB core bytes | Correct EVM lowering and effects of ordinary loads, stores and arithmetic, including stack effects and end-to-end termination |
+
+Existing controls cover the backward JAL sign bit, a halfword target, swapped publisher roles, the missing-body/zero-address case, a transfer declared by the wrong fragment, and wrong arithmetic call/return targets. Their source and historical test evidence cover Session D's suggested controls. [Transfer and publisher tests](../../crates/ferreth-compiler/src/rv64/verify/tests.rs) · [Public publisher mutations](../../crates/ferreth-compiler/tests/rv64_final_image.rs) · [Fragment ownership and arithmetic controls](phase-2.3d-integration-review.md#independent-verification-and-its-limits)
 
 ### Challenge 3 — Failure atomicity
 
 For PUSH1, POP, DUP1, ADD and SUB, prove from the instruction sequence that exceptional paths do not corrupt live stack contents or publish an inconsistent final pointer/status. Distinguish “proved by inspection” from “observed in tests.”
 
+| Operation | Guard established by source inspection | Existing directed evidence |
+|---|---|---|
+| PUSH1 | Branches to Overflow when `s1 >= stack_limit` before all four stores and the `s1` advance. [Generator](../../crates/ferreth-compiler/src/rv64/opcodes/push.rs) | Full stack preserves all seeded words. At depth 1,023 the first push fills the final slot and a second push preserves it. The historical long-layout witness checks the guard bytes and live/published pointers. [Public tests](../../crates/ferreth-compiler/tests/rv64_push1_program.rs) · [Recorded run](phase-2.2-symbolic-guest-composer.md) |
+| POP | Branches to Underflow when `s0 >= s1` before subtracting 32. The operation has no operand-memory access. [Generator](../../crates/ferreth-compiler/src/rv64/opcodes/pop.rs) | Empty POP and a second POP after a successful retirement leave the pointer at the base. The mixed sequence's successful POP stays effective. [Public tests](../../crates/ferreth-compiler/tests/rv64_pop.rs) |
+| DUP1 | Checks emptiness and then capacity before loading or copying any limb or advancing `s1`. [Generator](../../crates/ferreth-compiler/src/rv64/opcodes/dup.rs) | Empty and full cases check status, code and pointer. The full case checks the original stack and adjacent sentinel bytes. [Public tests](../../crates/ferreth-compiler/tests/rv64_dup1.rs) · [Recorded boundary run](phase-2.3b.1-boundary-hardening.md) |
+| ADD and SUB | Check `s1 >= s0 + 64` before operand access or the local leaf call. The leaf writes into the second slot and returns to the `s1` decrement on success. [Shared wrapper](../../crates/ferreth-compiler/src/rv64/opcodes/arithmetic.rs) | Empty and one-word cases check unchanged live stack and final `s1` for each opcode. The maintainer reported the focused passes on November 21. [ADD tests](../../crates/ferreth-compiler/tests/rv64_guest_add_orchestrator.rs) · [SUB tests](../../crates/ferreth-compiler/tests/rv64_guest_sub_orchestrator.rs) |
+
+With valid ADR-001 entry state, the guards preserve the input to the failing operation, including effects of earlier successful operations. The guest exception path stores final `s1`, the role's exception code and terminal status last, then jumps to `EXIT_PC`. Status marks publication complete and the host validates the record after sentinel arrival. Source and historical instruction-by-instruction metadata tests establish that order. The November 22 CLI observations establish the visible outcomes and total counts. [Publisher](../../crates/ferreth-compiler/src/compiler/publisher.rs) · [Publication traces](phase-2.2-symbolic-guest-composer.md) · [CLI ledger](#november-22-public-cli-observations)
+
+Executor faults and instruction-limit exhaustion propagate as host errors before a guest result is returned. Such interruption may leave partial emulator state. ADR-001 gives no rollback guarantee. Executor tests cover both error classes, while the extent of end-to-end host fault coverage remains open for Phase 3. [ADR-001 error handling](../../docs/adr/001-evm-guest-state-abi.md#7-error-handling) · [Executor tests](../../crates/ferreth-compiler/tests/rv64_executor.rs)
+
 ### Challenge 4 — The seventh-opcode thought experiment
 
 Without implementing anything, trace what would be required to add a simple seventh opcode. Which modules and tests change? Does composer require a new opcode-specific branch? If yes, challenge the architecture. Do **not** turn this thought experiment into new opcode work.
 
+**On paper, `ISZERO`** would reuse the one-word underflow guard and Underflow publisher. Add its decoded form and public decode projection, update exhaustive consumers of that projection (including `ProgramRunner`), add frontend dispatch and successor naming, and generate a fragment that tests all four limbs and writes a canonical 256-bit zero or one in place without moving `s1`. Give the verifier a layout for its guard, continuation and fixed width. Composition, assembly, transfer decoding, existing publishers, execution and ABI result validation can reuse their current interfaces. Opcode knowledge remains in the decode/lowering path, generator, and fixed-layout verifier. [Decoder](../../crates/ferreth-compiler/src/lib.rs) · [Frontend and composer](../../crates/ferreth-compiler/src/compiler/symbolic.rs) · [Decoded runner](../../crates/ferreth-compiler/src/execution.rs) · [Verifier](../../crates/ferreth-compiler/src/rv64/verify.rs)
+
+Minimum tests would pin decoding and offset, zero and nonzero inputs (including a nonzero high limb), empty-stack preservation and publication, mixed/repeated fragments at STOP and EOF, and rejection of a deliberately misdirected transfer. Add directed Cancun reference comparisons and teach the stack-aware generator the one-input, zero-net-depth rule if including the opcode in its seeded corpus. [Differential harness](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs)
+
 ### Challenge 5 — The first version tag
 
 What exactly could the project truthfully promise at `v0.1.0`? Write an explicit supported-domain statement and exclusions. “Verified symbolic linker” must not be misconstrued as formally verified, complete EVM or production safety.
+
+**Assessment.** The architecture is suitable for a limited experimental milestone once Phase 3 release validation is complete.
+
+- **Demonstrated:** The public bytecode path compiles STOP, PUSH1, POP, DUP1, ADD and SUB into checked RV64 images and runs them in pinned rvemu. Directed runs cover 256-bit arithmetic and stack boundaries, including guest underflow/overflow publication. Cancun reference evidence covers selected termination and successful-stack outcomes. [Runtime and comparison evidence](#eg-evidence-from-the-november-21-continuation) · [Cutover record](phase-2.4-public-cutover.md)
+- **Accepted limits:** Straight-line execution stops at the first STOP or EOF, truncated PUSH1 is zero-padded, and wider PUSHes are rejected for compilation. The ADR-001 stack holds at most 1,024 words. The 1,048,572-byte executable reservation and pinned assembler limits bound larger programs. [Capacity evidence](#capacity-is-a-stated-implementation-boundary-not-an-ethereum-consensus-rule) · [H-WALK-001](human-led-walk-findings.md#h-walk-001--decoder-mixes-decoding-and-reachability)
+- **Phase 3 release validation:** At the stabilization revision, run format and lint checks, reconcile workspace test discovery and execution, rerun the three opt-in capacity probes and compare both complete benchmark payloads with the baselines while preserving raw streams. Confirm end-to-end host fault coverage and decide the supported benchmark stdout contract under LF-031. [Validation commands](#full-validation-commands-for-the-exit-gate) · [LF-031](../lf-031/README.md)
+- **Release claim exclusions:** Full EVM or Cancun conformance, dynamic EVM control flow, EVM memory and storage semantics, gas/OOG accounting, full opcode support, formal verification and production safety. Dynamic counts measure completed RV64 instructions in the pinned backend.
 
 ---
 
@@ -470,6 +551,7 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 - **Finding / classification:** Occurrence indices and generator-specific prefixes prevent ordinary collisions in the current six-opcode subset, while duplicate named labels are ultimately rejected by `asm-rs`. This is reasonable for v0.1, with no demonstrated incorrect binary or active collision, but namespace uniqueness is not guaranteed by a centralized Ferreth allocator and the shared naming conventions are a maintainability and extensibility concern. **Phase 3 hardening candidate — non-blocking for v0.1.**
 - **Continuation question:** A unique, valid symbol may still be the wrong existing continuation. [H-WALK-003](#h-walk-003--independent-continuation-verification) resolves the three-fragment PUSH1 case. The broader verification design for future dynamic control flow remains open.
 - **Decision:** No refactor or centralized allocator during this walkthrough; preserve naming conventions, continue reviewing final-image transfer validation and independent negative controls, and reassess namespace ownership in Phase 3 if evidence warrants it.
+- **Exit-review disposition — Deferred optional hardening.** Keep the existing conventions for the six-opcode milestone. Revisit namespace ownership if a new fragment exposes a collision or makes the frontend/generator convention harder to maintain.
 
 ## H-WALK-003 — Independent Continuation Verification
 
@@ -477,6 +559,7 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 - **Adversarial control:** `matching_push1_continuation_cannot_skip_the_next_fragment` assembles three sequential PUSH1 fragments after redirecting the first continuation from `push1_continue_0` to `guest_push1_2` and updating its declaration to match. The test confirms assembly succeeds and `verify_declared_transfers()` accepts the consistent transfer, while `verify_final_image()` rejects it: `transfer at 0x80000024 targets 0x80000058, expected 0x8000002c`. The focused test passed.
 - **Finding / classification:** Declaration consistency and structural correctness are complementary properties. A consistent but incorrectly directed PUSH1 continuation cannot bypass fixed-layout verification. **Verified correctness property — no v0.1 blocker identified.** This closes the H-WALK-002 continuation-independence question for this three-fragment PUSH1 case; it does not establish arbitrary EVM control-flow or ordinary RV64 semantic correctness. Layout identities still derive from requested operations, and dynamic EVM JUMP/JUMPI require separate verification design.
 - **Decision:** Preserve both verification layers and the adversarial regression; no production refactor is required. Continue the Human-Led Walk with remaining verifier boundaries and negative controls, and revisit generalized control-flow verification when implementing JUMP/JUMPI.
+- **Exit-review disposition — Closed by evidence.** The focused regression is implemented and has a recorded pass. Its scope remains the fixed-layout continuation witness above.
 
 ### Findings categories
 
@@ -491,17 +574,11 @@ Prefer *one concrete counterexample* over paragraphs of general concern. If a qu
 
 ## 12. The exit gate: what we decide after the walk
 
-The walkthrough is ready to bring to the human exit-gate review. Passing the gate still requires the maintainer to record answers to all five challenges and decide how to close each evidence gap below.
-
-- **Responsibility boundaries:** Confirm the owner map against the bytecode pipeline and the namespace concern in H-WALK-002.
-- **Shared mistake:** Use H-WALK-003 as the concrete adversarial control. Record the independent JAL calculation and the Session D trust-boundary diagram, including the limits of fixed-layout checks. Record which remaining suggested negative controls have supporting evidence or still need a focused check.
-- **Failure atomicity:** Reconcile guards, stack writes, final `s1` and publication for PUSH1, POP, DUP1, ADD and SUB. Identify where the review relies on instruction inspection, current focused runs or earlier tests. Close the two Checkpoint E specimen traces with Ferreth runtime results or cite matching evidence.
-- **Seventh opcode:** Record the modules and tests the hypothetical opcode would touch and whether the composer would need an opcode-specific branch.
-- **First version tag:** Write the supported-domain claim and exclusions, including resource limits and EVM features outside the current subset.
-
-Current-revision workspace format/lint, full discovery and test totals, opt-in capacity reruns and the arithmetic benchmark comparison are pending on the supplied November 21 evidence. The focused ADD/SUB and REVM runs, two EELS observations and guest benchmark payload comparison are recorded above. Decide the disposition of each pending check explicitly and record ownership for H-WALK-004 and H-WALK-005 before closing the walk.
+The [five challenge answers](#10-the-human-led-walks-five-deliberate-challenges), [public CLI observations](#november-22-public-cli-observations) and [finding dispositions](human-led-walk-findings.md) are ready for maintainer review. The reviewed six-opcode paths have no unresolved correctness question that blocks the architectural walk. End-to-end host fault coverage, revision-specific checks and the benchmark stdout decision remain Phase 3 release validation items under Challenge 5. H-WALK-004 carries forward as an optional proposal. The maintainer retains the LF-031 release decision and assignment of any follow-up work.
 
 ### Maintainer sign-off
+
+The maintainer can review the architectural items now. The test discovery, capacity and benchmark checklist item remains pending separate Phase 3 validation.
 
 - [ ] We can trace EVM input to final emitted RV64 words, and then to observed execution state.
 - [ ] We can independently decode at least one JAL and verify its resolved target.

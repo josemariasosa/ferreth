@@ -2,6 +2,14 @@
 
 The [walkthrough](ferreth-human-led-walk.md#session-handoff--2026-11-21) holds the session evidence ledger. [H-WALK-002](ferreth-human-led-walk.md#h-walk-002--symbol-naming-and-namespace-ownership) and [H-WALK-003](ferreth-human-led-walk.md#h-walk-003--independent-continuation-verification) remain in their original review context.
 
+| Finding | Exit-review disposition |
+|---|---|
+| [H-WALK-001](#h-walk-001--decoder-mixes-decoding-and-reachability) | Accepted limitation for the straight-line subset |
+| [H-WALK-002](ferreth-human-led-walk.md#h-walk-002--symbol-naming-and-namespace-ownership) | Deferred optional hardening for shared symbol naming |
+| [H-WALK-003](ferreth-human-led-walk.md#h-walk-003--independent-continuation-verification) | Closed by evidence for the fixed-layout continuation witness |
+| [H-WALK-004](#h-walk-004--reusable-conformance-scenarios) | Deferred optional hardening |
+| [H-WALK-005](#h-walk-005--guest-benchmark-warnings-on-json-stdout) / LF-031 | Pending separate release validation |
+
 ## H-WALK-001 — Decoder mixes decoding and reachability
 
 **Classification** — Accepted limitation for v0.1 and architectural debt before `JUMP`/`JUMPI`.
@@ -32,6 +40,8 @@ The first `STOP` ends the only execution path in the current six-opcode subset. 
 
 **Acceptance examples for design review** — With an empty initial stack under Cancun, `600560030100` should complete successfully with `[8]`. Empty-stack `80` should exceptionally halt while preserving diagnostic provenance for EELS `StackUnderflowError`, Ferreth `StackUnderflow` and REVM `StackOverflow`. Keep the dedicated diagnostic regression and document its scope. A scenario consumer should distinguish a semantic mismatch from a diagnostic mismatch, and record any explicitly accepted discrepancy with its evidence. Include frame gas expectations only where execution conditions and supported observations permit comparison. These vectors have existing evidence as recorded in the ledger. A shared representation and its regression coverage remain proposals.
 
+**Exit-review decision** — Defer the shared scenario catalog as optional hardening. Existing directed cases and reference comparisons remain the release evidence. Implementation and ownership await a separate maintainer decision if the proposal is revived.
+
 ## H-WALK-005 — Guest benchmark warnings on JSON stdout
 
 **Classification** — CLI output hygiene. The observation concerns machine-readable stdout. The benchmark payload matched the tracked values after removing the warnings. Resolution and ownership are pending.
@@ -47,5 +57,9 @@ diff -u \
 The reported diff was empty. Warning removal changed the captured stream from warnings plus report to the JSON payload alone. `jq -S` sorted object keys in both inputs. No metric values were changed. The supplied session record contains no raw stdout capture or warning count. The Phase 2.4 ledger records the warning forms and raw stream hash for its own run. [Guest baseline](../../runs/phase-0/guest-benchmarks.json) · [Historical comparison and warning prefix](phase-2.4-public-cutover.md#benchmark-and-arithmetic-core-evidence) · [Benchmark runbook](../../docs/runbooks/benchmark.md)
 
 **Source corroboration** — In the pinned rvemu 0.0.11 dependency, `Rom::new()` uses `println!` for the device-tree binary read error and the suggestion to install `dtc`, then continues with an empty device-tree blob. The guest benchmark CLI prints the completed report to stdout. This explains how an emulator diagnostic can precede the report even when the command succeeds. [Dependency pin](../../Cargo.lock) · [CLI output path](../../crates/ferreth-conformance/src/main.rs)
+
+**Maintainer follow-up** — After installing `dtc`, the maintainer observed that the warnings disappeared locally. This is an environmental workaround. The upstream stdout defect in pinned rvemu remains open. The LF-031 record preserves raw-stream observations for both benchmark commands with `dtc` unavailable. [LF-031 research record](../lf-031/README.md)
+
+**Exit-review decision** — Carry LF-031 into separate Phase 3 release validation. The maintainer must decide whether to accept and document the environment limitation for v0.1.0 or approve and assign a fix. The local observation carries no release-wide guarantee of clean JSON stdout.
 
 **Proposed regression if a fix is approved** — In an environment that triggers the device-tree warning path, capture stdout and stderr separately. Require successful exit, stdout that parses directly as one JSON object, and full payload equality with the tracked baseline. Preserve the diagnostics separately and retain the raw streams for review. No fix or regression was implemented in this walk.
