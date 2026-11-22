@@ -121,7 +121,7 @@ If you are not on the expected branch or worktree is dirty, **stop before writin
 3. `research/guest-linking/phase-2.4-public-cutover.md` — latest public acceptance evidence and RF-026/RF-027 repair.
 4. `research/guest-linking/phase-2.5-final-cleanup.md` — retained legacy oracles, test matrix and known debt.
 5. `research/guest-linking/phase-2.3d-integration-review.md` — private six-opcode proof obligations and prior defects RF-023–RF-025.
-6. `docs/research/ferreth-linking-architecture.md` — architecture/roadmap; distinguish historical design from current implementation.
+6. `research/guest-linking/ferreth-linking-architecture.md` — architecture/roadmap; distinguish historical design from current implementation.
 7. [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) governs the guest ABI. [ADR-002](../../docs/adr/002-cancun-evm-gas-metering.md) remains proposed.
 
 If any document contradicts current code, mark the contradiction; don't silently fix it during the reading session.
@@ -555,7 +555,7 @@ These documents are navigation and historical evidence, **not substitutes for cu
 
 - [Guest-linking research index](README.md) and [Phase 1 experiments](phase-1/)
 - [Phase 2.3d integration review](phase-2.3d-integration-review.md), [Phase 2.4 cutover plan](phase-2.4-cutover-plan.md), [Phase 2.4 review](phase-2.4-public-cutover.md) and [Phase 2.5 cleanup](phase-2.5-final-cleanup.md)
-- [Linking roadmap](../../docs/research/ferreth-linking-architecture.md) and [conformance research](../../docs/research/ferreth-evm-conformance.md)
+- [Linking roadmap](ferreth-linking-architecture.md) and [conformance research](../../docs/research/ferreth-evm-conformance.md)
 - [Benchmark runbook](../../docs/runbooks/benchmark.md), [guest baseline](../../runs/phase-0/guest-benchmarks.json) and [arithmetic baseline](../../runs/rv64-arithmetic.json)
 - [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) and [proposed ADR-002](../../docs/adr/002-cancun-evm-gas-metering.md)
 

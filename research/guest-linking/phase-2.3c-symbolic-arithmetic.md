@@ -261,7 +261,7 @@ rerun passed all six tests.
 | `crates/ferreth-compiler/src/rv64/verify.rs` | Check local return bindings and independently verify arithmetic wrapper and baseline leaf words. |
 | `research/guest-linking/phase-2.3c-symbolic-arithmetic.md` | Phase evidence, regression traceability and review gate. |
 | `research/guest-linking/README.md` | Research index. |
-| `docs/research/ferreth-linking-architecture.md` | Phase 2 roadmap. |
+| `research/guest-linking/ferreth-linking-architecture.md` | Phase 2 roadmap. |
 
 ## Phase 2.3d handoff
 

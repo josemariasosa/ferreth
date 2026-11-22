@@ -184,7 +184,7 @@ All four remain discovered with unchanged names and expectations. They still fai
 | [verify.rs](../../crates/ferreth-compiler/src/rv64/verify.rs) | Adds declaration-driven final-byte scan and the Normal-only symbolic publisher layout; retains fixed-layout completeness checks. |
 | [symbolic/tests.rs](../../crates/ferreth-compiler/src/compiler/symbolic/tests.rs) | Adds declaration/inventory rejection cases and adjusts candidate parity assertions for the unused-publisher delta. |
 | [README.md](README.md) | Adds the Phase 2.3a research index entry. |
-| [ferreth-linking-architecture.md](../../docs/research/ferreth-linking-architecture.md) | Records the bounded Phase 2.3a stop point in the roadmap. |
+| [ferreth-linking-architecture.md](ferreth-linking-architecture.md) | Records the bounded Phase 2.3a stop point in the roadmap. |
 | This report | Records implementation and verification evidence. |
 
 No manifest, lockfile, public compile route, compiler conformance test, executor, ABI, unrelated research evidence, or Phase 2.3 boundary-review content was changed. The pre-existing untracked `phase-2.3-boundary-review.md` was preserved. No branch operation, commit, or push was performed.

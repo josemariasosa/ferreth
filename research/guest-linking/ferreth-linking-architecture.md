@@ -1,5 +1,7 @@
 # Ferreth — RV64 guest linking architecture
 
+For the current six-opcode architecture and pending stabilization work, start with [How Ferreth links an RV64 guest](../../docs/research/ferreth-guest-linking.md).
+
 **Research record:** 2026-11-19  
 **Baseline:** `main`, `b2e8b14c10484f0a19c828ef5ef1f8ca7529fa0b`  
 **Status:** Research completed for this session; implementation and ADR-002 approval remain pending.  
@@ -10,7 +12,7 @@
 > Later phase updates describe their own checkpoints, not necessarily the current
 > checkout. The PUSH1-sequence APIs and CLI command have since been retired;
 > current production compilation goes through `compile_evm_bytecode` →
-> `symbolic::compile` → `compose`. Use the [CLI runbook](../runbooks/cli.md)
+> `symbolic::compile` → `compose`. Use the [CLI runbook](../../docs/runbooks/cli.md)
 > for supported commands. Historical commands remain evidence and may not run
 > on the current checkout.
 
@@ -33,7 +35,7 @@ Prepare guest composition before implementing gas. There are three guest linking
 | Branch | `main`, tracking `origin/main` |
 | Commit | `b2e8b14c10484f0a19c828ef5ef1f8ca7529fa0b` |
 | Initial and final tracked state | No staged or unstaged tracked changes |
-| Pre-existing untracked file | `docs/research/ferreth-linking-architecture.md`, Git blob hash `5019bce49920ffefc4901d257464093597d5565d` before and after |
+| Pre-existing untracked file | This investigation (then `ferreth-linking-architecture.md` in `docs/research/`), Git blob hash `5019bce49920ffefc4901d257464093597d5565d` before and after |
 | Build | Rust and Cargo `1.98.1`, `aarch64-apple-darwin`, frozen workspace lockfile |
 | Compiler dependencies relevant here | `asm-rs 0.2.0`, `rvemu 0.0.11`, `alloy-primitives 1.7.3` |
 | Cancun references | REVM `43.0.3`, interpreter `43.0.2`, handler `43.0.3`. EELS pinned at `d15ecf40062fcfe20d23b7b5ff1c078bcbe251c3` |
@@ -225,7 +227,7 @@ In this table `compiler`, `orchestrator`, and `codegen` refer to the source file
 | **LF-027** | **Observed helper defect, latent in production** | Both copies of `encode_jal_zero` accept signed offsets but omit immediate bit 20, which belongs in instruction bit 31. I evaluated the two exact function bodies from this revision at `−4`. Both produced `0x7fdff06f`; the assembler produced `0xffdff06f`. The former encodes `+1048572`. All current production publisher patches point forward, so I found no current guest path taking that wrong jump. [Compiler encoder](../../crates/ferreth-compiler/src/compiler.rs) (line 692) · [Orchestrator encoder](../../crates/ferreth-compiler/src/orchestrator.rs) (line 542) |
 | **LF-028** | **Observed and source** | The linked-artifact boundary is stronger internally than the public execution API suggests. Public isolated arithmetic can use ordinary bytecode compilation with the same seeded stack and observed metrics. Artifact text, exceptional displacement, publisher inventory and static size can change. [Isolated APIs](../../crates/ferreth-compiler/src/orchestrator.rs) (line 205) |
 | **LF-029** | **Source, future constraint** | The automatic execution limit is static code length divided by four. It works for the current emitted paths, including locally called cores each executed at most once per occurrence. A repeatedly called shared gas routine or future EVM loop would invalidate that general bound. Inline gas charging fits the current assumption. [Artifact bound](../../crates/ferreth-compiler/src/compiler.rs) (line 53) · [Runtime bound](../../crates/ferreth-compiler/src/orchestrator.rs) (line 343) |
-| **LF-030** | **Observed assembler capability** | The pinned builder returns final bytes, absolute named-label addresses and **applied** relocations with output-relative patch offsets. The Phase 1.1 forward JAL test records the pinned API and verifies the result at a nonzero origin. Earlier probes also resolved backward label JALs, accepted a predefined external address, and rejected duplicate and undefined labels. Ferreth still needs independent checks of intended destinations before production integration. [Phase 1.1 evidence and regression](../../research/guest-linking/phase-1/results/1.1-assembler-api.md) |
+| **LF-030** | **Observed assembler capability** | The pinned builder returns final bytes, absolute named-label addresses and **applied** relocations with output-relative patch offsets. The Phase 1.1 forward JAL test records the pinned API and verifies the result at a nonzero origin. Earlier probes also resolved backward label JALs, accepted a predefined external address, and rejected duplicate and undefined labels. Ferreth still needs independent checks of intended destinations before production integration. [Phase 1.1 evidence and regression](phase-1/results/1.1-assembler-api.md) |
 | **LF-031** | **Observed, separate CLI output defect** | With `dtc` unavailable, both benchmark commands exited successfully but raw stdout was invalid JSON. rvemu printed four warning lines before the core report and thirty before the guest report. Stderr was empty. Parsing the JSON suffix yielded the expected measurements. This affects reproducible evidence capture in this environment and is independent of guest semantics. [Benchmark CLI](../../crates/ferreth-conformance/src/main.rs) (line 70) · rvemu warning source (`rvemu-0.0.11/src/rom.rs:138` in Cargo registry) |
 | **LF-032** | **Source, ABI coupling** | Publishers derive metadata from `s0 − 4096`, use literal field offsets, and jump to metadata base minus four. This agrees with today’s memory layout. Duplicating that knowledge in isolated and compiler-owned publishers creates a concrete second edit site for ADR-002. [Compiler publishers](../../crates/ferreth-compiler/src/compiler.rs) (line 614) · [Isolated publishers](../../crates/ferreth-compiler/src/orchestrator.rs) (line 489) |
 
@@ -265,7 +267,7 @@ Two independently rerun vectors matter to the ADR review:
 | `8000`, 3 | Stack underflow, remaining `0` | Stack overflow, raw remaining `0` | Keep the existing distinct REVM/Ferreth diagnostic regression. Both classify as exceptional. |
 | `5a5a00`, 10 | Normal `[8,6]`, remaining `6` | Normal `[8,6]`, raw remaining `6` | Both establish guest-observable charge-before-read for GAS. |
 
-The direct REVM runner now supplies practical evidence for the proposal’s frame-equivalence question. The ordinary conformance suite still uses a transaction gas limit of `1_000_000`. A production-quality frame comparator remains pending. REVM settlement above is source-derived from its frame/handler path; the direct runner measured raw interpreter gas. REVERT must retain its separate unused-gas treatment when supported. [RF-002 and RF-003](../../docs/research/ferreth-evm-conformance.md) (line 346) · [Direct frame runner](../../research/revm-frame/src/main.rs) (line 58) · [Transaction harness](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs) (line 50) · REVM settlement (`revm-handler-43.0.3/src/frame.rs:595` in Cargo registry)
+The direct REVM runner now supplies practical evidence for the proposal’s frame-equivalence question. The ordinary conformance suite still uses a transaction gas limit of `1_000_000`. A production-quality frame comparator remains pending. REVM settlement above is source-derived from its frame/handler path; the direct runner measured raw interpreter gas. REVERT must retain its separate unused-gas treatment when supported. [RF-002 and RF-003](../../docs/research/ferreth-evm-conformance.md) (line 346) · [Direct frame runner](../revm-frame/src/main.rs) (line 58) · [Transaction harness](../../crates/ferreth-conformance/tests/rc_revm_conformance.rs) (line 50) · REVM settlement (`revm-handler-43.0.3/src/frame.rs:595` in Cargo registry)
 
 **Answers to the seven architectural questions**
 
@@ -378,7 +380,7 @@ Each phase has an independent stop point. Review evidence before advancing. Do n
 ### Phase 1 — Symbolic assembly spike
 
 Phase 1.0 is approved and Phase 1.1 met its exit gate. Phase 1.2 awaits
-maintainer authorization. [Incremental plan](../../research/guest-linking/phase-1/PLAN.md)
+maintainer authorization. [Incremental plan](phase-1/PLAN.md)
 
 - In a bounded experiment, compose repeated PUSH1 and representative ADD/SUB/POP/DUP1 fragments with uniquely named local labels and symbolic external publisher targets. Keep short local conditionals and embedded calls generator-owned.
 - Use the pinned assembler's result API to obtain final bytes and label addresses. Verify forward and backward JAL, alignment and range rejection, duplicate/undefined labels, and the effect of branch relaxation. Never infer final addresses from source line counts.
@@ -389,31 +391,31 @@ maintainer authorization. [Incremental plan](../../research/guest-linking/phase-
 
 ### Phase 2 — Consolidate guest composition
 
-The [Phase 2.3a fragment contract](../../research/guest-linking/phase-2.3a-fragment-contract.md)
+The [Phase 2.3a fragment contract](phase-2.3a-fragment-contract.md)
 supports private symbolic PUSH1/STOP and the
-[Phase 2.3b POP/DUP1 fragments](../../research/guest-linking/phase-2.3b-pop-dup1.md).
-[Phase 2.3b.1 boundary evidence](../../research/guest-linking/phase-2.3b.1-boundary-hardening.md)
+[Phase 2.3b POP/DUP1 fragments](phase-2.3b-pop-dup1.md).
+[Phase 2.3b.1 boundary evidence](phase-2.3b.1-boundary-hardening.md)
 closes the oversized DUP1 JAL question and verifies directed runtime parity.
 The maintainer accepted Phase 2.3b.1, closed RF-019 and recorded RF-020 as
 a known implementation capacity limit. The default assembler limits and
 the ADR-001 executable bound apply independently.
-The [Phase 2.3c report](../../research/guest-linking/phase-2.3c-symbolic-arithmetic.md)
+The [Phase 2.3c report](phase-2.3c-symbolic-arithmetic.md)
 records RF-022 and the private ADD/SUB integration, including exact leaf
 identity, fixed-layout call/return verification and directed runtime parity.
-The [Phase 2.3d integration review](../../research/guest-linking/phase-2.3d-integration-review.md)
+The [Phase 2.3d integration review](phase-2.3d-integration-review.md)
 records corrected unsupported-PUSH error precedence (RF-023), required publisher
 PC validation (RF-024), and declaration-site ownership (RF-025). All six private
 opcodes passed the gate. At that review, the isolated arithmetic singleton
 images matched in full and public compilation still failed the four LF-026
 controls.
-The [bounded Phase 2.4 plan](../../research/guest-linking/phase-2.4-cutover-plan.md)
-and [public cutover review](../../research/guest-linking/phase-2.4-public-cutover.md)
+The [bounded Phase 2.4 plan](phase-2.4-cutover-plan.md)
+and [public cutover review](phase-2.4-public-cutover.md)
 record the current routing and verification. RF-026 restores independent
 publisher, label and isolated arithmetic image checks. RF-027 establishes the
 public static accessor as the resident exceptional publisher word count
 (0 with neither role, 8 with either role alone, 16 with both). One selected
 exceptional publisher executes eight instructions. Phase 2.4 was accepted as the
-baseline. The [Phase 2.5 cleanup report](../../research/guest-linking/phase-2.5-final-cleanup.md)
+baseline. The [Phase 2.5 cleanup report](phase-2.5-final-cleanup.md)
 removes stale production allowances and corrects the public PUSH1 documentation.
 Legacy linkers remain isolated test-only oracles, retained by documented
 disposition. Replacing them with immutable fixtures is deferred.
@@ -458,7 +460,7 @@ These are proposed regression requirements. The existing workspace run verifies 
 - **ADR-002 policy.** Confirm deterministic diagnostic precedence, stable exception codes, live versus published gas fields, and exact extension offsets. The log’s example of two appended `u64`s is a plausible layout. ADR-002 remains the proposal under review.
 - **Artifact metrics.** RF-027 resolves the public static metric for Phase 2.4. Any additional per-publisher metrics are deferred.
 - **Public API.** Decide whether compile-once/run-many should be part of the supported high-level library interface and how legacy convenience calls would receive a frame budget.
-- **Decoder and reachability.** Review the boundary between full-stream EVM decoding and frontend reachability before introducing `JUMP` or `JUMPI`. The current behavior is an accepted v0.1 limitation. [H-WALK-001](../../research/guest-linking/human-led-walk-findings.md#h-walk-001--decoder-mixes-decoding-and-reachability)
+- **Decoder and reachability.** Review the boundary between full-stream EVM decoding and frontend reachability before introducing `JUMP` or `JUMPI`. The current behavior is an accepted v0.1 limitation. [H-WALK-001](human-led-walk-findings.md#h-walk-001--decoder-mixes-decoding-and-reachability)
 - **Deferred.** Opcode expansion beyond the proposed GAS milestone, dynamic gas, refunds, reversible state, nested frames, EVM control flow, shared arithmetic or gas subroutines, general relocation formats, and alternative execution backends.
 
 Additionally defer canonical opcode identity, duplicate CLI summary decoding, whole-bytecode translation CLI and public artifact execution API improvements unless needed for the selected composition work. Track benchmark stdout contamination independently. The maintainer has relaxed exact textual compatibility; any actual external consumer constraints still need an inventory.

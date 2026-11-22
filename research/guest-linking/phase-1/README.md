@@ -10,7 +10,7 @@ bytes and label addresses needed to compose and independently verify guests
 under the accepted ABI. Phase 0 supplies the control artifacts and the four
 failing 47-PUSH regressions. See the [incremental plan](PLAN.md),
 [Phase 0 evidence](../README.md),
-[guest linking research](../../../docs/research/ferreth-linking-architecture.md),
+[guest linking research](../ferreth-linking-architecture.md),
 and [ADR-001](../../../docs/adr/001-evm-guest-state-abi.md).
 
 ## Reproduce Phase 1.0 verification

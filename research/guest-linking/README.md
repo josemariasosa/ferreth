@@ -1,10 +1,12 @@
 # RV64 guest linking Phase 0 evidence
 
+Start with [How Ferreth links an RV64 guest](../../docs/research/ferreth-guest-linking.md) for the canonical account of the current architecture and pending Phase 3 work. The [original linking investigation](ferreth-linking-architecture.md) preserves the earlier design alternatives, LF findings and historical roadmap.
+
 Phase 0 established a reproducible artifact and execution baseline, isolated
 the long forward JAL failure (LF-026), and reproduced the signed JAL encoder
 defect (LF-027). The test checkpoint exercises desired guest behavior under
 the accepted ABI. The linker and the proposed gas architecture require
-separate review. [Linking research](../../docs/research/ferreth-linking-architecture.md) ·
+separate review.
 [ADR-001](../../docs/adr/001-evm-guest-state-abi.md) ·
 [ADR-002](../../docs/adr/002-cancun-evm-gas-metering.md)
 
@@ -53,7 +55,7 @@ payloads began at bytes 326 and 2445 for the arithmetic and guest reports.
 The collector verifies the warning prefix and parses the remaining bytes
 through EOF. The raw streams remain available in the local captures.
 Instruction counts describe RV64 execution. The Cancun runner's remaining gas
-describes the EVM frame. [LF-031](../../docs/research/ferreth-linking-architecture.md#additional-findings-from-independent-review)
+describes the EVM frame. [LF-031](ferreth-linking-architecture.md#additional-findings-from-independent-review)
 
 ## Phases 0.4 and 0.5 boundary and regression capture
 

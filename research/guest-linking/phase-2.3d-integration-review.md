@@ -114,7 +114,7 @@ The private 46/47 EOF and STOP controls decoded the first long JAL and executed 
 | research/guest-linking/phase-2.3d-integration-review.md | This review and RF-023 through RF-025. |
 | research/guest-linking/phase-2.4-cutover-plan.md | Proposed routing, compatibility decisions, gates and rollback. |
 | research/guest-linking/README.md | Research index. |
-| docs/research/ferreth-linking-architecture.md | Phase 2 roadmap and findings. |
+| research/guest-linking/ferreth-linking-architecture.md | Phase 2 roadmap and findings. |
 
 Unrelated untracked PNG files appeared and changed names under `assets/` after the clean baseline. The inventory above excludes these concurrent workspace changes. This audit made no edits under `assets/`.
 

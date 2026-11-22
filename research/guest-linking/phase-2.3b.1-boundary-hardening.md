@@ -244,7 +244,7 @@ ADR-001 memory regions and their assertions passed.
 | [`crates/ferreth-compiler/src/compiler/symbolic/tests/pop_dup1.rs`](../../crates/ferreth-compiler/src/compiler/symbolic/tests/pop_dup1.rs) | Directed runtime and differential tests, symbolic fixed-layout role-swap rejection, and opt-in capacity probes. |
 | [`research/guest-linking/phase-2.3b.1-boundary-hardening.md`](phase-2.3b.1-boundary-hardening.md) | Evidence and review decision. |
 | [`research/guest-linking/README.md`](README.md) | Research index entry. |
-| [`docs/research/ferreth-linking-architecture.md`](../../docs/research/ferreth-linking-architecture.md) | Phase 2 roadmap status and review gate. |
+| [`research/guest-linking/ferreth-linking-architecture.md`](ferreth-linking-architecture.md) | Phase 2 roadmap status and review gate. |
 
 ## Maintainer acceptance
 
