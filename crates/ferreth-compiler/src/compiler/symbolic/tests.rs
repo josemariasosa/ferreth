@@ -7,8 +7,8 @@ use crate::{
     rv64::{
         executor::{ExecutionReport, IntegerRegister, Rv64Executor, RvemuExecutor},
         guest::{
-            initialize_guest_state, read_guest_result, write_evm_word, GuestExecutionStatus,
-            GuestMetadata, GuestResult, GUEST_METADATA_ENCODED_SIZE,
+            initialize_guest_state, read_guest_result, GuestExecutionStatus, GuestMetadata,
+            GuestResult, GUEST_METADATA_ENCODED_SIZE,
         },
         memory::{
             LayoutError, EVM_STACK_CAPACITY, EVM_STACK_REGION, EVM_WORD_SIZE, METADATA_REGION,
@@ -27,38 +27,29 @@ fn bytecode(immediates: &[u8], stop: bool) -> Vec<u8> {
 }
 
 fn assert_layout(candidate: &CompiledRv64Program, pushes: usize, stop: bool) {
-    let normal = ENTRY_PC + 44 * pushes as u64 + 4 * u64::from(stop);
-    let has_overflow = pushes > 0;
-    let expected_publishers = if has_overflow {
-        vec![normal, normal + 36]
+    let normal = ENTRY_PC + 76 * pushes as u64 + 4 * u64::from(stop);
+    let has_pushes = pushes > 0;
+    let expected_publishers = if has_pushes {
+        vec![normal, normal + 36, normal + 76]
     } else {
         vec![normal]
     };
     assert_eq!(candidate.termination_entry_pcs(), expected_publishers);
     assert_eq!(
         candidate.machine_code().len(),
-        44 * pushes + 4 * usize::from(stop) + 36 + 40 * usize::from(has_overflow)
+        76 * pushes + 4 * usize::from(stop) + 36 + 80 * usize::from(has_pushes)
     );
     assert_eq!(candidate.normal_termination_instructions(), 9);
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        10 * u64::from(has_overflow)
+        20 * u64::from(has_pushes)
     );
     let round_trip = assemble_image(candidate.assembly()).unwrap();
     assert_eq!(round_trip.base_address(), candidate.entry_pc());
     assert_eq!(round_trip.bytes(), candidate.machine_code());
     assert_eq!(
         round_trip.labels().len(),
-        pushes * 3 + usize::from(stop) + 1 + usize::from(has_overflow)
-    );
-    println!(
-        "pushes={pushes} stop={stop} source_bytes={} phase22_source_bytes={} labels={} image_bytes={} publishers={:x?}",
-        candidate.assembly().len(),
-        candidate.assembly().len()
-            + usize::from(!has_overflow) * super::Publisher::Overflow.assembly().len(),
-        round_trip.labels().len(),
-        candidate.machine_code().len(),
-        candidate.termination_entry_pcs()
+        pushes * 4 + usize::from(stop) + 1 + 2 * usize::from(has_pushes)
     );
 }
 
@@ -68,28 +59,48 @@ fn assert_legacy_layout(
     pushes: usize,
     stop: bool,
 ) {
-    let legacy_size = legacy.machine_code().len();
+    let legacy_body = 44 * pushes + 4 * usize::from(stop);
+    let metered_body = legacy_body + 32 * pushes;
     let unreachable_tail = 40 * (usize::from(stop) + usize::from(pushes == 0));
     assert_eq!(
-        candidate.machine_code(),
-        &legacy.machine_code()[..legacy_size - unreachable_tail]
+        legacy.machine_code().len() - unreachable_tail,
+        legacy_body + 36 + 40 * usize::from(pushes > 0)
     );
+    for index in 0..pushes {
+        // All ten preexisting body words stay identical. The external
+        // overflow JAL relocates because subsequent fragments grow.
+        let old = 44 * index;
+        let new = 76 * index + 32;
+        assert_eq!(
+            candidate.machine_code()[new..new + 40],
+            legacy.machine_code()[old..old + 40]
+        );
+    }
+    if stop {
+        assert_eq!(
+            candidate.machine_code()[metered_body - 4..metered_body],
+            legacy.machine_code()[legacy_body - 4..legacy_body]
+        );
+    }
+    let common_tail = 36 + 40 * usize::from(pushes > 0);
     assert_eq!(
-        candidate.termination_entry_pcs(),
-        &legacy.termination_entry_pcs()[..candidate.termination_entry_pcs().len()]
+        candidate.machine_code()[metered_body..metered_body + common_tail],
+        legacy.machine_code()[legacy_body..legacy_body + common_tail]
     );
-    assert_eq!(
-        candidate.normal_termination_instructions(),
-        legacy.normal_termination_instructions()
-    );
-    assert_eq!(
-        candidate.exceptional_termination_instructions(),
-        if pushes == 0 {
-            0
-        } else {
-            legacy.exceptional_termination_instructions()
-        }
-    );
+    for (index, offset) in [0, 36]
+        .into_iter()
+        .take(1 + usize::from(pushes > 0))
+        .enumerate()
+    {
+        assert_eq!(
+            legacy.termination_entry_pcs()[index],
+            ENTRY_PC + (legacy_body + offset) as u64
+        );
+        assert_eq!(
+            candidate.termination_entry_pcs()[index],
+            ENTRY_PC + (metered_body + offset) as u64
+        );
+    }
 }
 
 fn make_fragments(immediates: &[u8], stop: bool) -> Vec<SymbolicFragment> {
@@ -115,90 +126,65 @@ fn observe(
     initial: &[U256],
     pushes: usize,
     failing_push: Option<usize>,
+    metered: bool,
 ) -> Observation {
-    let mut executor = RvemuExecutor::new().unwrap();
-    executor.load_code(program.machine_code()).unwrap();
-    executor
-        .write_memory(program.exit_pc(), &0x0010_0073_u32.to_le_bytes())
-        .unwrap();
-    initialize_guest_state(&mut executor, 0).unwrap();
-    for (slot, &word) in initial.iter().enumerate() {
-        write_evm_word(&mut executor, slot, word).unwrap();
-    }
-    let base = EVM_STACK_REGION.start();
-    executor.write_register(
-        IntegerRegister::EVM_STACK_NEXT_FREE,
-        base + initial.len() as u64 * EVM_WORD_SIZE,
-    );
-    let sp = IntegerRegister::new(2).unwrap();
-    executor.write_register(sp, 0x1234_5670);
-    let guard = [0xa5; 32];
-    executor
-        .write_memory(EVM_STACK_REGION.end(), &guard)
-        .unwrap();
-
-    let publishers = program.termination_entry_pcs();
-    let mut stops = publishers.to_vec();
-    stops.push(program.exit_pc());
-    stops.extend((0..pushes as u64).map(|i| ENTRY_PC + 44 * i + 40));
-    let body = if let Some(index) = failing_push {
-        let start = ENTRY_PC + 44 * index as u64;
-        stops.push(start + 12);
-        let check = executor
-            .execute_until(ENTRY_PC, &stops, program.instruction_limit())
-            .unwrap();
-        assert_eq!(
-            check,
-            ExecutionReport {
-                exit_pc: start + 40,
-                executed_instructions: 10 * index as u64 + 3
-            }
-        );
-        let jump = executor
-            .execute_until(check.exit_pc, publishers, 1)
-            .unwrap();
-        assert_eq!(
-            jump,
-            ExecutionReport {
-                exit_pc: publishers[1],
-                executed_instructions: 1
-            }
-        );
-        ExecutionReport {
-            exit_pc: jump.exit_pc,
-            executed_instructions: check.executed_instructions + jump.executed_instructions,
-        }
+    const LEGACY_OVERFLOW: &[(u64, u32)] = &[(0, 0x37), (4, 0x33), (8, 0x63), (40, 0x6f)];
+    let path = if metered {
+        METERED_OVERFLOW
     } else {
-        let report = executor
-            .execute_until(ENTRY_PC, &stops, program.instruction_limit())
-            .unwrap();
-        assert_eq!(report.exit_pc, publishers[0]);
-        report
+        LEGACY_OVERFLOW
     };
+    let width = if metered { 76 } else { 44 };
+    let fault = failing_push.map(|index| (width * index as u64, path));
+    let limit = if metered {
+        3 * failing_push.map_or(pushes, |index| index + 1) as u64
+    } else {
+        0
+    };
+    let code = u64::from(fault.is_some());
+    pop_dup1::observe_guest(
+        program,
+        initial,
+        program.termination_entry_pcs()[code as usize],
+        code,
+        fault,
+        &[],
+        limit,
+    )
+}
 
-    let words = if failing_push.is_some() { 10 } else { 9 };
-    let (termination, trace) = observe_publication(&mut executor, program, body.exit_pc, words);
-    let guest = read_guest_result(&mut executor, &termination, 0).unwrap();
-    assert_eq!(executor.read_register(sp), 0x1234_5670);
-    assert_eq!(
-        executor.read_register(IntegerRegister::EVM_STACK_BASE),
-        base
-    );
-    assert_eq!(
-        executor.read_register(IntegerRegister::EVM_STACK_NEXT_FREE),
-        guest.final_s1()
-    );
-    let mut actual_guard = [0; 32];
-    executor
-        .read_memory(EVM_STACK_REGION.end(), &mut actual_guard)
-        .unwrap();
-    assert_eq!(actual_guard, guard);
-    Observation {
-        body,
-        termination,
-        trace,
-        guest,
+const METERED_OVERFLOW: &[(u64, u32)] = &[
+    (0, 0x13),
+    (4, 0x13),
+    (8, 0x03),
+    (12, 0x13),
+    (16, 0x63),
+    (24, 0x33),
+    (28, 0x23),
+    (32, 0x37),
+    (36, 0x33),
+    (40, 0x63),
+    (72, 0x6f),
+];
+
+// Legacy word offsets let the replay fixtures keep their original scope.
+// Only PUSH1 widens, by eight words, in the metered image.
+fn legacy_push_offsets(input: &[u8]) -> Vec<u64> {
+    let mut at = 0;
+    let mut pushes = Vec::new();
+    for op in decode_detailed(input).unwrap() {
+        at += match op {
+            DecodedInstruction::Push { .. } => {
+                pushes.push(at);
+                44
+            }
+            DecodedInstruction::Stop { .. } => 4,
+            DecodedInstruction::Pop { .. } => 16,
+            DecodedInstruction::Dup1 { .. } => 64,
+            DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => 172,
+        };
     }
+    pushes
 }
 
 fn observe_publication(
@@ -261,8 +247,7 @@ fn observe_publication(
 }
 
 fn assert_result(observed: &Observation, expected_stack: &[U256], overflow: bool, body_words: u64) {
-    let code = u64::from(overflow);
-    assert_guest_result(observed, expected_stack, code, body_words);
+    assert_guest_result(observed, expected_stack, u64::from(overflow), body_words);
 }
 
 fn assert_guest_result(
@@ -283,20 +268,23 @@ fn assert_guest_result(
     assert_eq!(observed.guest.exception_code(), code);
     assert_eq!(observed.guest.stack(), expected_stack);
     assert_eq!(observed.guest.final_s1(), s1);
+    let limit = observed.guest.gas_limit();
+    assert_eq!(observed.guest.remaining_gas(), 0);
+    assert_eq!(observed.guest.gas_used(), limit);
     assert_eq!(observed.body.executed_instructions, body_words);
     assert_eq!(observed.termination.executed_instructions, publisher_words);
 
     // Initial metadata comes from guest initialization. The wire bytes change
     // after the pointer, exception-code and status stores at their ABI steps.
-    let mut trace = vec![GuestMetadata::new(Running, 0, base, 0, 0, 0).encode(); 3];
+    let mut trace = vec![GuestMetadata::new(Running, 0, base, limit, 0, 0).encode(); 3];
     trace.resize(
         if code != 0 { 5 } else { 8 },
-        GuestMetadata::new(Running, 0, s1, 0, 0, 0).encode(),
+        GuestMetadata::new(Running, 0, s1, limit, 0, 0).encode(),
     );
     if code != 0 {
-        trace.extend([GuestMetadata::new(Running, code, s1, 0, 0, 0).encode(); 4]);
+        trace.extend([GuestMetadata::new(Running, code, s1, limit, 0, 0).encode(); 4]);
     }
-    trace.extend([GuestMetadata::new(status, code, s1, 0, 0, 0).encode(); 2]);
+    trace.extend([GuestMetadata::new(status, code, s1, limit, 0, 0).encode(); 2]);
     assert_eq!(observed.trace, trace);
     println!("status={status:?} code={code} depth={} s1={s1:#x} publisher={:#x} RV64={body_words}+{publisher_words}={} metadata={:02x?}", expected_stack.len(), observed.body.exit_pc, body_words + publisher_words, observed.trace);
 }
@@ -313,9 +301,9 @@ fn public_publisher_inventory_counts_resident_exceptional_bodies() {
     let cases = [
         (&[][..], 0u64),
         (&[0x00][..], 0),
-        (&[0x60, 1][..], 10),
+        (&[0x60, 1][..], 20),
         (&[0x50][..], 10),
-        (&[0x60, 1, 0x50][..], 20),
+        (&[0x60, 1, 0x50][..], 30),
     ];
     for (bytecode, expected) in cases {
         let compiled = compile_evm_bytecode(bytecode).unwrap();
@@ -342,14 +330,20 @@ fn short_artifacts_and_execution_match_legacy() {
             let pushes = immediates.len();
             assert_layout(&candidate, pushes, stop);
             assert_legacy_layout(&candidate, &legacy, pushes, stop);
-            let normal = observe(&candidate, &[], pushes, None);
-            assert_eq!(normal, observe(&legacy, &[], pushes, None));
+            let normal = observe(&candidate, &[], pushes, None, true);
+            let reference = observe(&legacy, &[], pushes, None, false);
             let expected: Vec<_> = immediates.iter().copied().map(U256::from).collect();
+            assert_result(
+                &reference,
+                &expected,
+                false,
+                10 * pushes as u64 + u64::from(stop),
+            );
             assert_result(
                 &normal,
                 &expected,
                 false,
-                10 * pushes as u64 + u64::from(stop),
+                17 * pushes as u64 + u64::from(stop),
             );
         }
     }
@@ -366,13 +360,19 @@ fn frontend_preserves_truncated_push_and_first_stop() {
         let legacy = compile_evm_bytecode_legacy(input).unwrap();
         assert_eq!(legacy, compile_evm_bytecode_legacy(canonical).unwrap());
         assert_legacy_layout(&candidate, &legacy, 1, stop);
-        let actual = observe(&candidate, &[], 1, None);
-        assert_eq!(actual, observe(&legacy, &[], 1, None));
+        let actual = observe(&candidate, &[], 1, None, true);
+        let reference = observe(&legacy, &[], 1, None, false);
+        assert_result(
+            &reference,
+            &[U256::from(value as u8)],
+            false,
+            10 + u64::from(stop),
+        );
         assert_result(
             &actual,
             &[U256::from(value as u8)],
             false,
-            10 + u64::from(stop),
+            17 + u64::from(stop),
         );
     }
     assert_eq!(compile(&[0, 0xfe, 0x60]), compile(&[0]));
@@ -395,30 +395,45 @@ fn frontend_preserves_truncated_push_and_first_stop() {
 #[test]
 fn long_layouts_match_phase_one_and_take_distant_overflow() {
     let full = full_stack();
-    // RF-013 bodies: overflow PC = normal PC + 36; first JAL is at +40.
-    for (pushes, stop, first_jal, displacement, normal_pc, overflow_pc, body_words) in [
-        (46, false, 0x7e40_006f, 2020, 0x8000_07e8, 0x8000_080c, 460),
-        (46, true, 0x7e80_006f, 2024, 0x8000_07ec, 0x8000_0810, 461),
-        (47, false, 0x0110_006f, 2064, 0x8000_0814, 0x8000_0838, 470),
-        (47, true, 0x0150_006f, 2068, 0x8000_0818, 0x8000_083c, 471),
+    // Historical numeric JAL boundary stays fixed. Metered addresses follow
+    // from 76 bytes per push and a 36-byte normal publisher.
+    for (pushes, stop, displacement, metered_jal) in [
+        (46, false, 2020, 0x5850_006f),
+        (46, true, 2024, 0x5890_006f),
+        (47, false, 2064, 0x5d10_006f),
+        (47, true, 2068, 0x5d50_006f),
     ] {
         let input = bytecode(&vec![2; pushes], stop);
         let candidate = compile(&input).unwrap();
         assert_layout(&candidate, pushes, stop);
-        assert_eq!(candidate.termination_entry_pcs(), [normal_pc, overflow_pc]);
         assert_eq!(
-            u32::from_le_bytes(candidate.machine_code()[40..44].try_into().unwrap()),
-            first_jal
+            u32::from_le_bytes(candidate.machine_code()[72..76].try_into().unwrap()),
+            metered_jal
         );
-        let normal = observe(&candidate, &[], pushes, None);
-        assert_result(&normal, &vec![U256::from(2); pushes], false, body_words);
-        let exceptional = observe(&candidate, &full, pushes, Some(0));
-        assert_result(&exceptional, &full, true, 4);
+        let normal = observe(&candidate, &[], pushes, None, true);
+        assert_result(
+            &normal,
+            &vec![U256::from(2); pushes],
+            false,
+            17 * pushes as u64 + u64::from(stop),
+        );
+        let exceptional = observe(&candidate, &full, pushes, Some(0), true);
+        assert_result(&exceptional, &full, true, 11);
         match compile_evm_bytecode_legacy(&input) {
             Ok(legacy) if pushes == 46 => {
                 assert_legacy_layout(&candidate, &legacy, pushes, stop);
-                assert_eq!(normal, observe(&legacy, &[], pushes, None));
-                assert_eq!(exceptional, observe(&legacy, &full, pushes, Some(0)));
+                assert_result(
+                    &observe(&legacy, &[], pushes, None, false),
+                    &vec![U256::from(2); pushes],
+                    false,
+                    10 * pushes as u64 + u64::from(stop),
+                );
+                assert_result(
+                    &observe(&legacy, &full, pushes, Some(0), false),
+                    &full,
+                    true,
+                    4,
+                );
             }
             Err(CompileError::Link { description }) if pushes == 47 => {
                 assert!(description.contains("ImmediateOverflow"), "{description}");
@@ -444,9 +459,14 @@ fn push_from_one_below_capacity_before_next_push_fails() {
     let input = [0x60, 255, 0x60, 1, 0];
     let candidate = compile(&input).unwrap();
     let legacy = compile_evm_bytecode_legacy(&input).unwrap();
-    let actual = observe(&candidate, &initial, 2, Some(1));
-    assert_eq!(actual, observe(&legacy, &initial, 2, Some(1)));
-    assert_result(&actual, &expected, true, 14);
+    let actual = observe(&candidate, &initial, 2, Some(1), true);
+    assert_result(
+        &observe(&legacy, &initial, 2, Some(1), false),
+        &expected,
+        true,
+        14,
+    );
+    assert_result(&actual, &expected, true, 28);
 }
 
 #[test]
@@ -605,6 +625,7 @@ fn pop_dup1_inventory_and_mixed_runtime() {
                 PublisherRole::Normal,
                 PublisherRole::Underflow,
                 PublisherRole::Overflow,
+                PublisherRole::OutOfGas,
             ],
         ),
     ] {
@@ -649,7 +670,7 @@ fn pop_dup1_inventory_and_mixed_runtime() {
         PublisherRole::Normal.label().to_owned(),
     )])
     .unwrap();
-    let pop_result = observe(&pop, &[U256::from(2)], 0, None);
+    let pop_result = observe(&pop, &[U256::from(2)], 0, None, false);
     assert_result(&pop_result, &[], false, 3);
 
     let dup = compose(&[generate_symbolic_dup1(
@@ -657,7 +678,7 @@ fn pop_dup1_inventory_and_mixed_runtime() {
         PublisherRole::Normal.label().to_owned(),
     )])
     .unwrap();
-    let dup_result = observe(&dup, &[U256::from(2)], 0, None);
+    let dup_result = observe(&dup, &[U256::from(2)], 0, None, false);
     assert_result(&dup_result, &[U256::from(2), U256::from(2)], false, 14);
 
     let mixed = compose(&[
@@ -665,7 +686,7 @@ fn pop_dup1_inventory_and_mixed_runtime() {
         generate_symbolic_pop(1, PublisherRole::Normal.label().to_owned()),
     ])
     .unwrap();
-    let mixed_result = observe(&mixed, &[U256::from(2)], 0, None);
+    let mixed_result = observe(&mixed, &[U256::from(2)], 0, None, false);
     assert_result(&mixed_result, &[U256::from(2)], false, 17);
 }
 
@@ -697,22 +718,35 @@ fn declaration_verifier_rejects_misalignment_and_executable_bounds() {
 #[ignore = "assembles multi-megabyte sources at the ABI image boundary"]
 fn push1_capacity_boundary() {
     for (pushes, stop, size, accepted) in [
-        (23_829, false, 1_048_552, true),
-        (23_830, false, 1_048_596, false),
-        (23_829, true, 1_048_556, true),
-        (23_830, true, 1_048_600, false),
+        (13_795, false, 1_048_536, true),
+        (13_796, false, 1_048_612, false),
+        (13_795, true, 1_048_540, true),
+        (13_796, true, 1_048_616, false),
     ] {
         let fragments = make_fragments(&vec![2; pushes], stop);
         let publishers = publisher_inventory(&fragments);
         let source = emit(&fragments, &publishers);
         let image = assemble_image(&source).unwrap();
         assert_eq!(image.len(), size);
-        assert_eq!(image.labels().len(), 3 * pushes + usize::from(stop) + 2);
+        assert_eq!(image.labels().len(), 4 * pushes + usize::from(stop) + 3);
         let source_bytes = source.len();
         let labels = image.labels().len();
         let result = verified_program(&fragments, &publishers, source, image);
         if accepted {
-            assert_eq!(result.unwrap().machine_code().len(), size);
+            let program = result.unwrap();
+            assert_eq!(program.machine_code().len(), size);
+            let target = ENTRY_PC + 76 * pushes as u64 + 4 * u64::from(stop) + 76;
+            assert_eq!(program.termination_entry_pcs()[2], target);
+            let observed = pop_dup1::observe_guest(
+                &program,
+                &[],
+                target,
+                3,
+                Some((0, OOG_CHARGE_PATH)),
+                &[],
+                0,
+            );
+            assert_guest_result(&observed, &[], 3, 6);
         } else {
             assert_eq!(
                 result,
@@ -722,6 +756,18 @@ fn push1_capacity_boundary() {
             );
         }
         println!("pushes={pushes} stop={stop} source_bytes={source_bytes} labels={labels} asm=ok image_bytes={size} layout_accepted={accepted}");
+    }
+    // The first OOG JAL is at byte 20 and its publisher follows the
+    // 76-byte normal/overflow tail prefix. One more PUSH exceeds J reach.
+    for (stop, displacement) in [(false, 1_048_628), (true, 1_048_632)] {
+        let fragments = make_fragments(&vec![2; 13_797], stop);
+        let publishers = publisher_inventory(&fragments);
+        let error = assemble_image(&emit(&fragments, &publishers)).unwrap_err();
+        let diagnostic = format!(
+            "BranchOutOfRange {{ label: \"out_of_gas_exit\", disp: {displacement}, max: 1048574"
+        );
+        assert!(error.to_string().contains(&diagnostic), "{error}");
+        println!("pushes=13797 stop={stop} {error}");
     }
 }
 
@@ -762,12 +808,19 @@ fn matching_push1_continuation_cannot_skip_the_next_fragment() {
     let mut continuations = fragments[0]
         .local_transfers
         .iter_mut()
-        .filter(|declaration| declaration.site_word == 9);
+        .filter(|declaration| declaration.site_word == 17);
     continuations.next().unwrap().target_symbol = "guest_push1_2".to_owned();
     assert!(continuations.next().is_none());
 
     let publishers = publisher_inventory(&fragments);
-    assert_eq!(publishers, [PublisherRole::Normal, PublisherRole::Overflow]);
+    assert_eq!(
+        publishers,
+        [
+            PublisherRole::Normal,
+            PublisherRole::Overflow,
+            PublisherRole::OutOfGas
+        ]
+    );
     let source = emit(&fragments, &publishers);
     let image = assemble_image(&source).expect("mutated source must assemble");
     let publisher_pcs: Vec<_> = publishers
@@ -801,20 +854,20 @@ fn matching_push1_continuation_cannot_skip_the_next_fragment() {
     let error = verify_final_image(
         image.bytes(),
         fragments.iter().map(|fragment| fragment.fixed_layout),
-        PublisherLayout::SymbolicNormalOverflow,
+        PublisherLayout::SymbolicNormalOverflowOutOfGas,
         &publisher_pcs,
     )
     .unwrap_err();
     assert!(error.contains("targets"), "{error}");
-    assert!(error.contains("0x80000058"), "{error}");
-    assert!(error.contains("0x8000002c"), "{error}");
+    assert!(error.contains("0x80000098"), "{error}");
+    assert!(error.contains("0x8000004c"), "{error}");
 }
 
 #[test]
 fn declaration_site_must_belong_to_its_fragment() {
     let mut fragments = make_fragments(&[2, 3], false);
     let mut stolen = fragments[1].external_references.remove(0);
-    stolen.site_word += 11;
+    stolen.site_word += 19;
     fragments[0].external_references.push(stolen);
     let error = compose(&fragments).unwrap_err();
     assert!(
@@ -868,5 +921,143 @@ fn normal_publisher_writes_remaining_before_status() {
         assert_eq!(exit.exit_pc, program.exit_pc());
         let guest = read_guest_result(&mut executor, &exit, limit).unwrap();
         assert_eq!(guest.remaining_gas(), limit);
+    }
+}
+
+const OOG_CHARGE_PATH: &[(u64, u32)] = &[
+    (0, 0x13),
+    (4, 0x13),
+    (8, 0x03),
+    (12, 0x13),
+    (16, 0x63),
+    (20, 0x6f),
+];
+
+#[test]
+fn metered_push_failure_preserves_allocation_and_settles_residual_gas() {
+    use GuestExecutionStatus::{GuestException, Running};
+    let full = full_stack();
+    let initial = &full[..full.len() - 1];
+    let mut expected = initial.to_vec();
+    expected.push(U256::from(255));
+    let program = compile(&[0x60, 255, 0x60, 1, 0]).unwrap();
+    let publishers = program.termination_entry_pcs();
+    for (limit, code, publisher, residual, path) in [
+        (5, 3, publishers[2], 2, OOG_CHARGE_PATH),
+        (11, 1, publishers[1], 5, METERED_OVERFLOW),
+    ] {
+        let observed = pop_dup1::observe_guest(
+            &program,
+            initial,
+            publisher,
+            code,
+            Some((76, path)),
+            &[],
+            limit,
+        );
+        let full_s1 = EVM_STACK_REGION.end();
+        let record = |status, code, pointer, live| {
+            GuestMetadata::new(status, code, pointer, limit, live, 0).encode()
+        };
+        assert_eq!(observed.body.executed_instructions, 17 + path.len() as u64);
+        assert_eq!(observed.guest.status(), GuestException);
+        assert_eq!(observed.guest.exception_code(), code);
+        assert_eq!(observed.guest.stack(), expected);
+        assert_eq!(observed.guest.final_s1(), full_s1);
+        assert_eq!(observed.guest.remaining_gas(), 0);
+        assert_eq!(observed.guest.gas_used(), limit);
+        assert_eq!(
+            observed.trace[0],
+            record(Running, 0, EVM_STACK_REGION.start(), residual)
+        );
+        assert_eq!(observed.trace[5], record(Running, code, full_s1, residual));
+        assert_eq!(observed.trace[6..9], [record(Running, code, full_s1, 0); 3]);
+        assert_eq!(
+            observed.trace[9..],
+            [record(GuestException, code, full_s1, 0); 2]
+        );
+    }
+}
+
+#[test]
+fn first_push_reaches_oog_beyond_conditional_branch_range() {
+    let program = compile(&bytecode(&[2; 55], false)).unwrap();
+    let target = program.termination_entry_pcs()[2];
+    assert_eq!(target, ENTRY_PC + 55 * 76 + 76);
+    assert!(target - (ENTRY_PC + 16) > 4094);
+    let observed =
+        pop_dup1::observe_guest(&program, &[], target, 3, Some((0, OOG_CHARGE_PATH)), &[], 0);
+    assert_guest_result(&observed, &[], 3, 6);
+}
+
+#[test]
+fn final_image_rejects_diverted_oog_even_when_declaration_agrees() {
+    let mut fragments = make_fragments(&[2], false);
+    let publishers = publisher_inventory(&fragments);
+    let source = emit(&fragments, &publishers).replace(
+        "jal zero, out_of_gas_exit",
+        "jal zero, push1_stack_overflow_exit",
+    );
+    let image = assemble_image(&source).unwrap();
+    let error = verified_program(&fragments, &publishers, source.clone(), image).unwrap_err();
+    assert!(error.to_string().contains("targets"));
+
+    let declaration = fragments[0]
+        .external_references
+        .iter_mut()
+        .find(|declaration| declaration.role == PublisherRole::OutOfGas)
+        .unwrap();
+    declaration.role = PublisherRole::Overflow;
+    let image = assemble_image(&source).unwrap();
+    let error = verified_program(&fragments, &publishers, source, image).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("targets 0x80000070, expected 0x80000098"));
+}
+
+#[test]
+fn final_image_rejects_corrupted_charge_and_oog_publication() {
+    let fragments = make_fragments(&[2], false);
+    let publishers = publisher_inventory(&fragments);
+    let source = emit(&fragments, &publishers);
+    let (body, oog) = source.split_once("out_of_gas_exit:\n").unwrap();
+    for (mutated, diagnostic) in
+        [
+            (
+                source.replace("bgeu t0, t2", "bge t0, t2"),
+                "expected Branch",
+            ),
+            (
+                source.replace("jal zero, out_of_gas_exit", "addi zero, zero, 0"),
+                "unexpected control transfer",
+            ),
+            (
+                source.replace("sub t0, t0, t2", "add t0, t0, t2"),
+                "expected 0x407282b3",
+            ),
+            (
+                source.replace("sd t0, 32(t1)", "addi zero, zero, 0"),
+                "expected 0x02533023",
+            ),
+            (
+                format!(
+                    "{body}out_of_gas_exit:\n{}",
+                    oog.replace("sd zero, 40(t1)", "addi zero, zero, 0")
+                ),
+                "OutOfGas publisher",
+            ),
+            (
+                format!("{body}out_of_gas_exit:\n{}", oog.replace(
+                "sd zero, 32(t1)\n    sd zero, 40(t1)\n    addi t0, zero, 2\n    sd t0, 0(t1)",
+                "addi t0, zero, 2\n    sd t0, 0(t1)\n    sd zero, 32(t1)\n    sd zero, 40(t1)"
+            )),
+                "OutOfGas publisher",
+            ),
+        ]
+    {
+        assert_ne!(mutated, source);
+        let image = assemble_image(&mutated).unwrap();
+        let error = verified_program(&fragments, &publishers, mutated, image).unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{error}");
     }
 }

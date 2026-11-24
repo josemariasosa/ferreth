@@ -11,7 +11,6 @@ use ferreth_compiler::{
         guest::GuestExecutionStatus,
         memory::{EVM_STACK_CAPACITY, EVM_STACK_REGION, EVM_WORD_SIZE},
         opcodes::add::generate_guest_add,
-        opcodes::push::generate_guest_push1,
         opcodes::sub::generate_guest_sub,
     },
 };
@@ -32,9 +31,8 @@ fn two_and_three_push1_operations_preserve_insertion_order_in_one_run() {
     let two = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3], u64::MAX)
         .expect("execute two PUSH1 operations");
     assert_eq!(two.guest_result().stack(), &[U256::from(5), U256::from(3)]);
-    // 20 opcode instructions plus one shared seven-instruction normal exit,
-    // rather than two separately executed 17-instruction programs.
-    assert_eq!(two.instruction_metrics().total(), 29);
+    // Two 17-instruction pushes and one shared nine-instruction publisher.
+    assert_eq!(two.instruction_metrics().total(), 43);
 
     let three = execute_guest_evm_bytecode(&[0x60, 1, 0x60, 2, 0x60, 3], u64::MAX)
         .expect("execute three PUSH1 operations");
@@ -119,7 +117,7 @@ fn bytecode_push1_programs_execute_in_one_rv64_run() {
     }
 
     let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3], u64::MAX).expect("two PUSH1s");
-    assert_eq!(result.instruction_metrics().total(), 29);
+    assert_eq!(result.instruction_metrics().total(), 43);
 }
 
 #[test]
@@ -139,19 +137,19 @@ fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
             &[0x60, 0x05, 0x00][..],
             vec![U256::from(5)],
             EVM_STACK_REGION.start() + 32,
-            20,
+            27,
         ),
         (
             &[0x60, 0x05, 0x60, 0x03, 0x01, 0x00][..],
             vec![U256::from(8)],
             EVM_STACK_REGION.start() + 32,
-            72,
+            86,
         ),
         (
             &[0x60, 0x05, 0x60, 0x03, 0x03, 0x00][..],
             vec![U256::MAX - U256::from(1)],
             EVM_STACK_REGION.start() + 32,
-            72,
+            86,
         ),
     ];
 
@@ -196,7 +194,7 @@ fn explicit_stop_does_not_execute_trailing_bytecode() {
     );
     // Successful completion also establishes that the EBREAK installed at the
     // exit sentinel was not fetched or executed.
-    assert_eq!(result.instruction_metrics().total(), 20);
+    assert_eq!(result.instruction_metrics().total(), 27);
 }
 
 #[test]
@@ -221,9 +219,9 @@ fn bytecode_push1_and_add_programs_execute_as_one_linked_rv64_program() {
 
     let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01], u64::MAX)
         .expect("PUSH1 PUSH1 ADD executes once");
-    assert_eq!(result.instruction_metrics().opcode_body(), 62);
+    assert_eq!(result.instruction_metrics().opcode_body(), 76);
     assert_eq!(result.instruction_metrics().guest_termination(), 9);
-    assert_eq!(result.instruction_metrics().total(), 71);
+    assert_eq!(result.instruction_metrics().total(), 85);
 }
 
 #[test]
@@ -295,7 +293,7 @@ fn compiled_sub_underflow_publishes_terminal_metadata_without_mutating_stack() {
 fn mixed_linker_keeps_the_generated_add_core_machine_code_unchanged() {
     let generated = generate_guest_add();
     let compiled = compile_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01]).expect("compile mixed program");
-    let add_start = 2 * 11 * 4;
+    let add_start = 2 * 19 * 4;
     // The continuation is the end of the generated body; the core starts at
     // the documented fixed wrapper width (nine instructions).
     let core_start = add_start + 9 * 4;
@@ -309,7 +307,7 @@ fn mixed_linker_keeps_the_generated_add_core_machine_code_unchanged() {
 fn mixed_linker_keeps_the_generated_sub_core_machine_code_unchanged() {
     let generated = generate_guest_sub();
     let compiled = compile_evm_bytecode(&[0x60, 5, 0x60, 3, 0x03]).expect("compile mixed program");
-    let sub_start = 2 * 11 * 4;
+    let sub_start = 2 * 19 * 4;
     let core_start = sub_start + 9 * 4;
     assert_eq!(
         &compiled.machine_code()[core_start..core_start + generated.machine_code().len() - 9 * 4],
@@ -353,7 +351,7 @@ fn repeated_push1_bytecode(pushes: usize, explicit_stop: bool) -> Vec<u8> {
 }
 
 fn assert_first_push_reaches_overflow_publisher(program: &CompiledRv64Program) {
-    let trampoline = generate_guest_push1(2).overflow_trampoline_offset();
+    let trampoline = 18 * 4;
     let word = u32::from_le_bytes(
         program.machine_code()[trampoline..trampoline + 4]
             .try_into()

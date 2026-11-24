@@ -592,9 +592,9 @@ mod tests {
         assert_eq!(result.guest_result().stack(), initial_stack);
         assert_eq!(result.guest_result().remaining_gas(), 0);
         assert_eq!(result.guest_result().gas_used(), u64::MAX);
-        assert_eq!(result.instruction_metrics().opcode_body(), 4);
+        assert_eq!(result.instruction_metrics().opcode_body(), 11);
         assert_eq!(result.instruction_metrics().guest_termination(), 10);
-        assert_eq!(result.instruction_metrics().total(), 14);
+        assert_eq!(result.instruction_metrics().total(), 21);
     }
 
     #[test]
@@ -610,9 +610,9 @@ mod tests {
                 result.guest_result().final_s1(),
                 EVM_STACK_REGION.start() + 32
             );
-            assert_eq!(result.instruction_metrics().opcode_body(), 10);
+            assert_eq!(result.instruction_metrics().opcode_body(), 17);
             assert_eq!(result.instruction_metrics().guest_termination(), 9);
-            assert_eq!(result.instruction_metrics().total(), 19);
+            assert_eq!(result.instruction_metrics().total(), 26);
         }
     }
 

@@ -21,6 +21,7 @@ use ferreth_compiler::{
 
 const NORMAL: &str = "normal_exit";
 const OVERFLOW: &str = "push1_stack_overflow_exit";
+const OOG: &str = "out_of_gas_exit";
 const UNDERFLOW: &str = "binary_stack_underflow_exit";
 type Word = [u64; 4];
 
@@ -231,7 +232,8 @@ fn check_transfers(code: &[u8], range: Range<u64>, expected: &[Transfer]) -> Vec
 }
 
 struct Layout {
-    publishers: [u64; 3],
+    publishers: [u64; 4],
+    charges: Vec<u64>,
     // (EVM instruction ordinal, core entry, return to the wrapper)
     calls: Vec<(usize, u64, u64)>,
     // (EVM instruction ordinal, trampoline, publisher)
@@ -279,6 +281,11 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
     } else {
         0
     };
+    let oog = if !experimental && ops.iter().any(|op| matches!(op, Instruction::Push(_))) {
+        label(OOG)
+    } else {
+        0
+    };
     let mut expected_pc = ENTRY_PC;
     let entries: Vec<_> = ops
         .iter()
@@ -288,7 +295,13 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
             assert_eq!(entry, expected_pc, "fragment {i} ({op:?})");
             expected_pc += match op {
                 Instruction::Stop => 4,
-                Instruction::Push(_) => 44,
+                Instruction::Push(_) => {
+                    if experimental {
+                        44
+                    } else {
+                        76
+                    }
+                }
                 Instruction::Pop => 16,
                 Instruction::Dup1 => 64,
                 Instruction::Add | Instruction::Sub => 172,
@@ -297,7 +310,8 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
         })
         .collect();
     let mut layout = Layout {
-        publishers: [normal, overflow, underflow],
+        publishers: [normal, overflow, underflow, oog],
+        charges: vec![],
         calls: vec![],
         traps: vec![],
     };
@@ -324,11 +338,20 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                 } else {
                     label(&format!("push1_overflow_{i}"))
                 };
+                let mut edges = Vec::new();
                 if !experimental {
                     assert_eq!(label(&format!("push1_continue_{i}")), next);
+                    let sufficient = label(&format!("guest_push1_{i}_gas_sufficient"));
+                    assert_eq!(sufficient, entry + 24);
+                    assert_eq!(over, entry + 72);
+                    edges.extend([Branch(0x0072_f063, sufficient), Jal(0, oog)]);
+                    layout.charges.push(entry + 28);
                 }
-                let edges = [Branch(FULL, over), Jal(0, next), trap(over, overflow)];
-                assert_eq!(check_transfers(code, entry..next, &edges)[2], over);
+                edges.extend([Branch(FULL, over), Jal(0, next), trap(over, overflow)]);
+                assert_eq!(
+                    check_transfers(code, entry..next, &edges).last(),
+                    Some(&over)
+                );
             }
             Instruction::Pop => {
                 let name = if experimental {
@@ -423,12 +446,14 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
             (NORMAL, normal),
             (OVERFLOW, overflow),
             (UNDERFLOW, underflow),
+            (OOG, 0),
         ]
     } else {
         [
             (NORMAL, normal),
             (UNDERFLOW, underflow),
             (OVERFLOW, overflow),
+            (OOG, oog),
         ]
     };
     for (name, pc) in publishers.into_iter().filter(|&(_, pc)| pc != 0) {
@@ -439,6 +464,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
             NORMAL => &[0x0003_3423],
             OVERFLOW => &[0x0010_0293, 0x0053_3423],
             UNDERFLOW => &[0x0020_0293, 0x0053_3423],
+            OOG => &[0x0030_0293, 0x0053_3423],
             _ => unreachable!(),
         };
         // The historical experiment publishes the ADR-001 prefix. Production
@@ -517,7 +543,25 @@ fn execute(
     executor
         .write_memory(EXIT_PC, &0x0010_0073_u32.to_le_bytes())
         .unwrap();
-    initialize_guest_state(&mut executor, 0).unwrap();
+    let (fault_index, exception_code) = fault.unwrap_or((usize::MAX, 0));
+    let publisher = layout.publishers[exception_code];
+    let body_end = if fault.is_some() {
+        layout
+            .traps
+            .iter()
+            .find(|&&(i, _, target)| i == fault_index && target == publisher)
+            .unwrap()
+            .1
+    } else {
+        publisher
+    };
+    let spent_at = |pc: u64| {
+        3 * layout
+            .charges
+            .partition_point(|&store| store < pc.min(body_end)) as u64
+    };
+    let limit = spent_at(body_end);
+    initialize_guest_state(&mut executor, limit).unwrap();
     for (index, limbs) in initial.iter().enumerate() {
         let bytes = limbs.map(u64::to_le_bytes);
         executor
@@ -525,10 +569,10 @@ fn execute(
             .unwrap();
     }
     let initial_s1 = stack_pointer(initial.len());
-    let running = GuestMetadata::new(Running, 0, initial_s1, 0, 0, 0);
+    let running = |pc| GuestMetadata::new(Running, 0, initial_s1, limit, limit - spent_at(pc), 0);
     executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, initial_s1);
     executor
-        .write_memory(METADATA_REGION.start(), &running.encode())
+        .write_memory(METADATA_REGION.start(), &running(ENTRY_PC).encode())
         .unwrap();
 
     let guard = [0xa5; EVM_WORD_SIZE as usize];
@@ -536,8 +580,6 @@ fn execute(
         .write_memory(EVM_STACK_REGION.end(), &guard)
         .unwrap();
     let native_sp = executor.read_register(IntegerRegister::STACK_POINTER);
-    let (fault_index, exception_code) = fault.unwrap_or((usize::MAX, 0));
-    let publisher = layout.publishers[exception_code];
     let mut stops = layout.publishers.to_vec();
     stops.push(EXIT_PC);
     stops.extend(layout.traps.iter().map(|&(_, pc, _)| pc));
@@ -557,7 +599,7 @@ fn execute(
             .execute_until(pc, &active, budget - body_count)
             .unwrap();
         assert_eq!(report.exit_pc, boundary, "checkpoint after {pc:#010x}");
-        assert_eq!(metadata(executor), running);
+        assert_eq!(metadata(executor), running(boundary));
         println!(
             "  runtime checkpoint {boundary:#010x}, +{} RV64",
             report.executed_instructions
@@ -611,16 +653,16 @@ fn execute(
     } else {
         Normal
     };
-    let terminal = GuestMetadata::new(status, exception_code as u64, final_s1, 0, 0, 0);
+    let terminal = GuestMetadata::new(status, exception_code as u64, final_s1, limit, 0, 0);
     let status_store = publisher + (publisher_count - 2) * 4;
     for (boundary, expected_metadata) in [
         (
             publisher + 12,
-            GuestMetadata::new(Running, 0, final_s1, 0, 0, 0),
+            GuestMetadata::new(Running, 0, final_s1, limit, 0, 0),
         ),
         (
             status_store,
-            GuestMetadata::new(Running, exception_code as u64, final_s1, 0, 0, 0),
+            GuestMetadata::new(Running, exception_code as u64, final_s1, limit, 0, 0),
         ),
         (status_store + 4, terminal),
     ] {
@@ -633,7 +675,7 @@ fn execute(
     }
     let exit = executor.execute(pc, EXIT_PC, 1).unwrap();
     assert_eq!(exit.executed_instructions, 1);
-    let result = read_guest_result(&mut executor, &exit, 0).unwrap();
+    let result = read_guest_result(&mut executor, &exit, limit).unwrap();
     assert_eq!(result.metadata().metadata(), terminal);
     assert_eq!(result.stack_depth(), expected.len() as u64);
     assert!(result
@@ -698,8 +740,8 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
     );
     println!("production:");
     let production_layout = check_layout(&production, &ops, false);
-    let [normal, overflow, underflow] = production_layout.publishers;
-    let published: Vec<_> = [normal, underflow, overflow]
+    let [normal, overflow, underflow, oog] = production_layout.publishers;
+    let published: Vec<_> = [normal, underflow, overflow, oog]
         .into_iter()
         .filter(|&pc| pc != 0)
         .collect();
@@ -712,9 +754,17 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
         expected,
         fault,
     );
+    let executed_pushes = ops
+        .iter()
+        .take(fault.map_or(ops.len(), |(index, _)| index + 1))
+        .filter(|op| matches!(op, Instruction::Push(_)))
+        .count() as u64;
     assert_eq!(
         production_counts,
-        (symbolic_counts.0, symbolic_counts.1 + 2)
+        (
+            symbolic_counts.0 + 7 * executed_pushes,
+            symbolic_counts.1 + 2
+        )
     );
 
     let same_bytes = symbolic.bytes() == compiled.machine_code();
@@ -801,7 +851,7 @@ fn arithmetic_across_limbs_and_standalone_core_hashes() {
 }
 
 #[test]
-fn normal_only_and_overflow_only_production_inventories() {
+fn normal_only_and_push_production_inventories() {
     compare(&[0x00], &[], &[], None);
     compare(&[0x60, 2], &[], &[word(2)], None);
 }

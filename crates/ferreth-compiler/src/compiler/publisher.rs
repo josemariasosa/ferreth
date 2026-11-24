@@ -1,7 +1,8 @@
 use std::fmt::Write;
 
 use super::{
-    PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE, PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
+    OUT_OF_GAS_EXCEPTION_CODE, PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
+    PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
 };
 use crate::rv64::guest::GuestExecutionStatus;
 
@@ -10,6 +11,7 @@ pub(super) enum Publisher {
     Normal,
     Overflow,
     Underflow,
+    OutOfGas,
 }
 
 impl Publisher {
@@ -18,6 +20,7 @@ impl Publisher {
             Self::Normal => "normal_exit",
             Self::Overflow => "push1_stack_overflow_exit",
             Self::Underflow => "binary_stack_underflow_exit",
+            Self::OutOfGas => "out_of_gas_exit",
         }
     }
 
@@ -33,6 +36,7 @@ impl Publisher {
             Self::Normal => None,
             Self::Overflow => Some(PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE),
             Self::Underflow => Some(PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE),
+            Self::OutOfGas => Some(OUT_OF_GAS_EXCEPTION_CODE),
         };
         let status = if let Some(code) = code {
             writeln!(source, "    addi t0, zero, {code}\n    sd t0, 8(t1)").unwrap();

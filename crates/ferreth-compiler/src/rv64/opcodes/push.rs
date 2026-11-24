@@ -7,6 +7,7 @@ use crate::{
     rv64::verify::{Fragment, Transfer},
 };
 
+use super::gas::{emit_static_charge, STATIC_CHARGE_WORDS};
 use crate::rv64::codegen::GeneratedRv64;
 
 /// Generates one stack-aware RV64 implementation of EVM `PUSH1`.
@@ -36,6 +37,7 @@ pub(crate) fn generate_symbolic_push1(immediate: u8, index: usize) -> SymbolicFr
     let continuation = format!("push1_continue_{index}");
     let mut assembly = String::new();
     writeln!(assembly, "{entry}:").unwrap();
+    let (gas_check, oog) = emit_static_charge(&mut assembly, &entry, 3);
     emit_push1_body(&mut assembly, immediate, &overflow, &continuation);
     writeln!(
         &mut assembly,
@@ -46,14 +48,18 @@ pub(crate) fn generate_symbolic_push1(immediate: u8, index: usize) -> SymbolicFr
     SymbolicFragment::new(
         assembly,
         entry,
-        vec![ExternalDeclaration {
-            site_word: 10,
-            role: PublisherRole::Overflow,
-            kind: Transfer::Jal { rd: 0 },
-        }],
         vec![
+            ExternalDeclaration {
+                site_word: STATIC_CHARGE_WORDS + 10,
+                role: PublisherRole::Overflow,
+                kind: Transfer::Jal { rd: 0 },
+            },
+            oog,
+        ],
+        vec![
+            gas_check,
             LocalDeclaration {
-                site_word: 2,
+                site_word: STATIC_CHARGE_WORDS + 2,
                 target_symbol: overflow,
                 kind: Transfer::Branch {
                     funct3: 7,
@@ -62,12 +68,12 @@ pub(crate) fn generate_symbolic_push1(immediate: u8, index: usize) -> SymbolicFr
                 },
             },
             LocalDeclaration {
-                site_word: 9,
+                site_word: STATIC_CHARGE_WORDS + 9,
                 target_symbol: continuation,
                 kind: Transfer::Jal { rd: 0 },
             },
         ],
-        Fragment::Push1,
+        Fragment::MeteredPush1,
     )
 }
 

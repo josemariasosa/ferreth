@@ -13,9 +13,10 @@ enum Publisher {
     Normal,
     Underflow,
     Overflow,
+    OutOfGas,
 }
 
-use Publisher::{Normal, Overflow, Underflow};
+use Publisher::{Normal, OutOfGas, Overflow, Underflow};
 
 // Independent ADR-001 encodings for the pointer, exception code, status and exit.
 fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publisher]) {
@@ -35,16 +36,13 @@ fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publi
                 0x0010_0293,
                 0x0053_3023,
             ],
-            Underflow => &[
-                0x0020_0293,
-                0x0053_3423,
-                0x0203_3023,
-                0x0203_3423,
-                0x0020_0293,
-                0x0053_3023,
-            ],
-            Overflow => &[
-                0x0010_0293,
+            Underflow | Overflow | OutOfGas => &[
+                match role {
+                    Overflow => 0x0010_0293,
+                    Underflow => 0x0020_0293,
+                    OutOfGas => 0x0030_0293,
+                    Normal => unreachable!(),
+                },
                 0x0053_3423,
                 0x0203_3023,
                 0x0203_3423,
@@ -76,30 +74,54 @@ fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publi
 fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
     let bytecode = [0x60, 2];
     let push = compile_evm_bytecode(&bytecode).unwrap();
-    assert_eq!(push.termination_entry_pcs(), [ENTRY_PC + 44, ENTRY_PC + 80]);
+    assert_eq!(
+        push.termination_entry_pcs(),
+        [ENTRY_PC + 76, ENTRY_PC + 112, ENTRY_PC + 152]
+    );
     assert_publishers(
         push.machine_code(),
         push.termination_entry_pcs(),
-        44,
-        &[Normal, Overflow],
+        76,
+        &[Normal, Overflow, OutOfGas],
+    );
+    // The first branch skips one word. The OOG JAL at byte 20 reaches
+    // byte 152, a displacement of 132. The debit updates metadata +32.
+    let charge_words = [
+        0x8004_0313_u32,
+        0x8003_0313,
+        0x0203_3283,
+        0x0030_0393,
+        0x0072_f463,
+        0x0840_006f,
+        0x4072_82b3,
+        0x0253_3023,
+    ];
+    assert_eq!(
+        &push.machine_code()[..32],
+        charge_words.map(u32::to_le_bytes).as_flattened()
     );
     let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).unwrap();
     assert_eq!(executed.machine_code(), push.machine_code());
     assert_eq!(executed.assembly(), push.assembly());
-    assert_eq!(executed.instruction_metrics().total(), 19);
+    assert_eq!(executed.instruction_metrics().total(), 26);
 
     let bytecode = [0x60, 2, 0x80, 0x50, 0x60, 3, 0x01, 0x60, 7, 0x03, 0x00];
     let mixed = compile_evm_bytecode(&bytecode).unwrap();
     assert_eq!(
         mixed.termination_entry_pcs(),
-        [ENTRY_PC + 560, ENTRY_PC + 596, ENTRY_PC + 636]
+        [
+            ENTRY_PC + 656,
+            ENTRY_PC + 692,
+            ENTRY_PC + 732,
+            ENTRY_PC + 772
+        ]
     );
-    assert_eq!(mixed.machine_code().len(), 676);
+    assert_eq!(mixed.machine_code().len(), 812);
     assert_publishers(
         mixed.machine_code(),
         mixed.termination_entry_pcs(),
-        560,
-        &[Normal, Underflow, Overflow],
+        656,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
     let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).unwrap();
     assert_eq!(executed.machine_code(), mixed.machine_code());
@@ -109,9 +131,9 @@ fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
         GuestExecutionStatus::Normal
     );
     assert_eq!(executed.guest_result().stack(), &[U256::from(2)]);
-    assert_eq!(executed.instruction_metrics().opcode_body(), 132);
+    assert_eq!(executed.instruction_metrics().opcode_body(), 153);
     assert_eq!(executed.instruction_metrics().guest_termination(), 9);
-    assert_eq!(executed.instruction_metrics().total(), 141);
+    assert_eq!(executed.instruction_metrics().total(), 162);
 }
 
 #[test]

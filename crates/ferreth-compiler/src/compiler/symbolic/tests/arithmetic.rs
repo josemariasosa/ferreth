@@ -27,37 +27,38 @@ fn standalone_core(opcode: Opcode) -> Vec<u8> {
 fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &CompiledRv64Program) {
     let decoded = decode_detailed(input).unwrap();
     let mut body_size = 0;
-    let mut relocations = Vec::new();
+    let mut legacy_size = 0;
     let mut labels = 2; // Normal and Underflow.
     let mut overflow = false;
+    let mut oog = false;
     let image = assemble_image(candidate.assembly()).unwrap();
     assert_eq!(image.bytes(), candidate.machine_code());
     assert_eq!(
         assemble_image(legacy.assembly()).unwrap().bytes(),
         legacy.machine_code()
     );
+    let c = candidate.machine_code();
+    let l = legacy.machine_code();
     for (index, instruction) in decoded.iter().enumerate() {
-        body_size += match instruction {
+        let (width, prefix, relocated): (usize, usize, &[usize]) = match instruction {
             DecodedInstruction::Stop { .. } => {
                 labels += 1;
-                4
+                (4, 0, &[])
             }
             DecodedInstruction::Push { opcode: 0x60, .. } => {
-                labels += 3;
+                labels += 4;
                 overflow = true;
-                relocations.push(body_size + 40);
-                44
+                oog = true;
+                (44, 32, &[40])
             }
             DecodedInstruction::Pop { .. } => {
                 labels += 2;
-                relocations.push(body_size + 12);
-                16
+                (16, 0, &[12])
             }
             DecodedInstruction::Dup1 { .. } => {
                 labels += 3;
                 overflow = true;
-                relocations.extend([body_size + 56, body_size + 60]);
-                64
+                (64, 0, &[56, 60])
             }
             DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => {
                 labels += 4;
@@ -68,11 +69,8 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
                 };
                 let core = standalone_core(opcode);
                 assert_eq!(core.len(), 136);
-                assert_eq!(
-                    candidate.machine_code()[body_size + 36..body_size + 172],
-                    core
-                );
-                assert_eq!(legacy.machine_code()[body_size + 36..body_size + 172], core);
+                assert_eq!(c[body_size + 36..body_size + 172], core);
+                assert_eq!(l[legacy_size + 36..legacy_size + 172], core);
                 for (name, offset) in [
                     ("guest_arithmetic", 0),
                     ("arith_update", 24),
@@ -84,52 +82,69 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
                         Some(ENTRY_PC + (body_size + offset) as u64)
                     );
                 }
-                relocations.push(body_size + 32);
-                172
+                (172, 0, &[32])
             }
             _ => unreachable!(),
         };
+        for offset in (0..width)
+            .step_by(4)
+            .filter(|offset| !relocated.contains(offset))
+        {
+            let new = body_size + prefix + offset;
+            let old = legacy_size + offset;
+            assert_eq!(
+                c[new..new + 4],
+                l[old..old + 4],
+                "fragment {index} byte {offset}"
+            );
+        }
+        body_size += width + prefix;
+        legacy_size += width;
     }
-    assert_eq!(image.labels().len(), labels + usize::from(overflow));
+    assert_eq!(
+        image.labels().len(),
+        labels + usize::from(overflow) + usize::from(oog)
+    );
     let normal = ENTRY_PC + body_size as u64;
+    let old_normal = ENTRY_PC + legacy_size as u64;
     let mut candidate_pcs = vec![normal, normal + 36];
     if overflow {
         candidate_pcs.push(normal + 76);
     }
+    if oog {
+        candidate_pcs.push(normal + 116);
+    }
     assert_eq!(candidate.termination_entry_pcs(), candidate_pcs);
     assert_eq!(
         legacy.termination_entry_pcs(),
-        [normal, normal + 36, normal + 76]
+        [old_normal, old_normal + 36, old_normal + 76]
     );
     assert_eq!(
-        candidate.machine_code().len(),
-        body_size + 76 + 40 * usize::from(overflow)
+        c.len(),
+        body_size + 76 + 40 * (usize::from(overflow) + usize::from(oog))
     );
-    assert_eq!(legacy.machine_code().len(), body_size + 116);
+    assert_eq!(l.len(), legacy_size + 116);
     assert_eq!(candidate.normal_termination_instructions(), 9);
     assert_eq!(legacy.normal_termination_instructions(), 9);
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        10 + 10 * u64::from(overflow)
+        10 + 10 * (u64::from(overflow) + u64::from(oog))
     );
     assert_eq!(legacy.exceptional_termination_instructions(), 10);
-    let c = candidate.machine_code();
-    let l = legacy.machine_code();
-    let changed: Vec<_> = (0..body_size)
-        .step_by(4)
-        .filter(|&at| c[at..at + 4] != l[at..at + 4])
-        .collect();
-    assert_eq!(changed, relocations);
-    assert_eq!(c[body_size..body_size + 36], l[body_size..body_size + 36]);
+    assert_eq!(
+        c[body_size..body_size + 36],
+        l[legacy_size..legacy_size + 36]
+    );
     assert_eq!(
         c[body_size + 36..body_size + 76],
-        l[body_size + 76..body_size + 116]
+        l[legacy_size + 76..legacy_size + 116]
     );
     if overflow {
-        assert_eq!(c[body_size + 76..], l[body_size + 36..body_size + 76]);
+        assert_eq!(
+            c[body_size + 76..body_size + 116],
+            l[legacy_size + 36..legacy_size + 76]
+        );
     }
-    println!("input={input:02x?} image_bytes={}/{} publishers={:x?}/{:x?} relocated_body_offsets={changed:x?}",
-        c.len(), l.len(), candidate_pcs, legacy.termination_entry_pcs());
 }
 
 fn parity(
@@ -143,16 +158,47 @@ fn parity(
     let candidate = compile(input).unwrap();
     let legacy = crate::compiler::compile_evm_bytecode_legacy(input).unwrap();
     assert_artifacts(input, &candidate, &legacy);
-    let normal = candidate.termination_entry_pcs()[0];
     let (code, fault) = failure.map_or((0, None), |(code, path)| (code, Some(path)));
     let offsets = [(0, 0), (76, 36), (36, 76)];
     let (c_offset, l_offset) = offsets[code as usize];
-    let actual = observe_guest(&candidate, initial, normal + c_offset, code, fault, calls);
-    let reference = observe_guest(&legacy, initial, normal + l_offset, code, fault, calls);
-    assert_guest_result(&actual, expected, code, body_words);
+    let pushes = legacy_push_offsets(input);
+    let prefix = |site| pushes.partition_point(|&at| at < site) as u64;
+    let executed = fault.map_or(pushes.len() as u64, |(site, _)| {
+        prefix(site) + u64::from(pushes.contains(&site))
+    });
+    let metered_calls: Vec<_> = calls
+        .iter()
+        .map(|&(site, depth)| (site + 32 * prefix(site), depth))
+        .collect();
+    let metered_fault = fault.map(|(site, path)| {
+        let path = if pushes.contains(&site) {
+            METERED_OVERFLOW
+        } else {
+            path
+        };
+        (site + 32 * prefix(site), path)
+    });
+    let actual = observe_guest(
+        &candidate,
+        initial,
+        candidate.termination_entry_pcs()[0] + c_offset,
+        code,
+        metered_fault,
+        &metered_calls,
+        3 * executed,
+    );
+    let reference = observe_guest(
+        &legacy,
+        initial,
+        legacy.termination_entry_pcs()[0] + l_offset,
+        code,
+        fault,
+        calls,
+        0,
+    );
+    assert_guest_result(&actual, expected, code, body_words + 7 * executed);
     assert_guest_result(&reference, expected, code, body_words);
-    assert_eq!(actual.guest, reference.guest);
-    assert_eq!(actual.trace, reference.trace);
+    assert_eq!(actual.guest.gas_limit(), 3 * executed);
 }
 
 #[test]

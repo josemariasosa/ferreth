@@ -1,6 +1,6 @@
 # ADR-002 implementation plan
 
-Maintainer approval recorded on 2026-11-23. Phase 1 implemented on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), then [raw corpus and fixture table](adr-002-reference-corpus.md). This plan proposes test locations and future commits. Active portable fixtures are V01–V03. Phases 2–5 remain pending.
+Maintainer approval recorded on 2026-11-23. Phases 1 and 2 implemented on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), then [raw corpus and fixture table](adr-002-reference-corpus.md). This plan proposes test locations and future commits. Active portable fixtures are V01–V07 and V32–V33. Phase 2 is ready for human review. Phases 3–5 remain pending.
 
 ## Test boundaries and common gate
 
@@ -63,6 +63,72 @@ The common gate and both opt-in capacity commands below passed. The branch-local
 ## Phase 2 — PUSH1
 
 Depends on Phase 1. Activate V04–V07 and V32–V33, retaining V01–V03. In rv64_frame_gas.rs add push1_charges_before_capacity_check. Check V04 OOG with unchanged empty stack, V05 [2]/0, V06 [2]/1 and V07 [0]/0 (stack/remaining). At depth 1,024 V32 must publish code 3 and V33 code 1, preserving all words, the guard and final pointer. Add positive-budget overflow leaving residual live gas before settlement, then verify zero terminal gas. At RED, V04 can execute an unfunded push. At GREEN also execute PUSH1 2 through the isolated PUSH1 API and the canonical bytecode API at u64::MAX. Require identical image bytes, stack [2], remaining u64::MAX-3 and gross used 3. In rv64/opcodes/push.rs::generate_symbolic_push1 emit the shared inline unsigned charge before capacity preflight. Add OOG to publisher roles, inventory, verifier and exceptional publisher. Include an early OOG transfer in a long program where the publisher is more than 4 KiB away. Require correct target on execution and rejection of a diverted target. Refactor only common charge emission and declarations. Run cargo test --frozen -p ferreth-compiler --test rv64_push1_program and the common gate. Exit with nine active IDs and green boundary/long-image cases. Proposed commit covers PUSH1 and its OOG path.
+
+### Phase 2 execution evidence (2026-11-23)
+
+The baseline was clean on `feat/adr-002-gas-metering` at `1fc5b885d50e653255ea609606b5d253c08af68a`. Verification used Rust and Cargo 1.98.1.
+
+Before changing production code, `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas -- --show-output` compiled and returned 5 passed, 4 failed. Pinned direct REVM matched each raw result, remaining value and stack. Ferreth published the following outcomes.
+
+| ID | Ferreth RED | Assertion |
+|---|---|---|
+| V01–V03 | Normal, remaining 0/7/0, used 0 | Pass |
+| V04 | Normal, code 0, remaining 2, used 0, depth 1 | Expected exceptional |
+| V05 | Normal, remaining 3, used 0 | Expected remaining 0 |
+| V06 | Normal, remaining 4, used 0 | Expected remaining 1 |
+| V07 | Normal, remaining 3, used 0 | Expected remaining 0 |
+| V32 | Exceptional, code 1, remaining 0, used 3074, depth 1024 | Portable pass |
+| V33 | Exceptional, code 1, remaining 0, used 3075, depth 1024 | Portable pass |
+
+Before changing production code, `cargo test --frozen -p ferreth-compiler --test rv64_frame_gas` compiled and returned 2 passed, 3 failed. Budget 0 returned Normal instead of exceptional. Three pushes with budget 10 left 10 instead of 1. A full stack with budget 3074 published code 1 instead of 3, exposing the precedence defect that portable V32 cannot distinguish.
+
+The shared emitter in [gas.rs](../../crates/ferreth-compiler/src/rv64/opcodes/gas.rs) uses two ADDIs to derive metadata from s0. It loads live gas from +32, materializes the cost, branches unsigned to the occurrence-local debit on sufficiency, and otherwise takes a symbolic JAL to the shared OOG publisher. The debit subtracts and stores once before the original PUSH1 capacity guard. The emitter uses t0–t2. The stack, s0, s1, native sp and ra are preserved during charging. Costs admitted by the emitter fit a positive signed 12-bit immediate. Ferreth continues to compile bytecode alone.
+
+The OOG publisher stores final s1, code 3, zero live and published gas, and exceptional status in that order, then jumps to the existing sentinel. Full-stack stepping after an earlier successful push observes 2 live gas at OOG entry and 5 live gas at overflow entry. In both cases live gas becomes zero at publisher instruction 6 while status is RUNNING. Exceptional status appears after instruction 9. Whole-stack and guard snapshots across the failing instruction, and terminal stack and pointer assertions, preserve all initial words and the successful prefix. An exact-budget push, a three-push program, a later OOG, truncated PUSH1 and the unsigned budgets 2^63 and u64::MAX pass. The canonical and isolated entry points produced identical assembly and machine code. Every tested budget for `6002` used that image.
+
+The GREEN conformance run with `-- --show-output` prints the raw REVM result, remaining gas, gross used, stack and PC. The table records the rerun. F is 1,024 ones. The exceptional reference rows already had raw remaining zero. Ferreth's guest publication was compared directly.
+
+| ID | Raw pinned REVM result, gas left/used, stack, PC | Ferreth status, code, gas left/used, stack |
+|---|---|---|
+| V01 | Stop, 0/0, [], 1 | Normal, 0, 0/0, [] |
+| V02 | Stop, 7/0, [], 1 | Normal, 0, 7/0, [] |
+| V03 | Stop, 0/0, [], 1 | Normal, 0, 0/0, [] |
+| V04 | OutOfGas, 0/2, [], 1 | Exceptional, 3, 0/2, [] |
+| V05 | Stop, 0/3, [2], 3 | Normal, 0, 0/3, [2] |
+| V06 | Stop, 1/3, [2], 3 | Normal, 0, 1/3, [2] |
+| V07 | Stop, 0/3, [0], 3 | Normal, 0, 0/3, [0] |
+| V32 | OutOfGas, 0/3074, F, 2049 | Exceptional, 3, 0/3074, F |
+| V33 | StackOverflow, 0/3075, F, 2049 | Exceptional, 1, 0/3075, F |
+
+The fixed-layout verifier checks charge words 0–7 independently, including the unsigned branch at word 4 to word 6 and OOG JAL at word 5, followed by capacity, continuation and overflow transfers at words 10, 17 and 18. It validates the OOG publisher's placement, complete words and sentinel return. Negative controls reject a signed branch, missing OOG transfer, wrong debit or live store, omitted OOG gas store, premature status, and an OOG JAL diverted to Overflow both with the original declaration and with a matching corrupted declaration. A 55-PUSH1 test takes the first OOG JAL across 4,236 bytes. Historical 46/47 witnesses retain both EOF and STOP cases and the legacy parser rejection at 47. Mixed replays preserve standalone arithmetic leaf bytes and compare the historical guest outcomes against the metered execution.
+
+The assembled charge adds eight static words (32 bytes) per PUSH1. Seven execute on sufficiency, giving 17 body instructions for a successful push and 11 for a funded overflow. Six execute on insufficiency, followed by the ten-word, 40-byte OOG publisher, for 16 dynamic RV64 instructions on a first-instruction OOG. An isolated normal PUSH1 executed 26 instructions, including the nine-word normal publisher. The nonempty PUSH1-only image is 76n + 116 bytes at EOF and four bytes larger with STOP, up from 44n + 76 at EOF. A single PUSH1 image grows from 120 to 192 bytes, and 47 PUSH1s at EOF grow from 2,144 to 3,688 bytes. Mixed images with all four publishers have entries at body-end offsets 0, 36, 76 and 116 and a 156-byte tail. STOP and empty EOF alone retain their nine-word normal tail.
+
+| Production PUSH1 count | EOF bytes | STOP bytes | Observation |
+|---:|---:|---:|---|
+| 13,795 | 1,048,536 | 1,048,540 | Layout accepted, first OOG executed for both images |
+| 13,796 | 1,048,612 | 1,048,616 | Assembled, image overlaps exit slot |
+| 13,797 | — | — | First OOG JAL exceeds assembler reach at 1,048,628 / 1,048,632 bytes |
+
+The 1,048,572-byte code reservation limits production to 13,795 PUSH1s with either ending. The Phase 1 limit was 23,829. The metered layout uses four labels per PUSH1 plus three publisher labels and one more for explicit STOP. At the accepted boundary the totals are 55,183 and 55,184, below the 100,000-label limit. The production POP 49,999/50,000 label and DUP1 16,382/16,383 image pairs still straddle their respective limits. The historical research probe preserves its original unmetered layouts and independently exercises assembler limits.
+
+The focused GREEN commands and results were as follows.
+
+| Command | Result |
+|---|---|
+| `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas` | 9 passed |
+| `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas -- --show-output` | 9 passed, raw rerun printed |
+| `cargo test --frozen -p ferreth-compiler --test rv64_frame_gas` | 5 passed |
+| `cargo test --frozen -p ferreth-compiler --test rv64_push1_program` | 23 passed |
+| `cargo test --frozen -p ferreth-compiler --test rv64_final_image` | 9 passed |
+| `cargo test --frozen -p ferreth-compiler --lib capacity -- --ignored --nocapture --test-threads=1` | 2 passed |
+| `cargo test --frozen -p ferreth-linking-spike --test capacity_probe -- --ignored --nocapture --test-threads=1` | 1 passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --frozen --workspace --all-targets -- -D warnings` | Passed |
+| `cargo test --frozen --workspace --no-fail-fast` | 238 passed, zero failed, three opt-in probes ignored |
+| `git diff --check` | Passed |
+
+The first workspace runs after implementing the charge exposed stale Phase 1 image widths, publisher inventories and instruction-count expectations, including in the benchmark and mixed research comparison. The revised tests derive those expectations from the fixed fragment widths and executed paths. This increment covers PUSH1 charging, STOP/EOF and the shared exceptional publication path. POP, DUP1, ADD, SUB and reachable GAS remain future work. The next gate is human review of the Phase 2 diff.
 
 ## Phase 3 — existing stack and arithmetic operations
 

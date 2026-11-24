@@ -26,22 +26,20 @@ pub(crate) enum PublisherRole {
     Normal,
     Underflow,
     Overflow,
+    OutOfGas,
 }
 
 impl PublisherRole {
     pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "normal_exit",
-            Self::Underflow => "binary_stack_underflow_exit",
-            Self::Overflow => "push1_stack_overflow_exit",
-        }
+        self.publisher().label()
     }
 
-    fn publisher(self) -> Publisher {
+    const fn publisher(self) -> Publisher {
         match self {
             Self::Normal => Publisher::Normal,
             Self::Underflow => Publisher::Underflow,
             Self::Overflow => Publisher::Overflow,
+            Self::OutOfGas => Publisher::OutOfGas,
         }
     }
 }
@@ -275,24 +273,21 @@ fn verified_program(
 
     verify_declared_transfers(image.bytes(), normal_pc, &declarations)
         .map_err(verification_error)?;
-    let symbolic_layout = if publishers == vec![PublisherRole::Normal] {
-        PublisherLayout::Symbolic
-    } else if publishers == vec![PublisherRole::Normal, PublisherRole::Underflow] {
-        PublisherLayout::SymbolicNormalUnderflow
-    } else if publishers == vec![PublisherRole::Normal, PublisherRole::Overflow] {
-        PublisherLayout::SymbolicNormalOverflow
-    } else if publishers
-        == vec![
-            PublisherRole::Normal,
-            PublisherRole::Underflow,
-            PublisherRole::Overflow,
-        ]
-    {
-        PublisherLayout::SymbolicNormalUnderflowOverflow
-    } else {
-        return Err(verification_error(
-            "invalid symbolic publisher inventory".to_owned(),
-        ));
+    use PublisherRole::{Normal, OutOfGas, Overflow, Underflow};
+    let symbolic_layout = match publishers {
+        [Normal] => PublisherLayout::Symbolic,
+        [Normal, Underflow] => PublisherLayout::SymbolicNormalUnderflow,
+        [Normal, Overflow] => PublisherLayout::SymbolicNormalOverflow,
+        [Normal, Underflow, Overflow] => PublisherLayout::SymbolicNormalUnderflowOverflow,
+        [Normal, Overflow, OutOfGas] => PublisherLayout::SymbolicNormalOverflowOutOfGas,
+        [Normal, Underflow, Overflow, OutOfGas] => {
+            PublisherLayout::SymbolicNormalUnderflowOverflowOutOfGas
+        }
+        _ => {
+            return Err(verification_error(
+                "invalid symbolic publisher inventory".to_owned(),
+            ))
+        }
     };
     verify_final_image(
         image.bytes(),

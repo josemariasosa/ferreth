@@ -11,6 +11,7 @@ const JAL: u32 = 0x6f;
 const ZERO: u32 = 0;
 const RA: u32 = 1;
 const T0: u32 = 5;
+const T2: u32 = 7;
 const S0: u32 = 8;
 const S1: u32 = 9;
 const BLTU: u32 = 6;
@@ -21,7 +22,9 @@ const LEAF_RETURN: u32 = 0x0000_8067; // jalr zero, 0(ra)
 
 #[derive(Clone, Copy)]
 pub(crate) enum Fragment {
+    #[cfg(test)]
     Push1,
+    MeteredPush1,
     Pop,
     Dup1,
     #[allow(
@@ -131,6 +134,8 @@ pub(crate) enum PublisherLayout {
     SymbolicNormalOverflow,
     SymbolicNormalUnderflow,
     SymbolicNormalUnderflowOverflow,
+    SymbolicNormalOverflowOutOfGas,
+    SymbolicNormalUnderflowOverflowOutOfGas,
     #[allow(
         dead_code,
         reason = "constructed only by the test-only legacy linker oracles"
@@ -151,24 +156,27 @@ pub(crate) fn verify_final_image(
     layout: PublisherLayout,
     publisher_pcs: &[u64],
 ) -> Result<(), String> {
-    let (normal, overflow, underflow) = match (layout, publisher_pcs) {
-        (PublisherLayout::PushOnly, &[normal, overflow]) => (normal, Some(overflow), None),
-        (PublisherLayout::Symbolic, &[normal]) => (normal, None, None),
-        (PublisherLayout::SymbolicNormalOverflow, &[normal, overflow]) => {
-            (normal, Some(overflow), None)
+    let (normal, overflow, underflow, oog) = match (layout, publisher_pcs) {
+        (PublisherLayout::PushOnly, &[normal, overflow])
+        | (PublisherLayout::SymbolicNormalOverflow, &[normal, overflow]) => {
+            (normal, Some(overflow), None, None)
         }
-        (PublisherLayout::SymbolicNormalUnderflow, &[normal, underflow]) => {
-            (normal, None, Some(underflow))
+        (PublisherLayout::Symbolic, &[normal]) => (normal, None, None, None),
+        (PublisherLayout::IsolatedArithmetic, &[normal, underflow])
+        | (PublisherLayout::SymbolicNormalUnderflow, &[normal, underflow]) => {
+            (normal, None, Some(underflow), None)
         }
-        (PublisherLayout::SymbolicNormalUnderflowOverflow, &[normal, underflow, overflow]) => {
-            (normal, Some(overflow), Some(underflow))
+        (PublisherLayout::SymbolicNormalUnderflowOverflow, &[normal, underflow, overflow])
+        | (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
+            (normal, Some(overflow), Some(underflow), None)
         }
-        (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
-            (normal, Some(overflow), Some(underflow))
+        (PublisherLayout::SymbolicNormalOverflowOutOfGas, &[normal, overflow, oog]) => {
+            (normal, Some(overflow), None, Some(oog))
         }
-        (PublisherLayout::IsolatedArithmetic, &[normal, underflow]) => {
-            (normal, None, Some(underflow))
-        }
+        (
+            PublisherLayout::SymbolicNormalUnderflowOverflowOutOfGas,
+            &[normal, underflow, overflow, oog],
+        ) => (normal, Some(overflow), Some(underflow), Some(oog)),
         _ => return Err("incorrect publisher count for guest layout".to_owned()),
     };
     let image = Image {
@@ -177,19 +185,19 @@ pub(crate) fn verify_final_image(
     };
     let mut pc = ENTRY_PC;
     for fragment in fragments {
-        pc = fragment.verify(&image, pc, normal, overflow, underflow)?;
+        pc = fragment.verify(&image, pc, normal, overflow, underflow, oog)?;
     }
     let underflow = underflow.map(|entry| (entry, Publisher::Underflow));
     let overflow = overflow.map(|entry| (entry, Publisher::Overflow));
-    let exceptional = match layout {
-        PublisherLayout::Symbolic
-        | PublisherLayout::SymbolicNormalOverflow
-        | PublisherLayout::SymbolicNormalUnderflow
-        | PublisherLayout::SymbolicNormalUnderflowOverflow => [underflow, overflow],
-        _ => [overflow, underflow],
+    let exceptional = if matches!(layout, PublisherLayout::Mixed) {
+        [overflow, underflow]
+    } else {
+        [underflow, overflow]
     };
-    for (entry, publisher) in
-        std::iter::once((normal, Publisher::Normal)).chain(exceptional.into_iter().flatten())
+    let oog = oog.map(|entry| (entry, Publisher::OutOfGas));
+    for (entry, publisher) in std::iter::once((normal, Publisher::Normal))
+        .chain(exceptional.into_iter().flatten())
+        .chain(oog)
     {
         if entry != pc {
             return Err(format!(
@@ -308,11 +316,14 @@ impl Fragment {
         normal: u64,
         overflow: Option<u64>,
         underflow: Option<u64>,
+        oog: Option<u64>,
     ) -> Result<u64, String> {
         // Word indices come from the opcode generators. ADD/SUB each embed a
         // 34-word leaf core after the nine-word wrapper.
         let words = match self {
+            #[cfg(test)]
             Self::Push1 => 11,
+            Self::MeteredPush1 => 19,
             Self::Pop => 4,
             Self::Dup1 => 16,
             Self::Arithmetic | Self::SymbolicArithmetic(_) => 9 + 34,
@@ -322,6 +333,24 @@ impl Fragment {
         let overflow = || overflow.ok_or("fragment requires an overflow publisher");
         let underflow = || underflow.ok_or("fragment requires an underflow publisher");
         match self {
+            Self::MeteredPush1 => image.verify_block(
+                start,
+                words,
+                &[
+                    Site::fixed(0, 0x8004_0313), // addi t1, s0, -2048
+                    Site::fixed(1, 0x8003_0313), // addi t1, t1, -2048
+                    Site::fixed(2, 0x0203_3283), // ld t0, 32(t1)
+                    Site::fixed(3, 0x0030_0393), // addi t2, zero, 3
+                    Site::branch(4, BGEU, T0, T2, pc_at_word(start, 6)?),
+                    Site::jal(5, ZERO, oog.ok_or("fragment requires an OOG publisher")?),
+                    Site::fixed(6, 0x4072_82b3), // sub t0, t0, t2
+                    Site::fixed(7, 0x0253_3023), // sd t0, 32(t1)
+                    Site::branch(10, BGEU, S1, T0, pc_at_word(start, 18)?),
+                    Site::jal(17, ZERO, next),
+                    Site::jal(18, ZERO, overflow()?),
+                ],
+            ),
+            #[cfg(test)]
             Self::Push1 => image.verify_block(
                 start,
                 words,
@@ -400,6 +429,7 @@ enum Publisher {
     Normal,
     Overflow,
     Underflow,
+    OutOfGas,
 }
 
 impl Publisher {
@@ -416,17 +446,13 @@ impl Publisher {
                 0x0053_3023,
                 0xffc3_0067,
             ],
-            Self::Overflow => &[
-                0x0010_0293,
-                0x0053_3423,
-                0x0203_3023,
-                0x0203_3423,
-                0x0020_0293,
-                0x0053_3023,
-                0xffc3_0067,
-            ],
-            Self::Underflow => &[
-                0x0020_0293,
+            Self::Overflow | Self::Underflow | Self::OutOfGas => &[
+                match self {
+                    Self::Overflow => 0x0010_0293,
+                    Self::Underflow => 0x0020_0293,
+                    Self::OutOfGas => 0x0030_0293,
+                    Self::Normal => unreachable!(),
+                },
                 0x0053_3423,
                 0x0203_3023,
                 0x0203_3423,

@@ -33,6 +33,8 @@ use publisher::Publisher;
 pub const PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE: u64 = 1;
 /// Provisional guest exception code for an EVM binary-operation underflow.
 pub const PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE: u64 = 2;
+/// ADR-002 guest exception code for insufficient frame gas.
+pub const OUT_OF_GAS_EXCEPTION_CODE: u64 = 3;
 
 /// A linked RV64 program made from the supported guest operations.
 #[derive(Debug, Clone, PartialEq, Eq)]

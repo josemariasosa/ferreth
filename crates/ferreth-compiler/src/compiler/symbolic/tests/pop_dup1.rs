@@ -1,5 +1,5 @@
 use super::*;
-use crate::rv64::memory::NATIVE_STACK_REGION;
+use crate::rv64::{guest::write_evm_word, memory::NATIVE_STACK_REGION};
 
 const POP: u8 = 0x50;
 const DUP1: u8 = 0x80;
@@ -16,7 +16,7 @@ fn observe_stack_ops(
     code: u64,
     fault: Option<FaultPath>,
 ) -> Observation {
-    observe_guest(program, initial, publisher, code, fault, &[])
+    observe_guest(program, initial, publisher, code, fault, &[], 0)
 }
 
 pub(super) fn observe_guest(
@@ -26,13 +26,14 @@ pub(super) fn observe_guest(
     code: u64,
     fault: Option<FaultPath>,
     calls: &[(u64, usize)],
+    limit: u64,
 ) -> Observation {
     let mut executor = RvemuExecutor::new().unwrap();
     executor.load_code(program.machine_code()).unwrap();
     executor
         .write_memory(program.exit_pc(), &0x0010_0073_u32.to_le_bytes())
         .unwrap();
-    initialize_guest_state(&mut executor, 0).unwrap();
+    initialize_guest_state(&mut executor, limit).unwrap();
     for (slot, &word) in initial.iter().enumerate() {
         write_evm_word(&mut executor, slot, word).unwrap();
     }
@@ -132,7 +133,7 @@ pub(super) fn observe_guest(
         };
         let before = read_stack_allocation(&mut executor);
         // Step only the failing opcode, with its expected instruction PCs and
-        // opcode fields. The executed sequence contains no loads or stores.
+        // opcode fields, then check the full stack allocation is unchanged.
         for (i, &(offset, opcode)) in path.iter().enumerate() {
             let pc = start + offset;
             let next = path
@@ -166,7 +167,7 @@ pub(super) fn observe_guest(
     assert_eq!(body.exit_pc, publisher);
     let words = if code == 0 { 9 } else { 10 };
     let (termination, trace) = observe_publication(&mut executor, program, publisher, words);
-    let guest = read_guest_result(&mut executor, &termination, 0).unwrap();
+    let guest = read_guest_result(&mut executor, &termination, limit).unwrap();
     for (register, value) in reserved {
         assert_eq!(executor.read_register(register), value, "{register:?}");
     }
@@ -207,36 +208,51 @@ fn assert_parity(
         [normal, normal + 36, normal + 76]
     );
     assert_eq!(legacy.machine_code().len() as u64, normal - ENTRY_PC + 116);
-    let has_overflow = input.iter().any(|&byte| byte != POP);
-    let candidate_publishers = if has_overflow {
-        vec![normal, normal + 36, normal + 76]
-    } else {
-        vec![normal, normal + 36]
-    };
-    assert_eq!(candidate.termination_entry_pcs(), candidate_publishers);
+    let pushes = legacy_push_offsets(input);
+    let metered_normal = normal + 32 * pushes.len() as u64;
+    let has_overflow = decode_detailed(input).unwrap().iter().any(|op| {
+        matches!(
+            op,
+            DecodedInstruction::Dup1 { .. } | DecodedInstruction::Push { .. }
+        )
+    });
+    let mut publishers = vec![metered_normal, metered_normal + 36];
+    if has_overflow {
+        publishers.push(metered_normal + 76);
+    }
+    if !pushes.is_empty() {
+        publishers.push(metered_normal + 116);
+    }
+    assert_eq!(candidate.termination_entry_pcs(), publishers);
     assert_eq!(
         candidate.machine_code().len() as u64,
-        normal - ENTRY_PC + if has_overflow { 116 } else { 76 }
-    );
-    println!(
-        "input={input:02x?} initial_depth={} candidate/legacy publisher PCs={:x?}/{:x?}",
-        initial.len(),
-        candidate_publishers,
-        legacy.termination_entry_pcs()
+        publishers.last().unwrap() - ENTRY_PC + 40
     );
 
     let (candidate_publisher, legacy_publisher) = match code {
-        0 => (normal, normal),
-        1 => (normal + 76, normal + 36),
-        2 => (normal + 36, normal + 76),
+        0 => (metered_normal, normal),
+        1 => (metered_normal + 76, normal + 36),
+        2 => (metered_normal + 36, normal + 76),
         _ => unreachable!("unexpected exception code"),
     };
-    let actual = observe_stack_ops(&candidate, initial, candidate_publisher, code, fault);
+    let executed = pushes
+        .iter()
+        .filter(|&&at| fault.is_none_or(|(site, _)| at < site))
+        .count() as u64;
+    let metered_fault = fault.map(|(site, path)| (site + 32 * executed, path));
+    let actual = observe_guest(
+        &candidate,
+        initial,
+        candidate_publisher,
+        code,
+        metered_fault,
+        &[],
+        3 * executed,
+    );
     let reference = observe_stack_ops(&legacy, initial, legacy_publisher, code, fault);
-    assert_guest_result(&actual, expected, code, body_words);
+    assert_guest_result(&actual, expected, code, body_words + 7 * executed);
     assert_guest_result(&reference, expected, code, body_words);
-    assert_eq!(actual.guest, reference.guest);
-    assert_eq!(actual.trace, reference.trace);
+    assert_eq!(actual.guest.gas_limit(), 3 * executed);
 }
 
 #[test]
