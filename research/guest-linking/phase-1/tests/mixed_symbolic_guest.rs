@@ -435,27 +435,29 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
         assert_eq!(pc, expected_pc, "{name} publisher PC");
         assert!(sites.insert(pc), "duplicate publisher site for {name}");
         let prefix = [0x8004_0313_u32, 0x8003_0313, 0x0093_3823];
-        let suffix: &[u32] = match name {
-            NORMAL => &[0x0003_3423, 0x0010_0293, 0x0053_3023, 0xffc3_0067],
-            OVERFLOW => &[
-                0x0010_0293,
-                0x0053_3423,
-                0x0020_0293,
-                0x0053_3023,
-                0xffc3_0067,
-            ],
-            UNDERFLOW => &[
-                0x0020_0293,
-                0x0053_3423,
-                0x0020_0293,
-                0x0053_3023,
-                0xffc3_0067,
-            ],
+        let code_words: &[u32] = match name {
+            NORMAL => &[0x0003_3423],
+            OVERFLOW => &[0x0010_0293, 0x0053_3423],
+            UNDERFLOW => &[0x0020_0293, 0x0053_3423],
             _ => unreachable!(),
+        };
+        // The historical experiment publishes the ADR-001 prefix. Production
+        // adds the two ADR-002 gas instructions immediately before status setup.
+        let gas_words: &[u32] = match (experimental, name) {
+            (true, _) => &[],
+            (false, NORMAL) => &[0x0203_3283, 0x0253_3423],
+            (false, _) => &[0x0203_3023, 0x0203_3423],
+        };
+        let status = if name == NORMAL {
+            0x0010_0293
+        } else {
+            0x0020_0293
         };
         let words: Vec<_> = prefix
             .iter()
-            .chain(suffix)
+            .chain(code_words)
+            .chain(gas_words)
+            .chain(&[status, 0x0053_3023, 0xffc3_0067])
             .flat_map(|word| word.to_le_bytes())
             .collect();
         expected_pc += words.len() as u64;
@@ -503,6 +505,7 @@ fn stack_pointer(depth: usize) -> u64 {
 fn execute(
     code: &[u8],
     layout: &Layout,
+    publisher_count: u64,
     initial: &[Word],
     expected: &[Word],
     fault: Option<(usize, usize)>,
@@ -514,7 +517,7 @@ fn execute(
     executor
         .write_memory(EXIT_PC, &0x0010_0073_u32.to_le_bytes())
         .unwrap();
-    initialize_guest_state(&mut executor).unwrap();
+    initialize_guest_state(&mut executor, 0).unwrap();
     for (index, limbs) in initial.iter().enumerate() {
         let bytes = limbs.map(u64::to_le_bytes);
         executor
@@ -522,7 +525,7 @@ fn execute(
             .unwrap();
     }
     let initial_s1 = stack_pointer(initial.len());
-    let running = GuestMetadata::new(Running, 0, initial_s1);
+    let running = GuestMetadata::new(Running, 0, initial_s1, 0, 0, 0);
     executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, initial_s1);
     executor
         .write_memory(METADATA_REGION.start(), &running.encode())
@@ -608,14 +611,16 @@ fn execute(
     } else {
         Normal
     };
-    let terminal = GuestMetadata::new(status, exception_code as u64, final_s1);
-    let publisher_count = if fault.is_some() { 8 } else { 7 };
+    let terminal = GuestMetadata::new(status, exception_code as u64, final_s1, 0, 0, 0);
     let status_store = publisher + (publisher_count - 2) * 4;
     for (boundary, expected_metadata) in [
-        (publisher + 12, GuestMetadata::new(Running, 0, final_s1)),
+        (
+            publisher + 12,
+            GuestMetadata::new(Running, 0, final_s1, 0, 0, 0),
+        ),
         (
             status_store,
-            GuestMetadata::new(Running, exception_code as u64, final_s1),
+            GuestMetadata::new(Running, exception_code as u64, final_s1, 0, 0, 0),
         ),
         (status_store + 4, terminal),
     ] {
@@ -628,7 +633,7 @@ fn execute(
     }
     let exit = executor.execute(pc, EXIT_PC, 1).unwrap();
     assert_eq!(exit.executed_instructions, 1);
-    let result = read_guest_result(&mut executor, &exit).unwrap();
+    let result = read_guest_result(&mut executor, &exit, 0).unwrap();
     assert_eq!(result.metadata().metadata(), terminal);
     assert_eq!(result.stack_depth(), expected.len() as u64);
     assert!(result
@@ -682,7 +687,15 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
 
     println!("symbolic:");
     let symbolic_layout = check_layout(&symbolic, &ops, true);
-    let symbolic_counts = execute(symbolic.bytes(), &symbolic_layout, initial, expected, fault);
+    let historical_words = if fault.is_some() { 8 } else { 7 };
+    let symbolic_counts = execute(
+        symbolic.bytes(),
+        &symbolic_layout,
+        historical_words,
+        initial,
+        expected,
+        fault,
+    );
     println!("production:");
     let production_layout = check_layout(&production, &ops, false);
     let [normal, overflow, underflow] = production_layout.publishers;
@@ -694,11 +707,15 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
     let production_counts = execute(
         compiled.machine_code(),
         &production_layout,
+        historical_words + 2,
         initial,
         expected,
         fault,
     );
-    assert_eq!(symbolic_counts, production_counts);
+    assert_eq!(
+        production_counts,
+        (symbolic_counts.0, symbolic_counts.1 + 2)
+    );
 
     let same_bytes = symbolic.bytes() == compiled.machine_code();
     println!(

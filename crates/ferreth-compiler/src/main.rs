@@ -125,14 +125,31 @@ fn execute(args: &[String]) -> ExitCode {
                 }
             }
         }
-        [option, bytecode] if option == "--bytecode" => {
+        [option, bytecode, budget @ ..] if option == "--bytecode" => {
+            let gas_limit = match budget {
+                [] => u64::MAX,
+                [flag, value] if flag == "--gas" => {
+                    let Some(gas_limit) = parse_u64(value) else {
+                        return usage_failure();
+                    };
+                    gas_limit
+                }
+                _ => return usage_failure(),
+            };
             let Some(bytecode) = parse_bytecode(bytecode) else {
                 return usage_failure();
             };
-            match (decode(&bytecode), execute_guest_evm_bytecode(&bytecode)) {
+            match (
+                decode(&bytecode),
+                execute_guest_evm_bytecode(&bytecode, gas_limit),
+            ) {
                 (Ok(instructions), Ok(result)) => {
                     println!("Decoded instructions: {instructions:?}");
                     println!("Final status: {:?}", result.guest_result().status());
+                    println!(
+                        "Remaining frame gas: {}",
+                        result.guest_result().remaining_gas()
+                    );
                     println!("Final stack: {:?}", result.guest_result().stack());
                     println!(
                         "Dynamic RV64 instruction count: {}",
@@ -228,6 +245,6 @@ fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn usage_failure() -> ExitCode {
-    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --bytecode HEX\n  ferreth-compiler decode --bytecode HEX");
+    eprintln!("Usage:\n  ferreth-compiler translate --op ADD|SUB\n  ferreth-compiler translate --op PUSH1 --value 0..255\n  ferreth-compiler execute --op ADD|SUB --a U256 --b U256\n  ferreth-compiler execute --op POP|DUP1\n  ferreth-compiler execute --op PUSH1 --value 0..255\n  ferreth-compiler execute --bytecode HEX [--gas U64]\n  ferreth-compiler decode --bytecode HEX");
     ExitCode::FAILURE
 }

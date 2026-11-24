@@ -29,7 +29,8 @@ fn dup1_executes_in_supported_bytecode_sequences() {
     ];
 
     for (bytecode, expected_stack) in cases {
-        let result = execute_guest_evm_bytecode(bytecode).expect("execute linked DUP1 bytecode");
+        let result =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("execute linked DUP1 bytecode");
         assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(result.guest_result().exception_code(), 0);
         assert_eq!(result.guest_result().stack(), expected_stack);
@@ -42,7 +43,8 @@ fn dup1_executes_in_supported_bytecode_sequences() {
 
 #[test]
 fn dup1_underflow_publishes_exception_without_mutating_the_stack() {
-    let result = execute_guest_evm_bytecode(&[0x80]).expect("DUP1 underflow is guest-published");
+    let result =
+        execute_guest_evm_bytecode(&[0x80], u64::MAX).expect("DUP1 underflow is guest-published");
     assert_eq!(
         result.guest_result().status(),
         GuestExecutionStatus::GuestException
@@ -86,7 +88,7 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
     executor
         .load_code(compiled.machine_code())
         .expect("load generated code");
-    initialize_guest_state(&mut executor).expect("initialize guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize guest state");
 
     let full_stack = (0..EVM_STACK_CAPACITY)
         .map(|index| U256::from(index + 1))
@@ -117,7 +119,7 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
         .expect("read sentinel after the stack region");
     assert_eq!(unchanged_sentinel, next_slot_sentinel);
 
-    let result = read_guest_result(&mut executor, &report).expect("validate overflow metadata");
+    let result = read_guest_result(&mut executor, &report, 0).expect("validate overflow metadata");
     assert_eq!(result.status(), GuestExecutionStatus::GuestException);
     assert_eq!(
         result.exception_code(),
@@ -130,7 +132,8 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
 #[test]
 fn rc_ro_and_generator_share_the_linked_rv64_behavior() {
     let isolated = execute_guest_dup1().expect("execute isolated DUP1");
-    let compiled = execute_guest_evm_bytecode(&[0x60, 0x00, 0x80]).expect("execute RC DUP1");
+    let compiled =
+        execute_guest_evm_bytecode(&[0x60, 0x00, 0x80], u64::MAX).expect("execute RC DUP1");
     assert_eq!(
         isolated.guest_result().status(),
         GuestExecutionStatus::Normal

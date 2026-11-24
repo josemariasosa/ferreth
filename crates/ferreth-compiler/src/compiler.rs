@@ -72,9 +72,9 @@ impl CompiledRv64Program {
 
     /// Number of resident exceptional publisher words in the compiled image.
     ///
-    /// Images contain 0 words with neither publisher, 8 with Underflow or
-    /// Overflow alone, and 16 with both. During exceptional execution only
-    /// the selected publisher runs, for eight dynamic instructions.
+    /// Images contain 0 words with neither publisher, 10 with Underflow or
+    /// Overflow alone, and 20 with both. During exceptional execution only
+    /// the selected publisher runs, for ten dynamic instructions.
     pub const fn exceptional_termination_instructions(&self) -> u64 {
         self.exceptional_termination_instructions
     }

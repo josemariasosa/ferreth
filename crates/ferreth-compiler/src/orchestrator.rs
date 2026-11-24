@@ -178,7 +178,7 @@ impl From<CompileError> for OrchestratorError {
 /// is the linked program actually loaded into rvemu, not a separate display
 /// encoding of the opcode generator.
 pub fn execute_guest_push1(immediate: u8) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_guest_evm_bytecode(&[0x60, immediate])
+    execute_guest_evm_bytecode(&[0x60, immediate], u64::MAX)
 }
 
 /// Executes one isolated EVM `ADD` through the RV64 guest ABI.
@@ -203,6 +203,7 @@ pub fn execute_guest_add_with_initial_stack(
         linked.machine_code().to_vec(),
         linked.termination_entry_pcs(),
         initial_stack,
+        u64::MAX,
     )
 }
 
@@ -227,6 +228,7 @@ pub fn execute_guest_sub_with_initial_stack(
         linked.machine_code().to_vec(),
         linked.termination_entry_pcs(),
         initial_stack,
+        u64::MAX,
     )
 }
 
@@ -250,7 +252,7 @@ pub fn execute_guest_pop() -> Result<OrchestratorResult, OrchestratorError> {
 pub fn execute_guest_pop_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_linked_program(compile_evm_bytecode(&[0x50])?, initial_stack)
+    execute_linked_program(compile_evm_bytecode(&[0x50])?, initial_stack, u64::MAX)
 }
 
 /// Executes one isolated EVM `DUP1` through the shared compiled RV64 body.
@@ -264,17 +266,19 @@ pub fn execute_guest_dup1() -> Result<OrchestratorResult, OrchestratorError> {
 pub fn execute_guest_dup1_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_linked_program(compile_evm_bytecode(&[0x80])?, initial_stack)
+    execute_linked_program(compile_evm_bytecode(&[0x80])?, initial_stack, u64::MAX)
 }
 
 /// Decodes, compiles, and executes a supported EVM bytecode program once.
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not
 /// execute individual EVM operations.
+/// STOP and empty EOF preserve the frame budget. Positive-cost charging is pending.
 pub fn execute_guest_evm_bytecode(
     bytecode: &[u8],
+    gas_limit: u64,
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_guest_evm_bytecode_with_initial_stack(bytecode, &[])
+    execute_guest_evm_bytecode_with_initial_stack(bytecode, &[], gas_limit)
 }
 
 /// Executes supported bytecode once with a host-provided valid initial stack.
@@ -284,19 +288,22 @@ pub fn execute_guest_evm_bytecode(
 pub fn execute_guest_evm_bytecode_with_initial_stack(
     bytecode: &[u8],
     initial_stack: &[U256],
+    gas_limit: u64,
 ) -> Result<OrchestratorResult, OrchestratorError> {
-    execute_linked_program(compile_evm_bytecode(bytecode)?, initial_stack)
+    execute_linked_program(compile_evm_bytecode(bytecode)?, initial_stack, gas_limit)
 }
 
 fn execute_linked_program(
     linked: CompiledRv64Program,
     initial_stack: &[U256],
+    gas_limit: u64,
 ) -> Result<OrchestratorResult, OrchestratorError> {
     execute_raw_program(
         linked.assembly().to_owned(),
         linked.machine_code().to_vec(),
         linked.termination_entry_pcs(),
         initial_stack,
+        gas_limit,
     )
 }
 
@@ -305,6 +312,7 @@ fn execute_raw_program(
     machine_code: Vec<u8>,
     termination_entry_pcs: &[u64],
     initial_stack: &[U256],
+    gas_limit: u64,
 ) -> Result<OrchestratorResult, OrchestratorError> {
     if initial_stack.len() > EVM_STACK_CAPACITY as usize {
         return Err(OrchestratorError::InitialStackTooDeep {
@@ -318,7 +326,7 @@ fn execute_raw_program(
     // an executor fault. A valid run is instead stopped by `execute` before
     // this instruction is fetched.
     executor.write_memory(EXIT_PC, &EBREAK.to_le_bytes())?;
-    initialize_guest_state(&mut executor)?;
+    initialize_guest_state(&mut executor, gas_limit)?;
 
     for (slot, word) in initial_stack.iter().copied().enumerate() {
         write_evm_word(&mut executor, slot, word)?;
@@ -338,7 +346,7 @@ fn execute_raw_program(
             termination: 0,
         })?;
     let termination_report = executor.execute(body_report.exit_pc, EXIT_PC, termination_limit)?;
-    let guest_result = read_guest_result(&mut executor, &termination_report)?;
+    let guest_result = read_guest_result(&mut executor, &termination_report, gas_limit)?;
     let total = body_report
         .executed_instructions
         .checked_add(termination_report.executed_instructions)
@@ -494,7 +502,7 @@ fn arithmetic_normal_exit_assembly(label: &str) -> String {
         \x20   addi t1, s0, -2048\n\
         \x20   addi t1, t1, -2048\n\
         \x20   sd s1, 16(t1)\n\
-        \x20   sd zero, 8(t1)\n\
+        \x20   sd zero, 8(t1)\n    ld t0, 32(t1)\n    sd t0, 40(t1)\n\
         \x20   addi t0, zero, 1\n\
         \x20   sd t0, 0(t1)\n\
         \x20   jalr zero, -4(t1)\n"
@@ -509,7 +517,7 @@ fn arithmetic_underflow_exit_assembly(label: &str) -> String {
          \x20   addi t1, t1, -2048\n\
          \x20   sd s1, 16(t1)\n\
          \x20   addi t0, zero, {PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE}\n\
-         \x20   sd t0, 8(t1)\n\
+         \x20   sd t0, 8(t1)\n    sd zero, 32(t1)\n    sd zero, 40(t1)\n\
          \x20   addi t0, zero, 2\n\
          \x20   sd t0, 0(t1)\n\
         \x20   jalr zero, -4(t1)\n"
@@ -568,8 +576,9 @@ mod tests {
         let initial_stack = (0..EVM_STACK_CAPACITY)
             .map(|slot| U256::from(slot + 1))
             .collect::<Vec<_>>();
-        let result = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &initial_stack)
-            .expect("full-stack PUSH1 reaches the guest exception exit");
+        let result =
+            execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &initial_stack, u64::MAX)
+                .expect("full-stack PUSH1 reaches the guest exception exit");
 
         assert_eq!(
             result.guest_result().status(),
@@ -581,15 +590,17 @@ mod tests {
         );
         assert_eq!(result.guest_result().final_s1(), EVM_STACK_REGION.end());
         assert_eq!(result.guest_result().stack(), initial_stack);
+        assert_eq!(result.guest_result().remaining_gas(), 0);
+        assert_eq!(result.guest_result().gas_used(), u64::MAX);
         assert_eq!(result.instruction_metrics().opcode_body(), 4);
-        assert_eq!(result.instruction_metrics().guest_termination(), 8);
-        assert_eq!(result.instruction_metrics().total(), 12);
+        assert_eq!(result.instruction_metrics().guest_termination(), 10);
+        assert_eq!(result.instruction_metrics().total(), 14);
     }
 
     #[test]
     fn push1_normal_execution_publishes_rv64_stack_results() {
         for immediate in [0, 5, u8::MAX] {
-            let result = execute_guest_evm_bytecode(&[0x60, immediate])
+            let result = execute_guest_evm_bytecode(&[0x60, immediate], u64::MAX)
                 .expect("PUSH1 completes through RV64");
 
             assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
@@ -600,8 +611,8 @@ mod tests {
                 EVM_STACK_REGION.start() + 32
             );
             assert_eq!(result.instruction_metrics().opcode_body(), 10);
-            assert_eq!(result.instruction_metrics().guest_termination(), 7);
-            assert_eq!(result.instruction_metrics().total(), 17);
+            assert_eq!(result.instruction_metrics().guest_termination(), 9);
+            assert_eq!(result.instruction_metrics().total(), 19);
         }
     }
 
@@ -630,7 +641,7 @@ mod tests {
             );
             assert_eq!(
                 compiled.termination_entry_pcs(),
-                [ENTRY_PC + 172, ENTRY_PC + 200]
+                [ENTRY_PC + 172, ENTRY_PC + 208]
             );
             assert_ne!(compiled.assembly(), legacy.assembly);
             assert_eq!(isolated.machine_code(), compiled.machine_code());

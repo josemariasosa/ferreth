@@ -31,7 +31,7 @@ fn pop_programs_update_only_the_live_stack_extent() {
         (&[0x60, 0x05, 0x50, 0x00][..], vec![]),
     ];
     for (bytecode, expected_stack) in cases {
-        let result = execute_guest_evm_bytecode(bytecode).expect("POP program executes");
+        let result = execute_guest_evm_bytecode(bytecode, u64::MAX).expect("POP program executes");
         assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(result.guest_result().stack(), expected_stack);
         assert_eq!(
@@ -60,7 +60,8 @@ fn empty_pop_publishes_underflow_without_changing_s1_or_live_words() {
             EVM_STACK_REGION.start() + 32,
         ),
     ] {
-        let result = execute_guest_evm_bytecode(bytecode).expect("underflow is a guest result");
+        let result =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("underflow is a guest result");
         assert_eq!(
             result.guest_result().status(),
             GuestExecutionStatus::GuestException
@@ -73,15 +74,16 @@ fn empty_pop_publishes_underflow_without_changing_s1_or_live_words() {
     }
 
     let initial_stack = [U256::from(5)];
-    let result = execute_guest_evm_bytecode_with_initial_stack(&[0x50, 0x50], &initial_stack)
-        .expect("second POP underflows");
+    let result =
+        execute_guest_evm_bytecode_with_initial_stack(&[0x50, 0x50], &initial_stack, u64::MAX)
+            .expect("second POP underflows");
     assert_eq!(result.guest_result().stack(), &[] as &[U256]);
     assert_eq!(result.guest_result().final_s1(), EVM_STACK_REGION.start());
 }
 
 #[test]
 fn pop_after_stop_is_unreachable() {
-    let result = execute_guest_evm_bytecode(&[0x60, 0x05, 0x00, 0x50])
+    let result = execute_guest_evm_bytecode(&[0x60, 0x05, 0x00, 0x50], u64::MAX)
         .expect("STOP makes trailing POP unreachable");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().stack(), &[U256::from(5)]);

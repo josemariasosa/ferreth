@@ -28,9 +28,29 @@ fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publi
         );
         let prefix = [0x8004_0313_u32, 0x8003_0313, 0x0093_3823];
         let stores: &[u32] = match role {
-            Normal => &[0x0003_3423, 0x0010_0293, 0x0053_3023],
-            Underflow => &[0x0020_0293, 0x0053_3423, 0x0020_0293, 0x0053_3023],
-            Overflow => &[0x0010_0293, 0x0053_3423, 0x0020_0293, 0x0053_3023],
+            Normal => &[
+                0x0003_3423,
+                0x0203_3283,
+                0x0253_3423,
+                0x0010_0293,
+                0x0053_3023,
+            ],
+            Underflow => &[
+                0x0020_0293,
+                0x0053_3423,
+                0x0203_3023,
+                0x0203_3423,
+                0x0020_0293,
+                0x0053_3023,
+            ],
+            Overflow => &[
+                0x0010_0293,
+                0x0053_3423,
+                0x0203_3023,
+                0x0203_3423,
+                0x0020_0293,
+                0x0053_3023,
+            ],
         };
         let end = offset + 4 * (prefix.len() + stores.len());
         let words: Vec<_> = code[offset..end]
@@ -56,32 +76,32 @@ fn assert_publishers(code: &[u8], pcs: &[u64], mut offset: usize, roles: &[Publi
 fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
     let bytecode = [0x60, 2];
     let push = compile_evm_bytecode(&bytecode).unwrap();
-    assert_eq!(push.termination_entry_pcs(), [ENTRY_PC + 44, ENTRY_PC + 72]);
+    assert_eq!(push.termination_entry_pcs(), [ENTRY_PC + 44, ENTRY_PC + 80]);
     assert_publishers(
         push.machine_code(),
         push.termination_entry_pcs(),
         44,
         &[Normal, Overflow],
     );
-    let executed = execute_guest_evm_bytecode(&bytecode).unwrap();
+    let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).unwrap();
     assert_eq!(executed.machine_code(), push.machine_code());
     assert_eq!(executed.assembly(), push.assembly());
-    assert_eq!(executed.instruction_metrics().total(), 17);
+    assert_eq!(executed.instruction_metrics().total(), 19);
 
     let bytecode = [0x60, 2, 0x80, 0x50, 0x60, 3, 0x01, 0x60, 7, 0x03, 0x00];
     let mixed = compile_evm_bytecode(&bytecode).unwrap();
     assert_eq!(
         mixed.termination_entry_pcs(),
-        [ENTRY_PC + 560, ENTRY_PC + 588, ENTRY_PC + 620]
+        [ENTRY_PC + 560, ENTRY_PC + 596, ENTRY_PC + 636]
     );
-    assert_eq!(mixed.machine_code().len(), 652);
+    assert_eq!(mixed.machine_code().len(), 676);
     assert_publishers(
         mixed.machine_code(),
         mixed.termination_entry_pcs(),
         560,
         &[Normal, Underflow, Overflow],
     );
-    let executed = execute_guest_evm_bytecode(&bytecode).unwrap();
+    let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).unwrap();
     assert_eq!(executed.machine_code(), mixed.machine_code());
     assert_eq!(executed.assembly(), mixed.assembly());
     assert_eq!(
@@ -90,8 +110,8 @@ fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
     );
     assert_eq!(executed.guest_result().stack(), &[U256::from(2)]);
     assert_eq!(executed.instruction_metrics().opcode_body(), 132);
-    assert_eq!(executed.instruction_metrics().guest_termination(), 7);
-    assert_eq!(executed.instruction_metrics().total(), 139);
+    assert_eq!(executed.instruction_metrics().guest_termination(), 9);
+    assert_eq!(executed.instruction_metrics().total(), 141);
 }
 
 #[test]
@@ -109,7 +129,7 @@ fn verified_isolated_arithmetic_keeps_two_publishers_for_both_paths() {
         let underflow = execute(&[]).unwrap();
         assert_eq!(normal.machine_code(), underflow.machine_code());
         assert_eq!(normal.assembly(), underflow.assembly());
-        assert_eq!(normal.machine_code().len(), 232);
+        assert_eq!(normal.machine_code().len(), 248);
         assert_eq!(normal.assembly().matches("jalr zero, -4(t1)").count(), 2);
         let compiled = compile_evm_bytecode(&[opcode]).unwrap();
         assert_publishers(
@@ -120,13 +140,13 @@ fn verified_isolated_arithmetic_keeps_two_publishers_for_both_paths() {
         );
         assert_eq!(normal.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(normal.guest_result().stack(), &[U256::from(expected)]);
-        assert_eq!(normal.instruction_metrics().total(), 49);
+        assert_eq!(normal.instruction_metrics().total(), 51);
         assert_eq!(
             underflow.guest_result().status(),
             GuestExecutionStatus::GuestException
         );
         assert_eq!(underflow.guest_result().exception_code(), 2);
-        assert_eq!(underflow.instruction_metrics().total(), 11);
+        assert_eq!(underflow.instruction_metrics().total(), 13);
     }
 }
 
@@ -159,7 +179,7 @@ fn both_publisher_fixture() -> CompiledRv64Program {
 fn publisher_check_rejects_swapped_exception_bodies_with_unchanged_pcs() {
     let compiled = both_publisher_fixture();
     let mut bytes = compiled.machine_code().to_vec();
-    let (underflow, overflow) = bytes[92..156].split_at_mut(32);
+    let (underflow, overflow) = bytes[100..180].split_at_mut(40);
     underflow.swap_with_slice(overflow);
     assert_publishers(
         &bytes,
@@ -175,7 +195,7 @@ fn publisher_check_rejects_an_incorrect_terminal_jalr() {
     let compiled = both_publisher_fixture();
     let mut bytes = compiled.machine_code().to_vec();
     // jalr zero, 0(t1) lands at metadata instead of the exit sentinel.
-    bytes[152..156].copy_from_slice(&0x0003_0067_u32.to_le_bytes());
+    bytes[176..180].copy_from_slice(&0x0003_0067_u32.to_le_bytes());
     assert_publishers(
         &bytes,
         compiled.termination_entry_pcs(),
@@ -210,4 +230,23 @@ fn publisher_check_rejects_duplicate_metadata() {
         64,
         &[Normal, Underflow, Overflow],
     );
+}
+
+#[test]
+#[should_panic(expected = "Normal publisher body")]
+fn publisher_check_rejects_omitted_gas_store() {
+    let compiled = compile_evm_bytecode(&[]).unwrap();
+    let mut bytes = compiled.machine_code().to_vec();
+    bytes[20..24].copy_from_slice(&0x0000_0013_u32.to_le_bytes());
+    assert_publishers(&bytes, compiled.termination_entry_pcs(), 0, &[Normal]);
+}
+
+#[test]
+#[should_panic(expected = "Normal publisher body")]
+fn publisher_check_rejects_status_before_gas() {
+    let compiled = compile_evm_bytecode(&[]).unwrap();
+    let mut bytes = compiled.machine_code().to_vec();
+    // Move status setup and store ahead of the load/store of remaining gas.
+    bytes[16..32].rotate_left(8);
+    assert_publishers(&bytes, compiled.termination_entry_pcs(), 0, &[Normal]);
 }

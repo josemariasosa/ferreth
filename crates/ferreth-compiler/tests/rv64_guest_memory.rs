@@ -10,7 +10,7 @@ use ferreth_compiler::rv64::{
 
 fn initialized_executor() -> RvemuExecutor {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
-    initialize_guest_state(&mut executor).expect("initialize EVM guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize EVM guest state");
     executor
 }
 

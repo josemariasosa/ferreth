@@ -110,7 +110,7 @@ fn assert_rc_matches_revm(
         )
     });
     let revm_stack = revm.stack.as_deref();
-    let guest = execute_guest_evm_bytecode(bytecode).unwrap_or_else(|error| {
+    let guest = execute_guest_evm_bytecode(bytecode, u64::MAX).unwrap_or_else(|error| {
         panic!(
             "{case_name}; bytecode=0x{}; REVM result={:?}; \
              Ferreth terminal=<compile/execution error>; REVM stack={}; \
@@ -284,7 +284,8 @@ fn directed_rc_programs_match_revm_cancun() {
 fn revm_43_dup1_empty_stack_reports_stack_overflow_not_underflow() {
     let bytecode = [0x80];
     let revm = execute_revm(&bytecode).expect("execute DUP1 underflow in REVM 43 harness");
-    let guest = execute_guest_evm_bytecode(&bytecode).expect("execute guest DUP1 underflow");
+    let guest =
+        execute_guest_evm_bytecode(&bytecode, u64::MAX).expect("execute guest DUP1 underflow");
 
     // REVM 43 currently classifies this as StackOverflow; Ferreth follows the
     // EVM stack precondition and publishes StackUnderflow.

@@ -30,19 +30,19 @@ fn assert_layout(candidate: &CompiledRv64Program, pushes: usize, stop: bool) {
     let normal = ENTRY_PC + 44 * pushes as u64 + 4 * u64::from(stop);
     let has_overflow = pushes > 0;
     let expected_publishers = if has_overflow {
-        vec![normal, normal + 28]
+        vec![normal, normal + 36]
     } else {
         vec![normal]
     };
     assert_eq!(candidate.termination_entry_pcs(), expected_publishers);
     assert_eq!(
         candidate.machine_code().len(),
-        44 * pushes + 4 * usize::from(stop) + 28 + 32 * usize::from(has_overflow)
+        44 * pushes + 4 * usize::from(stop) + 36 + 40 * usize::from(has_overflow)
     );
-    assert_eq!(candidate.normal_termination_instructions(), 7);
+    assert_eq!(candidate.normal_termination_instructions(), 9);
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        8 * u64::from(has_overflow)
+        10 * u64::from(has_overflow)
     );
     let round_trip = assemble_image(candidate.assembly()).unwrap();
     assert_eq!(round_trip.base_address(), candidate.entry_pc());
@@ -69,7 +69,7 @@ fn assert_legacy_layout(
     stop: bool,
 ) {
     let legacy_size = legacy.machine_code().len();
-    let unreachable_tail = 32 * (usize::from(stop) + usize::from(pushes == 0));
+    let unreachable_tail = 40 * (usize::from(stop) + usize::from(pushes == 0));
     assert_eq!(
         candidate.machine_code(),
         &legacy.machine_code()[..legacy_size - unreachable_tail]
@@ -121,7 +121,7 @@ fn observe(
     executor
         .write_memory(program.exit_pc(), &0x0010_0073_u32.to_le_bytes())
         .unwrap();
-    initialize_guest_state(&mut executor).unwrap();
+    initialize_guest_state(&mut executor, 0).unwrap();
     for (slot, &word) in initial.iter().enumerate() {
         write_evm_word(&mut executor, slot, word).unwrap();
     }
@@ -176,9 +176,9 @@ fn observe(
         report
     };
 
-    let words = if failing_push.is_some() { 8 } else { 7 };
+    let words = if failing_push.is_some() { 10 } else { 9 };
     let (termination, trace) = observe_publication(&mut executor, program, body.exit_pc, words);
-    let guest = read_guest_result(&mut executor, &termination).unwrap();
+    let guest = read_guest_result(&mut executor, &termination, 0).unwrap();
     assert_eq!(executor.read_register(sp), 0x1234_5670);
     assert_eq!(
         executor.read_register(IntegerRegister::EVM_STACK_BASE),
@@ -209,10 +209,10 @@ fn observe_publication(
 ) -> (ExecutionReport, Vec<[u8; GUEST_METADATA_ENCODED_SIZE]>) {
     // Check store words even when writing the initialized value makes a
     // store invisible in the byte snapshots (e.g. normal exception code 0).
-    let stores = if words == 7 {
-        [(8, 0x0093_3823), (12, 0x0003_3423), (20, 0x0053_3023)]
+    let stores = if words == 9 {
+        [(8, 0x0093_3823), (12, 0x0003_3423), (28, 0x0053_3023)]
     } else {
-        [(8, 0x0093_3823), (16, 0x0053_3423), (24, 0x0053_3023)]
+        [(8, 0x0093_3823), (16, 0x0053_3423), (32, 0x0053_3023)]
     };
     let entry_offset = (entry - program.entry_pc()) as usize;
     for (offset, expected) in stores {
@@ -275,9 +275,9 @@ fn assert_guest_result(
     let base = EVM_STACK_REGION.start();
     let s1 = base + EVM_WORD_SIZE * expected_stack.len() as u64;
     let (status, publisher_words) = if code != 0 {
-        (GuestException, 8)
+        (GuestException, 10)
     } else {
-        (Normal, 7)
+        (Normal, 9)
     };
     assert_eq!(observed.guest.status(), status);
     assert_eq!(observed.guest.exception_code(), code);
@@ -288,15 +288,15 @@ fn assert_guest_result(
 
     // Initial metadata comes from guest initialization. The wire bytes change
     // after the pointer, exception-code and status stores at their ABI steps.
-    let mut trace = vec![GuestMetadata::new(Running, 0, base).encode(); 3];
+    let mut trace = vec![GuestMetadata::new(Running, 0, base, 0, 0, 0).encode(); 3];
     trace.resize(
-        if code != 0 { 5 } else { 6 },
-        GuestMetadata::new(Running, 0, s1).encode(),
+        if code != 0 { 5 } else { 8 },
+        GuestMetadata::new(Running, 0, s1, 0, 0, 0).encode(),
     );
     if code != 0 {
-        trace.extend([GuestMetadata::new(Running, code, s1).encode(); 2]);
+        trace.extend([GuestMetadata::new(Running, code, s1, 0, 0, 0).encode(); 4]);
     }
-    trace.extend([GuestMetadata::new(status, code, s1).encode(); 2]);
+    trace.extend([GuestMetadata::new(status, code, s1, 0, 0, 0).encode(); 2]);
     assert_eq!(observed.trace, trace);
     println!("status={status:?} code={code} depth={} s1={s1:#x} publisher={:#x} RV64={body_words}+{publisher_words}={} metadata={:02x?}", expected_stack.len(), observed.body.exit_pc, body_words + publisher_words, observed.trace);
 }
@@ -313,9 +313,9 @@ fn public_publisher_inventory_counts_resident_exceptional_bodies() {
     let cases = [
         (&[][..], 0u64),
         (&[0x00][..], 0),
-        (&[0x60, 1][..], 8),
-        (&[0x50][..], 8),
-        (&[0x60, 1, 0x50][..], 16),
+        (&[0x60, 1][..], 10),
+        (&[0x50][..], 10),
+        (&[0x60, 1, 0x50][..], 20),
     ];
     for (bytecode, expected) in cases {
         let compiled = compile_evm_bytecode(bytecode).unwrap();
@@ -395,12 +395,12 @@ fn frontend_preserves_truncated_push_and_first_stop() {
 #[test]
 fn long_layouts_match_phase_one_and_take_distant_overflow() {
     let full = full_stack();
-    // Literal first JAL words, publisher PCs and counts from RF-013.
+    // RF-013 bodies: overflow PC = normal PC + 36; first JAL is at +40.
     for (pushes, stop, first_jal, displacement, normal_pc, overflow_pc, body_words) in [
-        (46, false, 0x7dc0_006f, 2012, 0x8000_07e8, 0x8000_0804, 460),
-        (46, true, 0x7e00_006f, 2016, 0x8000_07ec, 0x8000_0808, 461),
-        (47, false, 0x0090_006f, 2056, 0x8000_0814, 0x8000_0830, 470),
-        (47, true, 0x00d0_006f, 2060, 0x8000_0818, 0x8000_0834, 471),
+        (46, false, 0x7e40_006f, 2020, 0x8000_07e8, 0x8000_080c, 460),
+        (46, true, 0x7e80_006f, 2024, 0x8000_07ec, 0x8000_0810, 461),
+        (47, false, 0x0110_006f, 2064, 0x8000_0814, 0x8000_0838, 470),
+        (47, true, 0x0150_006f, 2068, 0x8000_0818, 0x8000_083c, 471),
     ] {
         let input = bytecode(&vec![2; pushes], stop);
         let candidate = compile(&input).unwrap();
@@ -697,10 +697,10 @@ fn declaration_verifier_rejects_misalignment_and_executable_bounds() {
 #[ignore = "assembles multi-megabyte sources at the ABI image boundary"]
 fn push1_capacity_boundary() {
     for (pushes, stop, size, accepted) in [
-        (23_829, false, 1_048_536, true),
-        (23_830, false, 1_048_580, false),
-        (23_829, true, 1_048_540, true),
-        (23_830, true, 1_048_584, false),
+        (23_829, false, 1_048_552, true),
+        (23_830, false, 1_048_596, false),
+        (23_829, true, 1_048_556, true),
+        (23_830, true, 1_048_600, false),
     ] {
         let fragments = make_fragments(&vec![2; pushes], stop);
         let publishers = publisher_inventory(&fragments);
@@ -820,4 +820,53 @@ fn declaration_site_must_belong_to_its_fragment() {
     assert!(
         matches!(error, CompileError::Link { description } if description.contains("outside its owning fragment"))
     );
+}
+
+#[test]
+fn normal_publisher_writes_remaining_before_status() {
+    let program = compile_evm_bytecode(&[0]).unwrap();
+    let entry = program.termination_entry_pcs()[0];
+    for limit in [7, 0] {
+        let mut executor = RvemuExecutor::new().unwrap();
+        executor.load_code(program.machine_code()).unwrap();
+        executor
+            .write_memory(program.exit_pc(), &0x0010_0073_u32.to_le_bytes())
+            .unwrap();
+        initialize_guest_state(&mut executor, limit).unwrap();
+        executor.execute(ENTRY_PC, entry, 1).unwrap();
+        let mut initial = [0; 48];
+        executor
+            .read_memory(METADATA_REGION.start(), &mut initial)
+            .unwrap();
+        let record = |status, published| {
+            GuestMetadata::new(status, 0, EVM_STACK_REGION.start(), limit, limit, published)
+                .encode()
+        };
+        assert_eq!(initial, record(GuestExecutionStatus::Running, 0));
+        executor
+            .write_memory(METADATA_REGION.start() + 40, &u64::MAX.to_le_bytes())
+            .unwrap();
+        let (exit, trace) = observe_publication(
+            &mut executor,
+            &program,
+            entry,
+            program.normal_termination_instructions(),
+        );
+        assert_eq!(trace[0], record(GuestExecutionStatus::Running, u64::MAX));
+        assert_eq!(
+            &trace[0..6],
+            &[record(GuestExecutionStatus::Running, u64::MAX); 6]
+        );
+        assert_eq!(
+            &trace[6..8],
+            &[record(GuestExecutionStatus::Running, limit); 2]
+        );
+        assert_eq!(
+            trace[trace.len() - 2],
+            record(GuestExecutionStatus::Normal, limit)
+        );
+        assert_eq!(exit.exit_pc, program.exit_pc());
+        let guest = read_guest_result(&mut executor, &exit, limit).unwrap();
+        assert_eq!(guest.remaining_gas(), limit);
+    }
 }

@@ -131,7 +131,7 @@ pub fn run_guest_benchmark() -> Result<GuestBenchmarkReport, OrchestratorError> 
             .step_by(2)
             .map(|index| u8::from_str_radix(&bytecode[index..index + 2], 16).expect("fixed hex"))
             .collect::<Vec<_>>();
-        guest_program_measurement(bytecode, execute_guest_evm_bytecode(&bytes))
+        guest_program_measurement(bytecode, execute_guest_evm_bytecode(&bytes, u64::MAX))
     })
     .collect::<Result<Vec<_>, _>>()?;
     Ok(GuestBenchmarkReport {
@@ -596,11 +596,11 @@ mod tests {
         assert_eq!(
             opcode_totals,
             vec![
-                ("PUSH1 0x05", 10, 7, 17),
-                ("ADD 0x05 0x03", 42, 7, 49),
-                ("SUB 0x05 0x03", 42, 7, 49),
-                ("POP [0x00]", 3, 7, 10),
-                ("DUP1 [0x00]", 14, 7, 21),
+                ("PUSH1 0x05", 10, 9, 19),
+                ("ADD 0x05 0x03", 42, 9, 51),
+                ("SUB 0x05 0x03", 42, 9, 51),
+                ("POP [0x00]", 3, 9, 12),
+                ("DUP1 [0x00]", 14, 9, 23),
             ]
         );
         let program_totals = first
@@ -611,16 +611,16 @@ mod tests {
         assert_eq!(
             program_totals,
             vec![
-                ("6005", 17),
-                ("60056003", 27),
-                ("6005600301", 69),
-                ("6005600303", 69),
-                ("600560030100", 70),
-                ("600550", 20),
-                ("600580", 31),
-                ("60058001", 73),
-                ("6005600350", 30),
-                ("60058050", 34),
+                ("6005", 19),
+                ("60056003", 29),
+                ("6005600301", 71),
+                ("6005600303", 71),
+                ("600560030100", 72),
+                ("600550", 22),
+                ("600580", 33),
+                ("60058001", 75),
+                ("6005600350", 32),
+                ("60058050", 36),
             ]
         );
     }

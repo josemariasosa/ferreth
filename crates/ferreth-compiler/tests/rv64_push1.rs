@@ -40,7 +40,7 @@ fn initialized_executor(immediate: u8) -> RvemuExecutor {
         .load_code(&program_with_exit(immediate))
         .expect("load PUSH1 test program");
     executor.write_register(IntegerRegister::STACK_POINTER, NATIVE_SP_SENTINEL);
-    initialize_guest_state(&mut executor).expect("initialize guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize guest state");
     executor
 }
 

@@ -24,8 +24,14 @@ pub const GUEST_METADATA_STATUS_OFFSET: usize = 0x00;
 pub const GUEST_METADATA_EXCEPTION_CODE_OFFSET: usize = 0x08;
 /// Offset of the `final_s1` field in the guest result record.
 pub const GUEST_METADATA_FINAL_S1_OFFSET: usize = 0x10;
+/// Offset of the gas limit field.
+pub const GUEST_METADATA_GAS_LIMIT_OFFSET: usize = 24;
+/// Offset of the live remaining field.
+pub const GUEST_METADATA_LIVE_REMAINING_OFFSET: usize = 32;
+/// Offset of the published remaining field.
+pub const GUEST_METADATA_PUBLISHED_REMAINING_OFFSET: usize = 40;
 /// Exact encoded size of the guest result record.
-pub const GUEST_METADATA_ENCODED_SIZE: usize = 24;
+pub const GUEST_METADATA_ENCODED_SIZE: usize = 48;
 
 /// Exact byte width of one EVM word in guest memory.
 pub const EVM_WORD_ENCODED_SIZE: usize = EVM_WORD_SIZE as usize;
@@ -270,7 +276,7 @@ impl From<ExecutorError> for GuestInitializationError {
 /// Initializes the ABI-owned state for one new EVM guest execution.
 ///
 /// This uses only [`Rv64Executor`]: it sets `s0` and `s1` to the EVM stack
-/// base and writes the initial 24-byte `RUNNING` metadata record. Therefore
+/// base and writes the initial 48-byte `RUNNING` metadata record. Therefore
 /// the stack is logically empty even when a reused executor still contains
 /// stale bytes in the stack reservation; no stack word is live while
 /// `s0 == s1`, so the initializer neither clears nor reads those bytes.
@@ -282,12 +288,13 @@ impl From<ExecutorError> for GuestInitializationError {
 /// also remain the caller's responsibilities: use [`super::memory::ENTRY_PC`]
 /// and [`super::memory::EXIT_PC`] with [`Rv64Executor::execute`].
 ///
-/// Repeated calls restore the two ABI registers and overwrite all 24 metadata
+/// Repeated calls restore the two ABI registers and overwrite all 48 metadata
 /// bytes. The metadata write occurs before either register is changed, so a
 /// reported write failure does not present a newly initialized register pair as
 /// successful initialization.
 pub fn initialize_guest_state(
     executor: &mut impl Rv64Executor,
+    gas_limit: u64,
 ) -> Result<(), GuestInitializationError> {
     validate_evm_stack_layout()?;
     METADATA_REGION.validate_aligned_access(
@@ -297,7 +304,15 @@ pub fn initialize_guest_state(
     )?;
 
     let stack_base = EVM_STACK_REGION.start();
-    let metadata = GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base).encode();
+    let metadata = GuestMetadata::new(
+        GuestExecutionStatus::Running,
+        0,
+        stack_base,
+        gas_limit,
+        gas_limit,
+        0,
+    )
+    .encode();
     executor.write_memory(METADATA_REGION.start(), &metadata)?;
     executor.write_register(IntegerRegister::EVM_STACK_BASE, stack_base);
     executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, stack_base);
@@ -337,14 +352,27 @@ pub struct GuestMetadata {
     status: GuestExecutionStatus,
     exception_code: u64,
     final_s1: u64,
+    gas_limit: u64,
+    live_remaining: u64,
+    published_remaining: u64,
 }
 
 impl GuestMetadata {
-    pub const fn new(status: GuestExecutionStatus, exception_code: u64, final_s1: u64) -> Self {
+    pub const fn new(
+        status: GuestExecutionStatus,
+        exception_code: u64,
+        final_s1: u64,
+        gas_limit: u64,
+        live_remaining: u64,
+        published_remaining: u64,
+    ) -> Self {
         Self {
             status,
             exception_code,
             final_s1,
+            gas_limit,
+            live_remaining,
+            published_remaining,
         }
     }
 
@@ -367,8 +395,14 @@ impl GuestMetadata {
             .copy_from_slice(&self.status.as_u64().to_le_bytes());
         bytes[GUEST_METADATA_EXCEPTION_CODE_OFFSET..GUEST_METADATA_FINAL_S1_OFFSET]
             .copy_from_slice(&self.exception_code.to_le_bytes());
-        bytes[GUEST_METADATA_FINAL_S1_OFFSET..GUEST_METADATA_ENCODED_SIZE]
+        bytes[GUEST_METADATA_FINAL_S1_OFFSET..GUEST_METADATA_GAS_LIMIT_OFFSET]
             .copy_from_slice(&self.final_s1.to_le_bytes());
+        bytes[GUEST_METADATA_GAS_LIMIT_OFFSET..GUEST_METADATA_LIVE_REMAINING_OFFSET]
+            .copy_from_slice(&self.gas_limit.to_le_bytes());
+        bytes[GUEST_METADATA_LIVE_REMAINING_OFFSET..GUEST_METADATA_PUBLISHED_REMAINING_OFFSET]
+            .copy_from_slice(&self.live_remaining.to_le_bytes());
+        bytes[GUEST_METADATA_PUBLISHED_REMAINING_OFFSET..GUEST_METADATA_ENCODED_SIZE]
+            .copy_from_slice(&self.published_remaining.to_le_bytes());
         bytes
     }
 
@@ -389,6 +423,9 @@ impl GuestMetadata {
             status,
             read_u64(bytes, GUEST_METADATA_EXCEPTION_CODE_OFFSET),
             read_u64(bytes, GUEST_METADATA_FINAL_S1_OFFSET),
+            read_u64(bytes, GUEST_METADATA_GAS_LIMIT_OFFSET),
+            read_u64(bytes, GUEST_METADATA_LIVE_REMAINING_OFFSET),
+            read_u64(bytes, GUEST_METADATA_PUBLISHED_REMAINING_OFFSET),
         ))
     }
 
@@ -401,6 +438,7 @@ impl GuestMetadata {
     pub fn validate_published_terminal(
         self,
         exit_boundary_verified: bool,
+        original_limit: u64,
     ) -> Result<PublishedGuestMetadata, GuestMetadataError> {
         if !self.status.is_terminal() {
             return Err(GuestMetadataError::StillRunningOrIncomplete);
@@ -415,7 +453,38 @@ impl GuestMetadata {
         if !exit_boundary_verified {
             return Err(GuestMetadataError::ExitBoundaryNotVerified);
         }
+        if self.status == GuestExecutionStatus::GuestException
+            && !matches!(self.exception_code, 1..=3)
+        {
+            return Err(GuestMetadataError::UnknownExceptionCode(
+                self.exception_code,
+            ));
+        }
+        if self.gas_limit != original_limit {
+            return Err(GuestMetadataError::GasLimitMismatch {
+                expected: original_limit,
+                actual: self.gas_limit,
+            });
+        }
+        if self.live_remaining != self.published_remaining {
+            return Err(GuestMetadataError::RemainingGasMismatch {
+                live: self.live_remaining,
+                published: self.published_remaining,
+            });
+        }
+        let gas_used = original_limit.checked_sub(self.published_remaining).ok_or(
+            GuestMetadataError::RemainingAboveLimit {
+                remaining: self.published_remaining,
+                limit: original_limit,
+            },
+        )?;
+        if self.status == GuestExecutionStatus::GuestException && self.published_remaining != 0 {
+            return Err(GuestMetadataError::ExceptionalRemainingGas(
+                self.published_remaining,
+            ));
+        }
         Ok(PublishedGuestMetadata {
+            gas_used,
             metadata: self,
             stack_depth,
         })
@@ -443,6 +512,7 @@ impl TryFrom<u64> for GuestExecutionStatus {
 pub struct PublishedGuestMetadata {
     metadata: GuestMetadata,
     stack_depth: u64,
+    gas_used: u64,
 }
 
 impl PublishedGuestMetadata {
@@ -481,6 +551,21 @@ pub struct GuestResult {
 }
 
 impl GuestResult {
+    /// Settled remaining frame gas published by the guest.
+    pub const fn remaining_gas(&self) -> u64 {
+        self.metadata.metadata.published_remaining
+    }
+
+    /// Initial frame budget validated against the host input.
+    pub const fn gas_limit(&self) -> u64 {
+        self.metadata.metadata.gas_limit
+    }
+
+    /// Gross frame gas used before refunds.
+    pub const fn gas_used(&self) -> u64 {
+        self.metadata.gas_used
+    }
+
     pub const fn metadata(&self) -> PublishedGuestMetadata {
         self.metadata
     }
@@ -588,11 +673,8 @@ impl From<GuestMetadataError> for GuestResultError {
 pub fn read_guest_result(
     executor: &mut impl Rv64Executor,
     execution_report: &ExecutionReport,
+    original_limit: u64,
 ) -> Result<GuestResult, GuestResultError> {
-    // A report can only be obtained from the successful return path of
-    // `Rv64Executor::execute`; see that trait method's contract above.
-    let _ = execution_report;
-
     METADATA_REGION.validate_aligned_access(
         METADATA_REGION.start(),
         GUEST_METADATA_ENCODED_SIZE,
@@ -601,7 +683,10 @@ pub fn read_guest_result(
     let mut encoded_metadata = [0; GUEST_METADATA_ENCODED_SIZE];
     executor.read_memory(METADATA_REGION.start(), &mut encoded_metadata)?;
     let metadata = GuestMetadata::decode(&encoded_metadata)?;
-    let published_metadata = metadata.validate_published_terminal(true)?;
+    let published_metadata = metadata.validate_published_terminal(
+        execution_report.exit_pc == super::memory::EXIT_PC,
+        original_limit,
+    )?;
 
     let expected_s0 = EVM_STACK_REGION.start();
     let live_s0 = executor.read_register(IntegerRegister::EVM_STACK_BASE);
@@ -644,6 +729,11 @@ pub enum GuestMetadataError {
     StillRunningOrIncomplete,
     InvalidFinalStackPointer(LayoutError),
     NormalStatusHasExceptionCode { exception_code: u64 },
+    UnknownExceptionCode(u64),
+    GasLimitMismatch { expected: u64, actual: u64 },
+    RemainingGasMismatch { live: u64, published: u64 },
+    RemainingAboveLimit { remaining: u64, limit: u64 },
+    ExceptionalRemainingGas(u64),
     ExitBoundaryNotVerified,
 }
 
@@ -667,6 +757,19 @@ impl fmt::Display for GuestMetadataError {
                 f,
                 "normal guest metadata must have exception code zero, got {exception_code}"
             ),
+            Self::UnknownExceptionCode(code) => write!(f, "unknown guest exception code {code}"),
+            Self::GasLimitMismatch { expected, actual } => write!(
+                f,
+                "published gas limit {actual} differs from input {expected}"
+            ),
+            Self::RemainingGasMismatch { live, published } => write!(
+                f,
+                "published remaining gas {published} differs from live gas {live}"
+            ),
+            Self::RemainingAboveLimit { remaining, limit } => {
+                write!(f, "remaining gas {remaining} exceeds limit {limit}")
+            }
+            Self::ExceptionalRemainingGas(gas) => write!(f, "exceptional halt retains {gas} gas"),
             Self::ExitBoundaryNotVerified => write!(
                 f,
                 "guest metadata cannot be accepted before the executor verifies the exit boundary"
@@ -697,10 +800,17 @@ mod tests {
             GuestExecutionStatus::GuestException,
             0x1122_3344_5566_7788,
             0x99aa_bbcc_ddee_ff00,
+            0x1234,
+            0x5678,
+            0x9abc,
         );
         let encoded = metadata.encode();
 
-        assert_eq!(GUEST_METADATA_ENCODED_SIZE, 24);
+        assert_eq!(GUEST_METADATA_ENCODED_SIZE, 48);
+        assert_eq!(&encoded[24..32], &0x1234_u64.to_le_bytes());
+        assert_eq!(&encoded[32..40], &0x5678_u64.to_le_bytes());
+        assert_eq!(&encoded[40..48], &0x9abc_u64.to_le_bytes());
+        assert_eq!(GuestMetadata::decode(&encoded), Ok(metadata));
         assert_eq!(encoded.len(), GUEST_METADATA_ENCODED_SIZE);
         assert_eq!(
             &encoded[GUEST_METADATA_STATUS_OFFSET..0x08],
@@ -711,7 +821,7 @@ mod tests {
             &0x1122_3344_5566_7788_u64.to_le_bytes()
         );
         assert_eq!(
-            &encoded[GUEST_METADATA_FINAL_S1_OFFSET..],
+            &encoded[GUEST_METADATA_FINAL_S1_OFFSET..24],
             &0x99aa_bbcc_ddee_ff00_u64.to_le_bytes()
         );
     }
@@ -722,6 +832,9 @@ mod tests {
             GuestExecutionStatus::GuestException,
             42,
             EVM_STACK_REGION.start() + 64,
+            0,
+            0,
+            0,
         );
         assert_eq!(GuestMetadata::decode(&metadata.encode()), Ok(metadata));
     }
@@ -747,8 +860,15 @@ mod tests {
 
     #[test]
     fn decoding_rejects_unknown_status_and_wrong_record_size() {
-        let mut encoded =
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, EVM_STACK_REGION.start()).encode();
+        let mut encoded = GuestMetadata::new(
+            GuestExecutionStatus::Running,
+            0,
+            EVM_STACK_REGION.start(),
+            0,
+            0,
+            0,
+        )
+        .encode();
         encoded[GUEST_METADATA_STATUS_OFFSET..0x08].copy_from_slice(&3_u64.to_le_bytes());
         assert_eq!(
             GuestMetadata::decode(&encoded),
@@ -768,9 +888,12 @@ mod tests {
             GuestExecutionStatus::Normal,
             0,
             EVM_STACK_REGION.start() + 1,
+            0,
+            0,
+            0,
         );
         assert!(matches!(
-            metadata.validate_published_terminal(true),
+            metadata.validate_published_terminal(true, 0),
             Err(GuestMetadataError::InvalidFinalStackPointer(
                 LayoutError::StackPointerMisaligned { .. }
             ))
@@ -779,45 +902,73 @@ mod tests {
 
     #[test]
     fn normal_terminal_validation_requires_zero_exception_code() {
-        let metadata =
-            GuestMetadata::new(GuestExecutionStatus::Normal, 1, EVM_STACK_REGION.start());
+        let metadata = GuestMetadata::new(
+            GuestExecutionStatus::Normal,
+            1,
+            EVM_STACK_REGION.start(),
+            0,
+            0,
+            0,
+        );
         assert_eq!(
-            metadata.validate_published_terminal(true),
+            metadata.validate_published_terminal(true, 0),
             Err(GuestMetadataError::NormalStatusHasExceptionCode { exception_code: 1 })
         );
     }
 
     #[test]
     fn running_metadata_is_not_a_published_terminal_result() {
-        let metadata =
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, EVM_STACK_REGION.start());
+        let metadata = GuestMetadata::new(
+            GuestExecutionStatus::Running,
+            0,
+            EVM_STACK_REGION.start(),
+            0,
+            0,
+            0,
+        );
         assert_eq!(
-            metadata.validate_published_terminal(true),
+            metadata.validate_published_terminal(true, 0),
             Err(GuestMetadataError::StillRunningOrIncomplete)
         );
     }
 
     #[test]
     fn terminal_validation_requires_an_executor_verified_exit_boundary() {
-        let metadata =
-            GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.start());
+        let metadata = GuestMetadata::new(
+            GuestExecutionStatus::Normal,
+            0,
+            EVM_STACK_REGION.start(),
+            0,
+            0,
+            0,
+        );
         assert_eq!(
-            metadata.validate_published_terminal(false),
+            metadata.validate_published_terminal(false, 0),
             Err(GuestMetadataError::ExitBoundaryNotVerified)
         );
     }
 
     #[test]
     fn empty_and_full_stack_terminal_records_are_valid() {
-        let empty = GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.start())
-            .validate_published_terminal(true)
-            .expect("empty stack record must be valid");
+        let empty = GuestMetadata::new(
+            GuestExecutionStatus::Normal,
+            0,
+            EVM_STACK_REGION.start(),
+            0,
+            0,
+            0,
+        )
+        .validate_published_terminal(true, 0)
+        .expect("empty stack record must be valid");
         let full = GuestMetadata::new(
             GuestExecutionStatus::GuestException,
-            17,
+            2,
             EVM_STACK_REGION.end(),
+            0,
+            0,
+            0,
         )
-        .validate_published_terminal(true)
+        .validate_published_terminal(true, 0)
         .expect("full stack record must be valid");
 
         assert_eq!(empty.stack_depth(), 0);
@@ -871,7 +1022,7 @@ mod tests {
         // The helpers have no executor or mutable arguments, so rejected
         // checks cannot change logical guest state.
         let registers = [empty, full];
-        let metadata = GuestMetadata::new(GuestExecutionStatus::Running, 0, empty);
+        let metadata = GuestMetadata::new(GuestExecutionStatus::Running, 0, empty, 0, 0, 0);
         let stack_memory = [0xa5_u8; EVM_WORD_ENCODED_SIZE];
         let _ = validate_evm_stack_push(full);
         let _ = validate_evm_stack_pop(empty);
@@ -879,7 +1030,7 @@ mod tests {
         assert_eq!(registers, [empty, full]);
         assert_eq!(
             metadata,
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, empty)
+            GuestMetadata::new(GuestExecutionStatus::Running, 0, empty, 0, 0, 0)
         );
         assert_eq!(stack_memory, [0xa5_u8; EVM_WORD_ENCODED_SIZE]);
     }

@@ -36,9 +36,10 @@ impl Publisher {
         };
         let status = if let Some(code) = code {
             writeln!(source, "    addi t0, zero, {code}\n    sd t0, 8(t1)").unwrap();
+            source.push_str("    sd zero, 32(t1)\n    sd zero, 40(t1)\n");
             GuestExecutionStatus::GuestException
         } else {
-            source.push_str("    sd zero, 8(t1)\n");
+            source.push_str("    sd zero, 8(t1)\n    ld t0, 32(t1)\n    sd t0, 40(t1)\n");
             GuestExecutionStatus::Normal
         };
         let status = status.as_u64();

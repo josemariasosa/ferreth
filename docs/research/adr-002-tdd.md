@@ -1,6 +1,6 @@
 # ADR-002 implementation plan
 
-Maintainer approval recorded on 2026-11-23. Implementation pending. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), then [raw corpus and fixture table](adr-002-reference-corpus.md). This plan proposes test locations and future commits. All Ferreth gas assertions are pending.
+Maintainer approval recorded on 2026-11-23. Phase 1 implemented on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), then [raw corpus and fixture table](adr-002-reference-corpus.md). This plan proposes test locations and future commits. Active portable fixtures are V01–V03. Phases 2–5 remain pending.
 
 ## Test boundaries and common gate
 
@@ -38,6 +38,27 @@ Depends on Phase 0. Deliver branch-local API availability, initialization and te
 4. For GREEN, extend compiler/publisher.rs::Publisher::assembly. Load live gas from +32 and store it at +40 on normal completion. Bring existing exceptional publishers onto the same ABI by writing zero at +32 and +40. Write status last on every path. Extend rv64/verify.rs::Publisher::verify and publisher layout/length expectations in compiler/symbolic.rs::verified_program. In rv64_final_image.rs require rejection of an omitted or moved gas store and premature status publication. Keep independent body and publisher checks active.
 5. In guest.rs::read_guest_result verify the sentinel execution boundary through the existing execution flow, original limit, terminal status/code, pointers, live/published equality and remaining <= limit. In rv64_guest_result.rs add rejects_inconsistent_frame_gas for limit mismatch, remaining above limit, an exceptional nonzero result and RUNNING metadata. Keep instruction-limit and injected backend faults on the existing host error path. A fault before terminal publication cannot yield a valid result.
 6. Run cargo test --frozen -p ferreth-compiler --test rv64_frame_gas and cargo test --frozen -p ferreth-compiler --test rv64_final_image plus the common gate. Exit when both reachable STOP and empty EOF round-trip all budgets through guest stores, the mutation controls fail as intended, and existing callers pass. Refactoring is limited to shared budget threading and metadata encoding.
+
+### Phase 1 execution evidence (2026-11-23)
+
+Working tree on `feat/adr-002-gas-metering` at base `0e0a9f7`, including the uncommitted explicit-budget API migration. The initial behavioral command was `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas`. V01 and V03 passed. V02 produced the following diagnostics with the original guest publisher and compiling zero-valued result accessors.
+
+```text
+V02 REVM Stop, remaining=7, used=0, stack=[], pc=1
+assertion `left == right` failed: V02 published remaining gas
+  left: 0
+ right: 7
+```
+
+The initialization RED used `cargo test --frozen -p ferreth-compiler --test rv64_guest_initialization initializes_frame_budget_before_execution`. All three gas words retained the prefilled value `u64::MAX`. The expected words were `[0x0123456789abcdef, 0x0123456789abcdef, 0]`. With the extended initializer and original publisher, `cargo test --frozen -p ferreth-compiler --lib normal_publisher_writes_remaining_before_status` failed with `missing guest publication at budget 7`. With the new publisher, the same test observed the marker through instruction 5, the actual budget with RUNNING after instruction 6, NORMAL after instruction 8 and the pre-fetch sentinel after instruction 9. Both 7 and 0 passed.
+
+V01–V03 now pass against pinned direct REVM Cancun and the recorded expectations. STOP and empty EOF round-trip 0, 1, 7, 2^63 and u64::MAX. The CLI test runs the ordinary binary with omitted, zero and positive budgets. Host rejection cases include a forged input limit, disagreeing gas slots, remaining above limit, nonzero exceptional gas, invalid status/code, invalid stack pointers and an intermediate executor boundary. Omitted gas stores and status moved ahead of gas publication fail independent final-image verification.
+
+The layout derivation starts at the end of the existing opcode body. Normal adds one LD and one SD (28 → 36 bytes). Either exceptional publisher adds two SDs (32 → 40 bytes). Every execution runs one publisher, so termination and total counts increase by two instructions. With all three publishers, entries relative to body end are 0, 36 and 76, and the tail occupies 116 bytes. Each external JAL uses target PC minus instruction PC. For the 47-PUSH1 EOF witness this gives 44 × 47 + 36 − 40 = 2064 bytes. Arithmetic body sizes, leaf hashes and the historical research image retain their original coverage. The mixed research comparison checks equal executed body counts and a two-word production publisher increment.
+
+The capacity formulas for resident publisher tails are 44n + 76 (+4 for STOP) for nonempty PUSH1, 16n + 76 for POP, and 64n + 116 for DUP1. The POP image-only maximum decreases by one to 65,531, while the assembler label ceiling still limits executable POP programs to 49,999. The existing 23,829/23,830 PUSH1 and 16,382/16,383 DUP1 image boundary pairs still straddle the reservation.
+
+The common gate and both opt-in capacity commands below passed. The branch-local contract covers the Phase 1 fixtures. Positive-cost charging and the remaining portable vectors await later increments.
 
 ## Phase 2 — PUSH1
 

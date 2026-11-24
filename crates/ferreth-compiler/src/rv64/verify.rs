@@ -408,10 +408,19 @@ impl Publisher {
         const PREFIX: [u32; 3] = [0x8004_0313, 0x8003_0313, 0x0093_3823];
         // Code at metadata + 8, status at metadata + 0, then the sentinel JALR.
         let tail: &[u32] = match self {
-            Self::Normal => &[0x0003_3423, 0x0010_0293, 0x0053_3023, 0xffc3_0067],
+            Self::Normal => &[
+                0x0003_3423,
+                0x0203_3283,
+                0x0253_3423,
+                0x0010_0293,
+                0x0053_3023,
+                0xffc3_0067,
+            ],
             Self::Overflow => &[
                 0x0010_0293,
                 0x0053_3423,
+                0x0203_3023,
+                0x0203_3423,
                 0x0020_0293,
                 0x0053_3023,
                 0xffc3_0067,
@@ -419,6 +428,8 @@ impl Publisher {
             Self::Underflow => &[
                 0x0020_0293,
                 0x0053_3423,
+                0x0203_3023,
+                0x0203_3423,
                 0x0020_0293,
                 0x0053_3023,
                 0xffc3_0067,

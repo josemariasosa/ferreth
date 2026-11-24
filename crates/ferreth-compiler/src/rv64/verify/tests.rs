@@ -199,7 +199,7 @@ fn rejects_unexpected_assembler_branch_expansion() {
     assert_eq!(image.word(ENTRY_PC), Ok(0x0062_9463)); // BNE +8
     assert_eq!(image.word(ENTRY_PC + 4), Ok(0x3880_106f)); // JAL +5000
     let error = image
-        .verify_block(ENTRY_PC, 3, &[Site::branch(0, 0, 5, 6, ENTRY_PC + 5000)])
+        .verify_block(ENTRY_PC, 3, &[Site::branch(0, 0, 5, 6, ENTRY_PC + 5080)])
         .unwrap_err();
     assert!(error.contains("funct3: 1"), "{error}");
     let error = image
@@ -227,22 +227,22 @@ fn rejects_undeclared_indirect_transfers_and_non_base_widths() {
 fn rejects_wrong_roles_and_local_anchors_in_reassembled_mixed_image() {
     let compiled = compile_evm_bytecode_legacy(MIXED_INPUT).unwrap();
     let publishers = compiled.termination_entry_pcs();
-    assert_eq!(publishers, [ENTRY_PC + 472, ENTRY_PC + 500, ENTRY_PC + 532]);
+    assert_eq!(publishers, [ENTRY_PC + 472, ENTRY_PC + 508, ENTRY_PC + 548]);
     for (original, mutated, diagnostic) in [
         (
-            "jal zero, 8\n    jal zero, 460",
-            "jal zero, 12\n    jal zero, 460",
+            "jal zero, 8\n    jal zero, 468",
+            "jal zero, 12\n    jal zero, 468",
             "targets 0x80000030, expected 0x8000002c",
         ),
         (
-            "guest_dup1_underflow_1:\n    jal zero, 432",
-            "guest_dup1_underflow_1:\n    jal zero, 400",
-            "targets 0x800001f4, expected 0x80000214",
+            "guest_dup1_underflow_1:\n    jal zero, 448",
+            "guest_dup1_underflow_1:\n    jal zero, 408",
+            "targets 0x800001fc, expected 0x80000224",
         ),
         (
-            "guest_dup1_overflow_1:\n    jal zero, 396",
-            "guest_dup1_overflow_1:\n    jal zero, 428",
-            "targets 0x80000214, expected 0x800001f4",
+            "guest_dup1_overflow_1:\n    jal zero, 404",
+            "guest_dup1_overflow_1:\n    jal zero, 444",
+            "targets 0x80000224, expected 0x800001fc",
         ),
         (
             "jal ra, evm_add_3",
@@ -266,8 +266,8 @@ fn rejects_wrong_roles_and_local_anchors_in_reassembled_mixed_image() {
         ),
         (
             "evm_stop:\n    jal zero, 4",
-            "evm_stop:\n    jal zero, 32",
-            "targets 0x800001f4, expected 0x800001d8",
+            "evm_stop:\n    jal zero, 40",
+            "targets 0x800001fc, expected 0x800001d8",
         ),
     ] {
         let source = compiled.assembly().replacen(original, mutated, 1);
@@ -309,7 +309,7 @@ fn verifies_fragment_and_publisher_inventory_and_publication_roles() {
     // Both exceptional blocks have the same width. Swapping the two keeps
     // every declared transfer unchanged but must fail the role check.
     let mut wrong = code.to_vec();
-    wrong[500..564].rotate_left(32);
+    wrong[508..588].rotate_left(40);
     let error = verify(&wrong, &MIXED_FRAGMENTS, publishers).unwrap_err();
     assert!(error.contains("Overflow publisher"), "{error}");
     wrong.copy_from_slice(code);
@@ -328,12 +328,46 @@ fn verifies_fragment_and_publisher_inventory_and_publication_roles() {
 #[test]
 fn declared_publisher_at_zero_cannot_hide_a_missing_body() {
     let program = compile_evm_bytecode(&[]).unwrap();
-    let normal_only = &program.machine_code()[..28];
+    let normal_only = &program.machine_code()[..36];
     for (layout, pcs) in [
         (PublisherLayout::Symbolic, vec![0]),
         (PublisherLayout::SymbolicNormalOverflow, vec![ENTRY_PC, 0]),
     ] {
         let bytes = if pcs.len() == 1 { &[][..] } else { normal_only };
         assert!(verify_final_image(bytes, [], layout, &pcs).is_err());
+    }
+}
+
+#[test]
+fn rejects_missing_gas_stores_and_premature_status() {
+    let compiled = compile_evm_bytecode(&[0x80]).unwrap();
+    let pcs = compiled.termination_entry_pcs();
+    for (index, &entry) in pcs.iter().enumerate() {
+        let start = (entry - ENTRY_PC) as usize;
+        let (stores, status): (&[usize], usize) = if index == 0 {
+            (&[20], 28)
+        } else {
+            (&[20, 24], 32)
+        };
+        let rejects = |bytes: &[u8]| {
+            let error = verify_final_image(
+                bytes,
+                [Fragment::Dup1],
+                PublisherLayout::SymbolicNormalUnderflowOverflow,
+                pcs,
+            )
+            .unwrap_err();
+            assert!(error.contains("publisher at"), "{error}");
+        };
+        for &store in stores {
+            let mut bytes = compiled.machine_code().to_vec();
+            bytes[start + store..start + store + 4].copy_from_slice(&NOP.to_le_bytes());
+            rejects(&bytes);
+        }
+        // Publish the correct terminal status before either gas instruction.
+        let gas_start = status - 12;
+        let mut bytes = compiled.machine_code().to_vec();
+        bytes[start + gas_start..start + status + 4].rotate_left(8);
+        rejects(&bytes);
     }
 }

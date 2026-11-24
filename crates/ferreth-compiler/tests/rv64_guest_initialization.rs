@@ -8,7 +8,7 @@ use ferreth_compiler::rv64::{
 
 fn initialized_executor() -> RvemuExecutor {
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
-    initialize_guest_state(&mut executor).expect("initialize EVM guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize EVM guest state");
     executor
 }
 
@@ -29,7 +29,7 @@ fn initialization_sets_empty_stack_registers_and_exact_running_metadata() {
     executor
         .read_memory(METADATA_REGION.start(), &mut actual)
         .expect("read initial metadata");
-    let expected = GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base);
+    let expected = GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base, 0, 0, 0);
     assert_eq!(actual, expected.encode());
 
     let decoded = GuestMetadata::decode(&actual).expect("decode initial metadata");
@@ -44,7 +44,7 @@ fn initialization_preserves_unrelated_native_sp() {
     let original_sp = 0xdead_beef_cafe_0000;
     executor.write_register(IntegerRegister::STACK_POINTER, original_sp);
 
-    initialize_guest_state(&mut executor).expect("initialize EVM guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize EVM guest state");
 
     assert_eq!(
         executor.read_register(IntegerRegister::STACK_POINTER),
@@ -72,7 +72,7 @@ fn reinitialization_discards_logical_stack_liveness_and_restores_abi_state() {
         )
         .expect("mutate metadata");
 
-    initialize_guest_state(&mut executor).expect("reinitialize EVM guest state");
+    initialize_guest_state(&mut executor, 0).expect("reinitialize EVM guest state");
 
     assert_eq!(
         executor.read_register(IntegerRegister::EVM_STACK_BASE),
@@ -91,7 +91,32 @@ fn reinitialization_discards_logical_stack_liveness_and_restores_abi_state() {
         Ok(GuestMetadata::new(
             GuestExecutionStatus::Running,
             0,
-            stack_base
+            stack_base,
+            0,
+            0,
+            0
         ))
     );
+}
+
+#[test]
+fn initializes_frame_budget_before_execution() {
+    let mut executor = initialized_executor();
+    let limit = 0x0123_4567_89ab_cdef;
+    executor
+        .write_memory(METADATA_REGION.start(), &[0xff; 48])
+        .unwrap();
+    initialize_guest_state(&mut executor, limit).unwrap();
+    let mut bytes = [0; 48];
+    executor
+        .read_memory(METADATA_REGION.start(), &mut bytes)
+        .unwrap();
+    let words = bytes
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .copied()
+        .map(u64::from_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(words, [0, 0, EVM_STACK_REGION.start(), limit, limit, 0]);
 }

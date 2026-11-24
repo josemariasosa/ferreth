@@ -59,8 +59,8 @@ fn guest_sub_links_both_exit_paths_and_has_deterministic_instruction_counts() {
     let first = execute_guest_sub(U256::from(5), U256::from(3)).expect("first SUB execution");
     let second = execute_guest_sub(U256::from(5), U256::from(3)).expect("second SUB execution");
     assert_eq!(first.instruction_metrics(), second.instruction_metrics());
-    assert_eq!(first.instruction_metrics().total(), 49);
-    assert_eq!(first.instruction_metrics().guest_termination(), 7);
+    assert_eq!(first.instruction_metrics().total(), 51);
+    assert_eq!(first.instruction_metrics().guest_termination(), 9);
     assert_eq!(first.instruction_metrics().opcode_body(), 42);
     assert!(!first.assembly().contains("jal zero, 0"));
     assert_eq!(
@@ -69,7 +69,7 @@ fn guest_sub_links_both_exit_paths_and_has_deterministic_instruction_counts() {
     );
 
     let underflow = execute_guest_sub_with_initial_stack(&[]).expect("underflow SUB execution");
-    assert_eq!(underflow.instruction_metrics().total(), 11);
-    assert_eq!(underflow.instruction_metrics().guest_termination(), 8);
+    assert_eq!(underflow.instruction_metrics().total(), 13);
+    assert_eq!(underflow.instruction_metrics().guest_termination(), 10);
     assert_eq!(underflow.instruction_metrics().opcode_body(), 3);
 }

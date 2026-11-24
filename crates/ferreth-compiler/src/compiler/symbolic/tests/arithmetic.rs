@@ -92,27 +92,27 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
     }
     assert_eq!(image.labels().len(), labels + usize::from(overflow));
     let normal = ENTRY_PC + body_size as u64;
-    let mut candidate_pcs = vec![normal, normal + 28];
+    let mut candidate_pcs = vec![normal, normal + 36];
     if overflow {
-        candidate_pcs.push(normal + 60);
+        candidate_pcs.push(normal + 76);
     }
     assert_eq!(candidate.termination_entry_pcs(), candidate_pcs);
     assert_eq!(
         legacy.termination_entry_pcs(),
-        [normal, normal + 28, normal + 60]
+        [normal, normal + 36, normal + 76]
     );
     assert_eq!(
         candidate.machine_code().len(),
-        body_size + 60 + 32 * usize::from(overflow)
+        body_size + 76 + 40 * usize::from(overflow)
     );
-    assert_eq!(legacy.machine_code().len(), body_size + 92);
-    assert_eq!(candidate.normal_termination_instructions(), 7);
-    assert_eq!(legacy.normal_termination_instructions(), 7);
+    assert_eq!(legacy.machine_code().len(), body_size + 116);
+    assert_eq!(candidate.normal_termination_instructions(), 9);
+    assert_eq!(legacy.normal_termination_instructions(), 9);
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        8 + 8 * u64::from(overflow)
+        10 + 10 * u64::from(overflow)
     );
-    assert_eq!(legacy.exceptional_termination_instructions(), 8);
+    assert_eq!(legacy.exceptional_termination_instructions(), 10);
     let c = candidate.machine_code();
     let l = legacy.machine_code();
     let changed: Vec<_> = (0..body_size)
@@ -120,13 +120,13 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
         .filter(|&at| c[at..at + 4] != l[at..at + 4])
         .collect();
     assert_eq!(changed, relocations);
-    assert_eq!(c[body_size..body_size + 28], l[body_size..body_size + 28]);
+    assert_eq!(c[body_size..body_size + 36], l[body_size..body_size + 36]);
     assert_eq!(
-        c[body_size + 28..body_size + 60],
-        l[body_size + 60..body_size + 92]
+        c[body_size + 36..body_size + 76],
+        l[body_size + 76..body_size + 116]
     );
     if overflow {
-        assert_eq!(c[body_size + 60..], l[body_size + 28..body_size + 60]);
+        assert_eq!(c[body_size + 76..], l[body_size + 36..body_size + 76]);
     }
     println!("input={input:02x?} image_bytes={}/{} publishers={:x?}/{:x?} relocated_body_offsets={changed:x?}",
         c.len(), l.len(), candidate_pcs, legacy.termination_entry_pcs());
@@ -145,7 +145,7 @@ fn parity(
     assert_artifacts(input, &candidate, &legacy);
     let normal = candidate.termination_entry_pcs()[0];
     let (code, fault) = failure.map_or((0, None), |(code, path)| (code, Some(path)));
-    let offsets = [(0, 0), (60, 28), (28, 60)];
+    let offsets = [(0, 0), (76, 36), (36, 76)];
     let (c_offset, l_offset) = offsets[code as usize];
     let actual = observe_guest(&candidate, initial, normal + c_offset, code, fault, calls);
     let reference = observe_guest(&legacy, initial, normal + l_offset, code, fault, calls);

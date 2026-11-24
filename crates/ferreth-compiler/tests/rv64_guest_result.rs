@@ -105,7 +105,7 @@ fn initialized_executor_with_code(words: &[u32]) -> RvemuExecutor {
     validate_generated_code(ENTRY_PC, machine_code.len()).expect("valid test guest code");
     let mut executor = RvemuExecutor::new().expect("initialize rvemu executor");
     executor.load_code(&machine_code).expect("load guest code");
-    initialize_guest_state(&mut executor).expect("initialize guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize guest state");
     // An accidental fetch of the exit PC would fault. The executor must
     // instead observe it before fetch and return the execution report.
     executor
@@ -127,7 +127,7 @@ fn rv64_publishes_and_host_retrieves_a_normal_one_word_result() {
         EVM_STACK_REGION.start() + 32
     );
 
-    let result = read_guest_result(&mut executor, &report).expect("retrieve published result");
+    let result = read_guest_result(&mut executor, &report, 0).expect("retrieve published result");
     assert_eq!(result.status(), GuestExecutionStatus::Normal);
     assert_eq!(result.exception_code(), 0);
     assert_eq!(result.final_s1(), EVM_STACK_REGION.start() + 32);
@@ -148,7 +148,7 @@ fn rv64_publishes_and_host_retrieves_a_normal_one_word_result() {
         .expect("read RV64-published metadata");
     let mut expected_metadata_bytes = [0; GUEST_METADATA_ENCODED_SIZE];
     expected_metadata_bytes[..8].copy_from_slice(&1_u64.to_le_bytes());
-    expected_metadata_bytes[16..].copy_from_slice(&(EVM_STACK_REGION.start() + 32).to_le_bytes());
+    expected_metadata_bytes[16..24].copy_from_slice(&(EVM_STACK_REGION.start() + 32).to_le_bytes());
     assert_eq!(
         metadata_bytes, expected_metadata_bytes,
         "RV64 must publish status, exception code, and final s1 at the accepted ABI offsets"
@@ -163,7 +163,7 @@ fn rv64_can_publish_a_normal_empty_stack_result() {
         .expect("guest jumps to deliberate exit boundary");
 
     assert_eq!(report.executed_instructions, 7);
-    let result = read_guest_result(&mut executor, &report).expect("retrieve empty result");
+    let result = read_guest_result(&mut executor, &report, 0).expect("retrieve empty result");
     assert_eq!(result.status(), GuestExecutionStatus::Normal);
     assert_eq!(result.stack_depth(), 0);
     assert!(result.stack().is_empty());
@@ -171,15 +171,15 @@ fn rv64_can_publish_a_normal_empty_stack_result() {
 
 #[test]
 fn rv64_published_guest_exception_is_not_an_emulator_failure() {
-    let mut executor = initialized_executor_with_code(&exceptional_empty_stack_program(42));
+    let mut executor = initialized_executor_with_code(&exceptional_empty_stack_program(2));
     let report = executor
         .execute(ENTRY_PC, EXIT_PC, 8)
         .expect("guest exception still terminates at deliberate exit boundary");
 
     assert_eq!(report.executed_instructions, 8);
-    let result = read_guest_result(&mut executor, &report).expect("retrieve exceptional result");
+    let result = read_guest_result(&mut executor, &report, 0).expect("retrieve exceptional result");
     assert_eq!(result.status(), GuestExecutionStatus::GuestException);
-    assert_eq!(result.exception_code(), 42);
+    assert_eq!(result.exception_code(), 2);
     assert_eq!(result.stack_depth(), 0);
     assert!(result.stack().is_empty());
 }
@@ -198,9 +198,15 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
         (
             "unknown status",
             {
-                let mut bytes =
-                    GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.start())
-                        .encode();
+                let mut bytes = GuestMetadata::new(
+                    GuestExecutionStatus::Normal,
+                    0,
+                    EVM_STACK_REGION.start(),
+                    0,
+                    0,
+                    0,
+                )
+                .encode();
                 bytes[..8].copy_from_slice(&99_u64.to_le_bytes());
                 bytes
             },
@@ -208,7 +214,15 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
         ),
         (
             "still running",
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, EVM_STACK_REGION.start()).encode(),
+            GuestMetadata::new(
+                GuestExecutionStatus::Running,
+                0,
+                EVM_STACK_REGION.start(),
+                0,
+                0,
+                0,
+            )
+            .encode(),
             GuestResultError::Metadata(GuestMetadataError::StillRunningOrIncomplete),
         ),
         (
@@ -217,6 +231,9 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
                 GuestExecutionStatus::Normal,
                 0,
                 EVM_STACK_REGION.start() + 1,
+                0,
+                0,
+                0,
             )
             .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
@@ -231,6 +248,9 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
                 GuestExecutionStatus::Normal,
                 0,
                 EVM_STACK_REGION.start() - 32,
+                0,
+                0,
+                0,
             )
             .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
@@ -241,8 +261,15 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
         ),
         (
             "final stack pointer beyond limit",
-            GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.end() + 32)
-                .encode(),
+            GuestMetadata::new(
+                GuestExecutionStatus::Normal,
+                0,
+                EVM_STACK_REGION.end() + 32,
+                0,
+                0,
+                0,
+            )
+            .encode(),
             GuestResultError::Metadata(GuestMetadataError::InvalidFinalStackPointer(
                 ferreth_compiler::rv64::memory::LayoutError::StackPointerOutOfRange {
                     next_free: EVM_STACK_REGION.end() + 32,
@@ -251,7 +278,15 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
         ),
         (
             "normal status with exception",
-            GuestMetadata::new(GuestExecutionStatus::Normal, 1, EVM_STACK_REGION.start()).encode(),
+            GuestMetadata::new(
+                GuestExecutionStatus::Normal,
+                1,
+                EVM_STACK_REGION.start(),
+                0,
+                0,
+                0,
+            )
+            .encode(),
             GuestResultError::Metadata(GuestMetadataError::NormalStatusHasExceptionCode {
                 exception_code: 1,
             }),
@@ -265,7 +300,7 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
             .write_memory(METADATA_REGION.start(), &metadata)
             .expect("host writes only negative-test metadata");
         assert_eq!(
-            read_guest_result(&mut executor, &report),
+            read_guest_result(&mut executor, &report, 0),
             Err(expected),
             "{label}"
         );
@@ -279,12 +314,15 @@ fn retrieval_rejects_invalid_metadata_and_live_s1_mismatch() {
                 GuestExecutionStatus::Normal,
                 0,
                 EVM_STACK_REGION.start() + 32,
+                0,
+                0,
+                0,
             )
             .encode(),
         )
         .expect("write negative-test metadata");
     assert_eq!(
-        read_guest_result(&mut executor, &report),
+        read_guest_result(&mut executor, &report, 0),
         Err(GuestResultError::LiveStackPointerMismatch {
             published_s1: EVM_STACK_REGION.start() + 32,
             live_s1: EVM_STACK_REGION.start(),
@@ -298,14 +336,22 @@ fn retrieval_rejects_a_changed_live_stack_base() {
     executor
         .write_memory(
             METADATA_REGION.start(),
-            &GuestMetadata::new(GuestExecutionStatus::Normal, 0, EVM_STACK_REGION.start()).encode(),
+            &GuestMetadata::new(
+                GuestExecutionStatus::Normal,
+                0,
+                EVM_STACK_REGION.start(),
+                0,
+                0,
+                0,
+            )
+            .encode(),
         )
         .expect("publish otherwise-valid test metadata");
     let changed_s0 = EVM_STACK_REGION.start() + 32;
     executor.write_register(IntegerRegister::EVM_STACK_BASE, changed_s0);
 
     assert_eq!(
-        read_guest_result(&mut executor, &report),
+        read_guest_result(&mut executor, &report, 0),
         Err(GuestResultError::LiveStackBaseMismatch {
             expected_s0: EVM_STACK_REGION.start(),
             live_s0: changed_s0,
@@ -334,4 +380,78 @@ fn failed_execution_cannot_produce_a_guest_result() {
     ));
     // Both failures return no ExecutionReport. `read_guest_result` requires
     // that report, so neither failed path can be converted into a result.
+}
+
+#[test]
+fn rejects_inconsistent_frame_gas() {
+    use GuestExecutionStatus::{GuestException, Normal, Running};
+    use GuestMetadataError::*;
+    let (mut executor, report) = completed_executor_for_negative_metadata();
+    for (status, code, limit, live, published, expected) in [
+        (
+            Normal,
+            0,
+            8,
+            8,
+            8,
+            GasLimitMismatch {
+                expected: 7,
+                actual: 8,
+            },
+        ),
+        (
+            Normal,
+            0,
+            7,
+            7,
+            0,
+            RemainingGasMismatch {
+                live: 7,
+                published: 0,
+            },
+        ),
+        (
+            Normal,
+            0,
+            7,
+            8,
+            8,
+            RemainingAboveLimit {
+                remaining: 8,
+                limit: 7,
+            },
+        ),
+        (GuestException, 1, 7, 1, 1, ExceptionalRemainingGas(1)),
+        (Running, 0, 7, 0, 0, StillRunningOrIncomplete),
+        (GuestException, 42, 7, 0, 0, UnknownExceptionCode(42)),
+    ] {
+        let record = GuestMetadata::new(
+            status,
+            code,
+            EVM_STACK_REGION.start(),
+            limit,
+            live,
+            published,
+        );
+        executor
+            .write_memory(METADATA_REGION.start(), &record.encode())
+            .unwrap();
+        assert_eq!(
+            read_guest_result(&mut executor, &report, 7),
+            Err(GuestResultError::Metadata(expected))
+        );
+    }
+}
+
+#[test]
+fn intermediate_boundary_cannot_authorize_terminal_metadata() {
+    let mut executor = initialized_executor_with_code(&normal_empty_stack_program());
+    let before_exit_jump = ENTRY_PC + 24;
+    let report = executor.execute(ENTRY_PC, before_exit_jump, 6).unwrap();
+    assert_eq!(
+        read_guest_result(&mut executor, &report, 0),
+        Err(GuestResultError::Metadata(
+            GuestMetadataError::ExitBoundaryNotVerified
+        ))
+    );
 }

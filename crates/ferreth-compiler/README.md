@@ -6,14 +6,14 @@ The decoder reads through the first `STOP` or EOF and zero-pads a missing
 `PUSH1` immediate. It also recognizes `PUSH2`–`PUSH32`, which the compiler
 rejects. The guest has finite stack and image capacity, and fitting the
 image reservation does not guarantee that the assembler can accept it.
-Dynamic EVM control flow and gas metering are outside this subset.
+Dynamic EVM control flow and positive-cost opcode charging are outside this increment.
 
 Use `compiler::compile_evm_bytecode` to obtain assembly and machine code, or
-`orchestrator::execute_guest_evm_bytecode` to compile and run from an empty
-stack. The `execute_guest_evm_bytecode_with_initial_stack` variant accepts
-caller-provided stack words. Generated RV64 code performs stack operations
-and arithmetic. The host initializes the guest, runs it in `rvemu`, and
-validates its published result under ADR-001.
+`orchestrator::execute_guest_evm_bytecode(bytecode, gas_limit)` to compile and
+run from an empty stack. The `execute_guest_evm_bytecode_with_initial_stack`
+variant also accepts caller-provided stack words. Generated RV64 code performs
+stack operations and arithmetic. The host initializes the guest, runs it in
+`rvemu`, and validates its published result under ADR-001 and the ADR-002 frame metadata extension.
 [Guest linking architecture](../../docs/research/ferreth-guest-linking.md)
 
 Run from the repository root using the [recorded toolchain and lockfile versions](../../README.md#getting-started).
@@ -22,6 +22,10 @@ Run from the repository root using the [recorded toolchain and lockfile versions
 cargo run --locked -p ferreth-compiler -- execute --bytecode 600560030100
 cargo test --locked -p ferreth-compiler
 ```
+
+Append `--gas U64` to `execute --bytecode HEX` to pass an explicit budget in
+decimal or `0x`-prefixed hexadecimal. Omission passes `u64::MAX`, and an
+explicit zero passes zero. STOP and empty EOF preserve the full budget. Existing guest exceptions settle remaining gas to zero. Gas results for positive-cost instructions are provisional until opcode charging is implemented.
 
 ## Isolated ADD and SUB routines
 

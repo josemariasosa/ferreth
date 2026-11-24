@@ -18,7 +18,7 @@ use ferreth_compiler::{
 
 #[test]
 fn one_push1_produces_one_stack_word_and_publishes_s1() {
-    let result = execute_guest_evm_bytecode(&[0x60, 5]).expect("execute one PUSH1");
+    let result = execute_guest_evm_bytecode(&[0x60, 5], u64::MAX).expect("execute one PUSH1");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().stack(), &[U256::from(5)]);
     assert_eq!(
@@ -29,14 +29,14 @@ fn one_push1_produces_one_stack_word_and_publishes_s1() {
 
 #[test]
 fn two_and_three_push1_operations_preserve_insertion_order_in_one_run() {
-    let two =
-        execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("execute two PUSH1 operations");
+    let two = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3], u64::MAX)
+        .expect("execute two PUSH1 operations");
     assert_eq!(two.guest_result().stack(), &[U256::from(5), U256::from(3)]);
     // 20 opcode instructions plus one shared seven-instruction normal exit,
     // rather than two separately executed 17-instruction programs.
-    assert_eq!(two.instruction_metrics().total(), 27);
+    assert_eq!(two.instruction_metrics().total(), 29);
 
-    let three = execute_guest_evm_bytecode(&[0x60, 1, 0x60, 2, 0x60, 3])
+    let three = execute_guest_evm_bytecode(&[0x60, 1, 0x60, 2, 0x60, 3], u64::MAX)
         .expect("execute three PUSH1 operations");
     assert_eq!(
         three.guest_result().stack(),
@@ -46,8 +46,8 @@ fn two_and_three_push1_operations_preserve_insertion_order_in_one_run() {
 
 #[test]
 fn zero_and_maximum_push1_immediates_are_guest_stack_words() {
-    let result =
-        execute_guest_evm_bytecode(&[0x60, 0, 0x60, u8::MAX]).expect("execute byte boundaries");
+    let result = execute_guest_evm_bytecode(&[0x60, 0, 0x60, u8::MAX], u64::MAX)
+        .expect("execute byte boundaries");
     assert_eq!(
         result.guest_result().stack(),
         &[U256::ZERO, U256::from(u8::MAX)]
@@ -59,7 +59,7 @@ fn overflow_in_first_or_later_push1_is_exceptional_without_overflowing_write() {
     let full = (0..EVM_STACK_CAPACITY)
         .map(|value| U256::from(value + 1))
         .collect::<Vec<_>>();
-    let first = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &full)
+    let first = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5], &full, u64::MAX)
         .expect("first PUSH1 overflow reaches guest exception exit");
     assert_eq!(
         first.guest_result().status(),
@@ -72,8 +72,9 @@ fn overflow_in_first_or_later_push1_is_exceptional_without_overflowing_write() {
     assert_eq!(first.guest_result().stack(), full);
 
     let almost_full = full[..EVM_STACK_CAPACITY as usize - 1].to_vec();
-    let later = execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5, 0x60, 3], &almost_full)
-        .expect("later PUSH1 overflow reaches guest exception exit");
+    let later =
+        execute_guest_evm_bytecode_with_initial_stack(&[0x60, 5, 0x60, 3], &almost_full, u64::MAX)
+            .expect("later PUSH1 overflow reaches guest exception exit");
     let mut expected = almost_full;
     expected.push(U256::from(5));
     assert_eq!(
@@ -93,7 +94,7 @@ fn linked_program_has_no_fallthrough_to_handlers_or_unpatched_trampoline() {
         assemble(program.assembly(), Arch::Rv64).expect("reassemble generated assembly"),
         program.machine_code()
     );
-    let result = execute_guest_evm_bytecode(&bytecode).expect("normal execution");
+    let result = execute_guest_evm_bytecode(&bytecode, u64::MAX).expect("normal execution");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().exception_code(), 0);
 }
@@ -111,18 +112,20 @@ fn bytecode_push1_programs_execute_in_one_rv64_run() {
             vec![U256::ZERO, U256::from(255)],
         ),
     ] {
-        let result = execute_guest_evm_bytecode(bytecode).expect("compile and execute bytecode");
+        let result =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("compile and execute bytecode");
         assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(result.guest_result().stack(), expected);
     }
 
-    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3]).expect("two PUSH1s");
-    assert_eq!(result.instruction_metrics().total(), 27);
+    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3], u64::MAX).expect("two PUSH1s");
+    assert_eq!(result.instruction_metrics().total(), 29);
 }
 
 #[test]
 fn truncated_push1_zero_pads_missing_immediate() {
-    let result = execute_guest_evm_bytecode(&[0x60]).expect("compile and execute truncated PUSH1");
+    let result =
+        execute_guest_evm_bytecode(&[0x60], u64::MAX).expect("compile and execute truncated PUSH1");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().exception_code(), 0);
     assert_eq!(result.guest_result().stack(), &[U256::ZERO]);
@@ -131,35 +134,37 @@ fn truncated_push1_zero_pads_missing_immediate() {
 #[test]
 fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
     let cases = [
-        (&[0x00][..], vec![], EVM_STACK_REGION.start(), 8),
+        (&[0x00][..], vec![], EVM_STACK_REGION.start(), 10),
         (
             &[0x60, 0x05, 0x00][..],
             vec![U256::from(5)],
             EVM_STACK_REGION.start() + 32,
-            18,
+            20,
         ),
         (
             &[0x60, 0x05, 0x60, 0x03, 0x01, 0x00][..],
             vec![U256::from(8)],
             EVM_STACK_REGION.start() + 32,
-            70,
+            72,
         ),
         (
             &[0x60, 0x05, 0x60, 0x03, 0x03, 0x00][..],
             vec![U256::MAX - U256::from(1)],
             EVM_STACK_REGION.start() + 32,
-            70,
+            72,
         ),
     ];
 
     for (bytecode, expected_stack, expected_s1, expected_count) in cases {
-        let first = execute_guest_evm_bytecode(bytecode).expect("STOP program executes once");
-        let second = execute_guest_evm_bytecode(bytecode).expect("STOP program executes twice");
+        let first =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("STOP program executes once");
+        let second =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("STOP program executes twice");
         assert_eq!(first.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(first.guest_result().exception_code(), 0);
         assert_eq!(first.guest_result().stack(), expected_stack);
         assert_eq!(first.guest_result().final_s1(), expected_s1);
-        assert_eq!(first.instruction_metrics().guest_termination(), 7);
+        assert_eq!(first.instruction_metrics().guest_termination(), 9);
         assert_eq!(first.instruction_metrics().total(), expected_count);
         assert_eq!(first.instruction_metrics(), second.instruction_metrics());
     }
@@ -181,7 +186,7 @@ fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
 
 #[test]
 fn explicit_stop_does_not_execute_trailing_bytecode() {
-    let result = execute_guest_evm_bytecode(&[0x60, 0x05, 0x00, 0x60, 0x09])
+    let result = execute_guest_evm_bytecode(&[0x60, 0x05, 0x00, 0x60, 0x09], u64::MAX)
         .expect("STOP bypasses the trailing PUSH1");
     assert_eq!(result.guest_result().status(), GuestExecutionStatus::Normal);
     assert_eq!(result.guest_result().stack(), &[U256::from(5)]);
@@ -191,7 +196,7 @@ fn explicit_stop_does_not_execute_trailing_bytecode() {
     );
     // Successful completion also establishes that the EBREAK installed at the
     // exit sentinel was not fetched or executed.
-    assert_eq!(result.instruction_metrics().total(), 18);
+    assert_eq!(result.instruction_metrics().total(), 20);
 }
 
 #[test]
@@ -204,27 +209,30 @@ fn bytecode_push1_and_add_programs_execute_as_one_linked_rv64_program() {
             vec![U256::from(10)],
         ),
     ] {
-        let first = execute_guest_evm_bytecode(bytecode).expect("compile and execute bytecode");
-        let second = execute_guest_evm_bytecode(bytecode).expect("repeat bytecode execution");
+        let first =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("compile and execute bytecode");
+        let second =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("repeat bytecode execution");
         assert_eq!(first.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(first.guest_result().exception_code(), 0);
         assert_eq!(first.guest_result().stack(), expected);
         assert_eq!(first.instruction_metrics(), second.instruction_metrics());
     }
 
-    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01])
+    let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01], u64::MAX)
         .expect("PUSH1 PUSH1 ADD executes once");
     assert_eq!(result.instruction_metrics().opcode_body(), 62);
-    assert_eq!(result.instruction_metrics().guest_termination(), 7);
-    assert_eq!(result.instruction_metrics().total(), 69);
+    assert_eq!(result.instruction_metrics().guest_termination(), 9);
+    assert_eq!(result.instruction_metrics().total(), 71);
 }
 
 #[test]
 fn compiled_add_underflow_publishes_terminal_metadata_without_mutating_stack() {
     for initial_stack in [vec![], vec![U256::from(9)]] {
         let expected_s1 = EVM_STACK_REGION.start() + initial_stack.len() as u64 * 32;
-        let result = execute_guest_evm_bytecode_with_initial_stack(&[0x01], &initial_stack)
-            .expect("ADD underflow reaches the shared guest publisher");
+        let result =
+            execute_guest_evm_bytecode_with_initial_stack(&[0x01], &initial_stack, u64::MAX)
+                .expect("ADD underflow reaches the shared guest publisher");
         assert_eq!(
             result.guest_result().status(),
             GuestExecutionStatus::GuestException
@@ -235,7 +243,7 @@ fn compiled_add_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);
-        assert_eq!(result.instruction_metrics().total(), 11);
+        assert_eq!(result.instruction_metrics().total(), 13);
     }
 }
 
@@ -251,8 +259,10 @@ fn bytecode_push1_and_sub_programs_execute_as_one_linked_rv64_program() {
             vec![maximum - U256::from(5)],
         ),
     ] {
-        let first = execute_guest_evm_bytecode(bytecode).expect("compile and execute bytecode");
-        let second = execute_guest_evm_bytecode(bytecode).expect("repeat bytecode execution");
+        let first =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("compile and execute bytecode");
+        let second =
+            execute_guest_evm_bytecode(bytecode, u64::MAX).expect("repeat bytecode execution");
         assert_eq!(first.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(first.guest_result().exception_code(), 0);
         assert_eq!(first.guest_result().stack(), expected);
@@ -264,8 +274,9 @@ fn bytecode_push1_and_sub_programs_execute_as_one_linked_rv64_program() {
 fn compiled_sub_underflow_publishes_terminal_metadata_without_mutating_stack() {
     for initial_stack in [vec![], vec![U256::from(9)]] {
         let expected_s1 = EVM_STACK_REGION.start() + initial_stack.len() as u64 * 32;
-        let result = execute_guest_evm_bytecode_with_initial_stack(&[0x03], &initial_stack)
-            .expect("SUB underflow reaches the shared guest publisher");
+        let result =
+            execute_guest_evm_bytecode_with_initial_stack(&[0x03], &initial_stack, u64::MAX)
+                .expect("SUB underflow reaches the shared guest publisher");
         assert_eq!(
             result.guest_result().status(),
             GuestExecutionStatus::GuestException
@@ -276,7 +287,7 @@ fn compiled_sub_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);
-        assert_eq!(result.instruction_metrics().total(), 11);
+        assert_eq!(result.instruction_metrics().total(), 13);
     }
 }
 
@@ -315,7 +326,7 @@ fn mixed_linker_keeps_the_generated_sub_core_machine_code_unchanged() {
 fn push1_execution_uses_the_compiled_bytecode_image() {
     let bytecode = [0x60, 5, 0x60, 3];
     let compiled = compile_evm_bytecode(&bytecode).expect("compile bytecode");
-    let executed = execute_guest_evm_bytecode(&bytecode).expect("execute bytecode");
+    let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).expect("execute bytecode");
     assert_eq!(compiled.machine_code(), executed.machine_code());
     assert_eq!(compiled.assembly(), executed.assembly());
 }
@@ -370,7 +381,8 @@ fn assert_repeated_push1_succeeds(pushes: usize, explicit_stop: bool) {
     let program = compile_evm_bytecode(&bytecode).expect("compile repeated PUSH1 bytecode");
     assert_first_push_reaches_overflow_publisher(&program);
 
-    let execution = execute_guest_evm_bytecode(&bytecode).expect("execute repeated PUSH1 bytecode");
+    let execution =
+        execute_guest_evm_bytecode(&bytecode, u64::MAX).expect("execute repeated PUSH1 bytecode");
     let result = execution.guest_result();
     assert_eq!(result.status(), GuestExecutionStatus::Normal);
     assert_eq!(result.exception_code(), 0);
@@ -391,8 +403,9 @@ fn assert_repeated_push1_overflows(explicit_stop: bool) {
     let initial_stack = (0..EVM_STACK_CAPACITY)
         .map(|_| random_u256(&mut seed))
         .collect::<Vec<_>>();
-    let execution = execute_guest_evm_bytecode_with_initial_stack(&bytecode, &initial_stack)
-        .expect("execute repeated PUSH1 bytecode on a full stack");
+    let execution =
+        execute_guest_evm_bytecode_with_initial_stack(&bytecode, &initial_stack, u64::MAX)
+            .expect("execute repeated PUSH1 bytecode on a full stack");
     let result = execution.guest_result();
     assert_eq!(result.status(), GuestExecutionStatus::GuestException);
     assert_eq!(

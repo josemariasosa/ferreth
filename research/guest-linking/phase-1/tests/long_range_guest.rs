@@ -80,13 +80,13 @@ fn long_range_layouts_execute_normally() {
         let stack_base = EVM_STACK_REGION.start();
         assert_eq!(
             read_metadata(&mut executor),
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base)
+            GuestMetadata::new(GuestExecutionStatus::Running, 0, stack_base, 0, 0, 0)
         );
         let final_s1 = stack_base + pushes as u64 * EVM_WORD_SIZE;
         let guest = finish_guest(
             &mut executor,
             body,
-            GuestMetadata::new(GuestExecutionStatus::Normal, 0, final_s1),
+            GuestMetadata::new(GuestExecutionStatus::Normal, 0, final_s1, 0, 0, 0),
             7,
         );
         assert_eq!(guest.stack_depth(), pushes as u64);
@@ -121,7 +121,7 @@ fn first_push_takes_the_distant_overflow_jump() {
         }
         executor.write_register(IntegerRegister::EVM_STACK_NEXT_FREE, full_s1);
         executor.write_memory(full_s1, &guard).unwrap();
-        let running = GuestMetadata::new(GuestExecutionStatus::Running, 0, full_s1);
+        let running = GuestMetadata::new(GuestExecutionStatus::Running, 0, full_s1, 0, 0, 0);
         executor
             .write_memory(METADATA_REGION.start(), &running.encode())
             .unwrap();
@@ -169,6 +169,9 @@ fn first_push_takes_the_distant_overflow_jump() {
                 GuestExecutionStatus::GuestException,
                 PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
                 full_s1,
+                0,
+                0,
+                0,
             ),
             8,
         );
@@ -186,7 +189,7 @@ fn load_guest(artifact: &AssemblyResult) -> RvemuExecutor {
     executor
         .write_memory(EXIT, &0x0010_0073_u32.to_le_bytes())
         .unwrap(); // EBREAK
-    initialize_guest_state(&mut executor).unwrap();
+    initialize_guest_state(&mut executor, 0).unwrap();
     executor
 }
 
@@ -211,7 +214,14 @@ fn finish_guest(
     for (boundary, metadata) in [
         (
             publisher + 12,
-            GuestMetadata::new(GuestExecutionStatus::Running, 0, expected.final_s1()),
+            GuestMetadata::new(
+                GuestExecutionStatus::Running,
+                0,
+                expected.final_s1(),
+                0,
+                0,
+                0,
+            ),
         ),
         (
             before_status,
@@ -219,6 +229,9 @@ fn finish_guest(
                 GuestExecutionStatus::Running,
                 expected.exception_code(),
                 expected.final_s1(),
+                0,
+                0,
+                0,
             ),
         ),
         (before_status + 4, expected),
@@ -244,7 +257,7 @@ fn finish_guest(
     );
     count += exit.executed_instructions;
     assert_eq!(count, publisher_count);
-    let guest = read_guest_result(executor, &exit).unwrap();
+    let guest = read_guest_result(executor, &exit, 0).unwrap();
     assert_eq!(guest.metadata().metadata(), expected);
     println!(
         "Reached publisher {publisher:#010x}, sentinel {EXIT:#010x}: {:?}, exception={}, depth={}, final_s1={:#010x}; RV64 body={} publisher={} total={}",

@@ -44,7 +44,7 @@ fn initialized_executor(initial_stack: &[U256]) -> RvemuExecutor {
         .load_code(&program_with_exit())
         .expect("load ADD test program");
     executor.write_register(IntegerRegister::STACK_POINTER, NATIVE_SP_SENTINEL);
-    initialize_guest_state(&mut executor).expect("initialize guest state");
+    initialize_guest_state(&mut executor, 0).expect("initialize guest state");
     for (slot, word) in initial_stack.iter().copied().enumerate() {
         write_evm_word(&mut executor, slot, word).expect("seed live EVM stack word");
     }
