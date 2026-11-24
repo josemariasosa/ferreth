@@ -88,7 +88,7 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
     executor
         .load_code(compiled.machine_code())
         .expect("load generated code");
-    initialize_guest_state(&mut executor, 0).expect("initialize guest state");
+    initialize_guest_state(&mut executor, 3).expect("initialize guest state");
 
     let full_stack = (0..EVM_STACK_CAPACITY)
         .map(|index| U256::from(index + 1))
@@ -119,7 +119,7 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
         .expect("read sentinel after the stack region");
     assert_eq!(unchanged_sentinel, next_slot_sentinel);
 
-    let result = read_guest_result(&mut executor, &report, 0).expect("validate overflow metadata");
+    let result = read_guest_result(&mut executor, &report, 3).expect("validate overflow metadata");
     assert_eq!(result.status(), GuestExecutionStatus::GuestException);
     assert_eq!(
         result.exception_code(),
@@ -127,6 +127,8 @@ fn dup1_overflow_does_not_write_the_next_slot_or_advance_s1() {
     );
     assert_eq!(result.final_s1(), EVM_STACK_REGION.end());
     assert_eq!(result.stack(), full_stack);
+    assert_eq!(result.remaining_gas(), 0);
+    assert_eq!(result.gas_used(), 3);
 }
 
 #[test]
@@ -140,6 +142,10 @@ fn rc_ro_and_generator_share_the_linked_rv64_behavior() {
     );
     assert_eq!(isolated.guest_result().stack(), &[U256::ZERO, U256::ZERO]);
     assert_eq!(compiled.guest_result().stack(), &[U256::ZERO, U256::ZERO]);
+
+    assert_eq!(isolated.guest_result().remaining_gas(), u64::MAX - 3);
+    assert_eq!(isolated.guest_result().gas_used(), 3);
+    assert_eq!(compiled.guest_result().gas_used(), 6);
 
     let generated = ferreth_compiler::rv64::opcodes::dup::generate_guest_dup1();
     assert_eq!(

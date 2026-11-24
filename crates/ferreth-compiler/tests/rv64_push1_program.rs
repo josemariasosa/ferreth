@@ -143,13 +143,13 @@ fn explicit_stop_preserves_guest_state_and_uses_the_shared_normal_publisher() {
             &[0x60, 0x05, 0x60, 0x03, 0x01, 0x00][..],
             vec![U256::from(8)],
             EVM_STACK_REGION.start() + 32,
-            86,
+            93,
         ),
         (
             &[0x60, 0x05, 0x60, 0x03, 0x03, 0x00][..],
             vec![U256::MAX - U256::from(1)],
             EVM_STACK_REGION.start() + 32,
-            86,
+            93,
         ),
     ];
 
@@ -219,9 +219,9 @@ fn bytecode_push1_and_add_programs_execute_as_one_linked_rv64_program() {
 
     let result = execute_guest_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01], u64::MAX)
         .expect("PUSH1 PUSH1 ADD executes once");
-    assert_eq!(result.instruction_metrics().opcode_body(), 76);
+    assert_eq!(result.instruction_metrics().opcode_body(), 83);
     assert_eq!(result.instruction_metrics().guest_termination(), 9);
-    assert_eq!(result.instruction_metrics().total(), 85);
+    assert_eq!(result.instruction_metrics().total(), 92);
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn compiled_add_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);
-        assert_eq!(result.instruction_metrics().total(), 13);
+        assert_eq!(result.instruction_metrics().total(), 20);
     }
 }
 
@@ -285,7 +285,7 @@ fn compiled_sub_underflow_publishes_terminal_metadata_without_mutating_stack() {
         );
         assert_eq!(result.guest_result().final_s1(), expected_s1);
         assert_eq!(result.guest_result().stack(), initial_stack);
-        assert_eq!(result.instruction_metrics().total(), 13);
+        assert_eq!(result.instruction_metrics().total(), 20);
     }
 }
 
@@ -295,8 +295,8 @@ fn mixed_linker_keeps_the_generated_add_core_machine_code_unchanged() {
     let compiled = compile_evm_bytecode(&[0x60, 5, 0x60, 3, 0x01]).expect("compile mixed program");
     let add_start = 2 * 19 * 4;
     // The continuation is the end of the generated body; the core starts at
-    // the documented fixed wrapper width (nine instructions).
-    let core_start = add_start + 9 * 4;
+    // the eight-word charge followed by the nine-word arithmetic wrapper.
+    let core_start = add_start + 17 * 4;
     assert_eq!(
         &compiled.machine_code()[core_start..core_start + generated.machine_code().len() - 9 * 4],
         &generated.machine_code()[9 * 4..]
@@ -308,7 +308,7 @@ fn mixed_linker_keeps_the_generated_sub_core_machine_code_unchanged() {
     let generated = generate_guest_sub();
     let compiled = compile_evm_bytecode(&[0x60, 5, 0x60, 3, 0x03]).expect("compile mixed program");
     let sub_start = 2 * 19 * 4;
-    let core_start = sub_start + 9 * 4;
+    let core_start = sub_start + 17 * 4;
     assert_eq!(
         &compiled.machine_code()[core_start..core_start + generated.machine_code().len() - 9 * 4],
         &generated.machine_code()[9 * 4..]

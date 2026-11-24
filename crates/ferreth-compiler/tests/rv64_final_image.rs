@@ -110,17 +110,17 @@ fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
     assert_eq!(
         mixed.termination_entry_pcs(),
         [
-            ENTRY_PC + 656,
-            ENTRY_PC + 692,
-            ENTRY_PC + 732,
-            ENTRY_PC + 772
+            ENTRY_PC + 784,
+            ENTRY_PC + 820,
+            ENTRY_PC + 860,
+            ENTRY_PC + 900
         ]
     );
-    assert_eq!(mixed.machine_code().len(), 812);
+    assert_eq!(mixed.machine_code().len(), 940);
     assert_publishers(
         mixed.machine_code(),
         mixed.termination_entry_pcs(),
-        656,
+        784,
         &[Normal, Underflow, Overflow, OutOfGas],
     );
     let executed = execute_guest_evm_bytecode(&bytecode, u64::MAX).unwrap();
@@ -131,13 +131,13 @@ fn verified_push_only_and_mixed_images_keep_public_artifacts_and_execution() {
         GuestExecutionStatus::Normal
     );
     assert_eq!(executed.guest_result().stack(), &[U256::from(2)]);
-    assert_eq!(executed.instruction_metrics().opcode_body(), 153);
+    assert_eq!(executed.instruction_metrics().opcode_body(), 181);
     assert_eq!(executed.instruction_metrics().guest_termination(), 9);
-    assert_eq!(executed.instruction_metrics().total(), 162);
+    assert_eq!(executed.instruction_metrics().total(), 190);
 }
 
 #[test]
-fn verified_isolated_arithmetic_keeps_two_publishers_for_both_paths() {
+fn verified_isolated_arithmetic_keeps_three_publishers_for_both_paths() {
     let operands = [U256::from(2), U256::from(3)];
     for (opcode, execute, expected) in [
         (
@@ -151,24 +151,26 @@ fn verified_isolated_arithmetic_keeps_two_publishers_for_both_paths() {
         let underflow = execute(&[]).unwrap();
         assert_eq!(normal.machine_code(), underflow.machine_code());
         assert_eq!(normal.assembly(), underflow.assembly());
-        assert_eq!(normal.machine_code().len(), 248);
-        assert_eq!(normal.assembly().matches("jalr zero, -4(t1)").count(), 2);
+        assert_eq!(normal.machine_code().len(), 320);
+        assert_eq!(normal.assembly().matches("jalr zero, -4(t1)").count(), 3);
         let compiled = compile_evm_bytecode(&[opcode]).unwrap();
         assert_publishers(
             normal.machine_code(),
             compiled.termination_entry_pcs(),
-            172,
-            &[Normal, Underflow],
+            204,
+            &[Normal, Underflow, OutOfGas],
         );
         assert_eq!(normal.guest_result().status(), GuestExecutionStatus::Normal);
         assert_eq!(normal.guest_result().stack(), &[U256::from(expected)]);
-        assert_eq!(normal.instruction_metrics().total(), 51);
+        assert_eq!(normal.instruction_metrics().total(), 58);
+        assert_eq!(normal.guest_result().remaining_gas(), u64::MAX - 3);
+        assert_eq!(normal.guest_result().gas_used(), 3);
         assert_eq!(
             underflow.guest_result().status(),
             GuestExecutionStatus::GuestException
         );
         assert_eq!(underflow.guest_result().exception_code(), 2);
-        assert_eq!(underflow.instruction_metrics().total(), 13);
+        assert_eq!(underflow.instruction_metrics().total(), 20);
     }
 }
 
@@ -190,8 +192,8 @@ fn both_publisher_fixture() -> CompiledRv64Program {
     assert_publishers(
         compiled.machine_code(),
         compiled.termination_entry_pcs(),
-        64,
-        &[Normal, Underflow, Overflow],
+        96,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
     compiled
 }
@@ -201,13 +203,13 @@ fn both_publisher_fixture() -> CompiledRv64Program {
 fn publisher_check_rejects_swapped_exception_bodies_with_unchanged_pcs() {
     let compiled = both_publisher_fixture();
     let mut bytes = compiled.machine_code().to_vec();
-    let (underflow, overflow) = bytes[100..180].split_at_mut(40);
+    let (underflow, overflow) = bytes[132..212].split_at_mut(40);
     underflow.swap_with_slice(overflow);
     assert_publishers(
         &bytes,
         compiled.termination_entry_pcs(),
-        64,
-        &[Normal, Underflow, Overflow],
+        96,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
 }
 
@@ -217,12 +219,12 @@ fn publisher_check_rejects_an_incorrect_terminal_jalr() {
     let compiled = both_publisher_fixture();
     let mut bytes = compiled.machine_code().to_vec();
     // jalr zero, 0(t1) lands at metadata instead of the exit sentinel.
-    bytes[176..180].copy_from_slice(&0x0003_0067_u32.to_le_bytes());
+    bytes[208..212].copy_from_slice(&0x0003_0067_u32.to_le_bytes());
     assert_publishers(
         &bytes,
         compiled.termination_entry_pcs(),
-        64,
-        &[Normal, Underflow, Overflow],
+        96,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
 }
 
@@ -235,8 +237,8 @@ fn publisher_check_rejects_reordered_metadata() {
     assert_publishers(
         compiled.machine_code(),
         &pcs,
-        64,
-        &[Normal, Underflow, Overflow],
+        96,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
 }
 
@@ -249,8 +251,8 @@ fn publisher_check_rejects_duplicate_metadata() {
     assert_publishers(
         compiled.machine_code(),
         &pcs,
-        64,
-        &[Normal, Underflow, Overflow],
+        96,
+        &[Normal, Underflow, Overflow, OutOfGas],
     );
 }
 

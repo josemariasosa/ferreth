@@ -1,6 +1,6 @@
 # ADR-002 implementation plan
 
-Maintainer approval recorded on 2026-11-23. Phases 1 and 2 implemented on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), then [raw corpus and fixture table](adr-002-reference-corpus.md). This plan proposes test locations and future commits. Active portable fixtures are V01–V07 and V32–V33. Phase 2 is ready for human review. Phases 3–5 remain pending.
+Maintainer approval was recorded on 2026-11-23. Phases 1–3 have implementation evidence on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), and [raw corpus and fixture table](adr-002-reference-corpus.md). Active portable fixtures are V01–V25, V32–V33 and V36. Phase 3 is ready for human review. GAS and the final milestone gate remain pending in Phases 4–5.
 
 ## Test boundaries and common gate
 
@@ -133,6 +133,120 @@ The first workspace runs after implementing the charge exposed stale Phase 1 ima
 ## Phase 3 — existing stack and arithmetic operations
 
 Depends on Phase 2. Activate V08–V25 and V36. Add stack_operations_charge_before_effects in rv64_frame_gas.rs. At RED, V09 exposes a missing POP charge and V17 a missing ADD charge on the same compiled route. In particular V08 must retain [2], V16/V23 retain [2,3], V19/V20 publish OOG and V21 underflow. V15 uses Ferreth underflow code 2. V22 retains [2], code 2, remaining 0 and used 20. V36 must preserve the full stack and publish overflow. Require every successful stack and gas pair listed in the corpus. In rv64/opcodes/pop.rs and dup.rs apply the established emitter at fragment entry. In arithmetic.rs::generate_symbolic_arithmetic apply it before depth validation and the local call. Adjust verifier sites and prove arithmetic leaf words still match. Refactor only shared wrapper logic exposed by these cases. Run cargo test --frozen -p ferreth-compiler --test rv64_dup1 and the common gate. Exit with 28 active IDs. Proposed green commits may split POP/DUP1 and ADD/SUB with their respective cases.
+
+### Phase 3 execution evidence (2026-11-23)
+
+The working tree was clean on `feat/adr-002-gas-metering` at `9d2032e10c866a0b6cca6fe067126ccb8e010bfa`. Verification used Rust and Cargo 1.98.1.
+
+Phase 3A RED used `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas -- --show-output` (12 passed, 6 failed) and `cargo test --frozen -p ferreth-compiler --test rv64_frame_gas -- --show-output` (5 passed, 4 failed). All raw REVM assertions passed. Ferreth ran V08 and V12 as Normal with 1 and 2 gas left and stacks [] and [2,2], respectively. V09/V10 reported 2/3 remaining against 0/1. V13/V14 reported 3/4 against 0/1. V11, V15 and V36 passed portably. Focused tests failed on the two unfunded Normal outcomes and on empty POP (budget 1) and DUP1 (budget 2) publishing code 2 against required code 3.
+
+Phase 3A GREEN passed the same reference suite (18/18), the four compiler integration suites `rv64_frame_gas` (9), `rv64_pop` (4), `rv64_dup1` (6), and `rv64_push1_program` (23), and the library filter `pop_dup1` (7 active, one opt-in). The first focused run exposed a seeded overflow witness initialized at zero. Budget 3 reaches the original overflow path, and the new V36 step test exercises both funded overflow and OOG with guard checks.
+
+Phase 3B RED used the same two `--show-output` commands (22 portable passed, 6 failed and 9 focused passed, 3 failed). V16/V23 were Normal with remaining 2 and stacks [5]/[1], against exceptional. V17/V24 reported remaining 3 against 0 and V18/V25 reported 4 against 1. V19–V22 passed portably. Focused assertions observed Normal instead of exception at budget 8 and in the mixed program at budget 19, and code 2 instead of 3 for empty ADD at zero. Raw V22 printed `StackUnderflow, remaining=14, used=6, stack="[2]", pc=3`; Ferreth already published zero remaining and 20 used at RED despite skipping the ADD debit.
+
+#### Reference settlement and GREEN results
+
+The independent corpus supplies raw REVM outcome, remaining gas and stack, and portable outcome, settled remaining, gross used and successful stack. Every fixture executes pinned direct REVM Cancun. The helper verifies raw results first, then keeps raw gas for Stop and sets reference gas to zero for exceptional halts. Its match rejects other termination categories. Exceptional diagnostic labels, stacks and terminal PCs are retained without cross-engine assertions. Ferreth's gas is read from the validated guest publication.
+
+For V22 (`60020100`, budget 20), direct REVM observed StackUnderflow, stack [2], PC 3, remaining 14 and raw used 6. The pinned handler calls `spend_all` on `is_halt()`, giving reference frame remaining 0 and gross used 20. This settlement is source-derived. The direct run stops before the full handler pipeline. Ferreth observed live remaining 14 after both debits at the underflow publisher, then published code 2, stack [2], remaining 0 and gross used 20. [Pinned REVM handler](https://github.com/bluealloy/revm/blob/6b2e655b91f21c3a21770bed78def5b379ed1d17/crates/handler/src/frame.rs) · [RF-028 reference corpus](adr-002-reference-corpus.md)
+
+All 28 rows passed. F denotes 1,024 ones. REVM cells are raw diagnostics and Ferreth cells are guest-published results.
+
+| ID | REVM outcome, remaining/used, stack, PC | Ferreth status/code, remaining/used, stack |
+|---|---|---|
+| V01 | Stop, 0/0, [], 1 | Normal/0, 0/0, [] |
+| V02 | Stop, 7/0, [], 1 | Normal/0, 7/0, [] |
+| V03 | Stop, 0/0, [], 1 | Normal/0, 0/0, [] |
+| V04 | OutOfGas, 0/2, [], 1 | GuestException/3, 0/2, [] |
+| V05 | Stop, 0/3, [2], 3 | Normal/0, 0/3, [2] |
+| V06 | Stop, 1/3, [2], 3 | Normal/0, 1/3, [2] |
+| V07 | Stop, 0/3, [0], 3 | Normal/0, 0/3, [0] |
+| V08 | OutOfGas, 0/4, [2], 3 | GuestException/3, 0/4, [2] |
+| V09 | Stop, 0/5, [], 4 | Normal/0, 0/5, [] |
+| V10 | Stop, 1/5, [], 4 | Normal/0, 1/5, [] |
+| V11 | OutOfGas, 0/1, [], 1 | GuestException/3, 0/1, [] |
+| V12 | OutOfGas, 0/5, [2], 3 | GuestException/3, 0/5, [2] |
+| V13 | Stop, 0/6, [2, 2], 4 | Normal/0, 0/6, [2, 2] |
+| V14 | Stop, 1/6, [2, 2], 4 | Normal/0, 1/6, [2, 2] |
+| V15 | StackOverflow, 0/3, [], 1 | GuestException/2, 0/3, [] |
+| V16 | OutOfGas, 0/8, [2, 3], 5 | GuestException/3, 0/8, [2, 3] |
+| V17 | Stop, 0/9, [5], 6 | Normal/0, 0/9, [5] |
+| V18 | Stop, 1/9, [5], 6 | Normal/0, 1/9, [5] |
+| V19 | OutOfGas, 0/0, [], 1 | GuestException/3, 0/0, [] |
+| V20 | OutOfGas, 0/2, [], 1 | GuestException/3, 0/2, [] |
+| V21 | StackUnderflow, 0/3, [], 1 | GuestException/2, 0/3, [] |
+| V22 | StackUnderflow, 14/6, [2], 3 | GuestException/2, 0/20, [2] |
+| V23 | OutOfGas, 0/8, [2, 3], 5 | GuestException/3, 0/8, [2, 3] |
+| V24 | Stop, 0/9, [1], 6 | Normal/0, 0/9, [1] |
+| V25 | Stop, 1/9, [1], 6 | Normal/0, 1/9, [1] |
+| V32 | OutOfGas, 0/3074, F, 2049 | GuestException/3, 0/3074, F |
+| V33 | StackOverflow, 0/3075, F, 2049 | GuestException/1, 0/3075, F |
+| V36 | StackOverflow, 0/3075, F, 2049 | GuestException/1, 0/3075, F |
+
+#### Guest execution and image verification
+
+The unchanged shared emitter derives metadata from s0 in t1, loads live gas from +32 into t0, materializes the static cost in t2, branches unsigned over the OOG JAL on sufficiency, and subtracts and stores once before the stack body. POP costs 2. DUP1, ADD and SUB cost 3. POP still retires only s1. DUP1 tests depth and capacity, copies four limbs and advances s1 after the copy. The arithmetic wrapper checks depth, calculates pointers, calls the original leaf, retires s1 and continues. The historical isolated generators and test linkers retain their original scope. All compiled executions use the symbolic compiler and common guest execution path. The isolated APIs use the same compiled images with their ordinary maximum budget.
+
+The independent verifier uses literal RV64 encodings, opcode-specific cost and calculated targets. Shifted zero-based sites are below. The charge uses local BGEU at word 4 to word 6 and shared OOG JAL at word 5 for all positive-cost fragments.
+
+| Fragment | Post-charge control sites |
+|---|---|
+| POP | Depth branch 8 → 11, continuation 10, Underflow JAL 11 |
+| DUP1 | Depth branch 8 → 22, capacity branch 11 → 23, continuation 21, Underflow JAL 22, Overflow JAL 23 |
+| ADD/SUB | Depth branch 9 → 16, JAL ra 13 → 17, return address at retirement word 14, continuation 15, Underflow JAL 16, leaf JALR 50 → 14 |
+
+Corruption controls exercise wrong costs, signed comparison, missing and wrong debits, stores to the wrong metadata offset, diverted OOG, incorrect continuations, swapped stack-error roles, malformed arithmetic calls and returns, and missing or premature publisher stores. The declaration scan and fixed-layout check independently reject invalid bindings, including matching-but-wrong declarations for diverted OOG, POP continuation, DUP1 exception roles and cross-occurrence arithmetic calls. Each embedded 136-byte leaf matched its standalone bytes and accepted FNV-1a fingerprint. ADD retained `0xf1fff32ff47962f3` and SUB retained `0x9f008f320eeb7a7b`.
+
+The focused and stepped runs checked exact and surplus limits, insufficient gas, empty/one-word/full stacks, and preservation of stack words, s1, guard bytes and live stack effects from the prefix. V08/V12 retained [2], V16/V23 retained [2,3], and V11/V19/V20 published code 3. V15/V21/V22 published code 2. V36 published code 1 with all 1,024 words and both guards intact. The extra full-stack DUP1 budget 3080 left 5 live at overflow publication. V22 left 14 live at underflow publication. Exception publication cleared live gas before status changed, explicitly stored zero as the published result and reached the sentinel. Each new opcode was exercised at exactly 2^63 and u64::MAX with seeded operands. The six-opcode mixed program used 20 gas and produced [2] at budgets 20, 21, 2^63 and u64::MAX with identical assembled bytes. Budget 19 preserved [5,7] on the final SUB's OOG. The existing arithmetic replays exercised modular carry, wraparound and top-minus-next SUB ordering.
+
+#### Measured instruction overhead
+
+The before/after measurements used temporary archived copies of HEAD and the same tree with the five compiler/verification source updates applied. For each singleton bytecode `50`, `80`, `01` and `03`, `compile_evm_bytecode` provided the image length and normal publisher offset. Dividing that offset by four gave static fragment words. `execute_guest_evm_bytecode_with_initial_stack` and its instruction metrics supplied the dynamic counts for [2,3] and empty stack with budget 20, [2,3] with budget 1, and 1,024 ones with budget 20. Legacy replay and stepped tests independently assert the corresponding path counts. Values below are body instructions, excluding the separately measured publisher.
+
+| Opcode | Static words, before → after | Success body | Underflow body | Overflow body | Unfunded body after | Singleton image bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| POP | 4 → 12 | 3 → 10 | 2 → 9 | n/a | 6 | 92 → 164 |
+| DUP1 | 16 → 24 | 14 → 21 | 2 → 9 | 5 → 12 | 6 | 180 → 252 |
+| ADD | 43 → 51 | 42 → 49 | 3 → 10 | n/a | 6 | 248 → 320 |
+| SUB | 43 → 51 | 42 → 49 | 3 → 10 | n/a | 6 | 248 → 320 |
+
+All four add eight static instructions and execute seven of those on the funded path. Budget 1 executed the ordinary success path at HEAD for all four. The same budget now executes six guard instructions then the ten-instruction OOG publisher. Normal comes with nine instructions (36 bytes). Each resident exceptional publisher contributes ten instructions (40 bytes). A frame executes one publisher. All four singleton images grew by 72 bytes, comprising 32 in the fragment and 40 for the shared OOG role. The all-opcode mixed image grew from 812 to 940 bytes and the measured path from 153 + 9 to 181 + 9.
+
+#### Capacity
+
+The code reservation is 1,048,572 bytes. For n repetitions at EOF, POP occupies `48n + 116` bytes, DUP1 `96n + 156`, and isolated-opcode arithmetic `204n + 116`. Explicit STOP adds 4 bytes and one label. The first OOG JAL starts at byte 20 and resolves to the publisher 40 bytes before image end, so its displacement is image bytes minus 60. The assembler's signed JAL ceiling is 1,048,574 bytes (1,048,572 for four-byte-aligned targets). Local conditional branches stay within their fragments.
+
+| Program | Accepted count and bytes | Next count |
+|---|---|---|
+| POP EOF | 21,842 / 1,048,532 | 21,843 assembles to 1,048,580 and exceeds reservation |
+| POP STOP | 21,842 / 1,048,536 | 21,843 assembles to 1,048,584 and exceeds reservation |
+| DUP1 EOF | 10,921 / 1,048,572 | 10,922 OOG JAL displacement 1,048,608 |
+| DUP1 STOP | 10,920 / 1,048,480 | 10,921 assembles to 1,048,576 and exceeds reservation |
+| ADD and SUB EOF | 5,139 / 1,048,472 | 5,140 OOG JAL displacement 1,048,616 |
+| ADD and SUB STOP | 5,139 / 1,048,476 | 5,140 OOG JAL displacement 1,048,620 |
+| PUSH1 EOF and STOP | 13,795 / 1,048,536 and 1,048,540 | 13,796 exceeds reservation for both endings |
+
+For POP, 21,844 still assembles with EOF/STOP first OOG displacements 1,048,568/1,048,572. At 21,845 both fail relocation at 1,048,616/1,048,620. DUP1 at 10,922 STOP fails relocation at 1,048,612. At the accepted boundaries the POP labels are 65,529/65,530, the DUP1 labels are 43,688/43,685, and ADD/SUB labels are 25,698/25,699 (EOF/STOP). POP EOF requests 100,002 labels at 33,333. DUP1 first crosses the 100,000-label limit at 25,000 EOF or 24,999 with STOP. Smaller specimens at 33,332 POP and 24,999 DUP1 EOF already fail relocation. Long accepted images reached OOG, and POP/DUP1 also reached their funded stack-error publishers. No reservation or linker limit changed. The historical capacity probe and evidence continue to cover their original scope. [Historical POP/DUP1 capacity](../../research/guest-linking/phase-2.3b.1-boundary-hardening.md)
+
+#### Regression gate and limits
+
+| Command or suite | Result |
+|---|---|
+| `cargo test --frozen -p ferreth-conformance --test adr002_frame_gas -- --show-output` | 28 passed, each raw reference and guest result printed |
+| `cargo test --frozen -p ferreth-compiler --no-fail-fast` with the nine `--test` targets below | 72 passed |
+| `rv64_frame_gas`, `rv64_pop`, `rv64_dup1`, `rv64_push1_program`, `rv64_final_image` | 13, 4, 6, 23, 9 passed, respectively |
+| `rv64_guest_add`, `rv64_guest_sub`, `rv64_guest_add_orchestrator`, `rv64_guest_sub_orchestrator` | 6, 5, 3, 3 passed, respectively |
+| `cargo test --frozen -p ferreth-linking-spike --test mixed_symbolic_guest` | 8 passed |
+| `cargo test --frozen -p ferreth-compiler --lib capacity -- --ignored --nocapture --test-threads=1` | 2 passed |
+| `cargo test --frozen -p ferreth-linking-spike --test capacity_probe -- --ignored --nocapture --test-threads=1` | 1 passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --frozen --workspace --all-targets -- -D warnings` | Passed |
+| `cargo test --frozen --workspace --no-fail-fast` | 269 passed, zero failures, three opt-in probes ignored in this run |
+| `git diff --check` | Passed |
+
+Early GREEN attempts exposed old publisher inventories, continuation and leaf offsets, instruction expectations in the compiler, orchestrator and benchmark tests, and old production widths in the mixed research replay. The new arithmetic stepping test also initially selected the overflow entry when checking underflow. These were corrected from the literal fragment offsets, publisher order and measured body counts. A benchmark expectation edit briefly introduced an extra opening delimiter detected by formatting and compilation. The corrected common gate reran from formatting through the complete workspace.
+
+Phase 3 covers the six existing opcodes and the 28 active reference vectors. EELS results come from the recorded corpus. The REVM comparison runs the pinned direct interpreter and derives V22 settlement from its handler source. GAS and the complete seven-opcode milestone gate are pending. The next action is human review of the Phase 3 diff.
 
 ## Phase 4 — GAS
 

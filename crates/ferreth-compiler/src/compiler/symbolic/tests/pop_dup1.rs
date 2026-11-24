@@ -7,14 +7,14 @@ const POP_UNDERFLOW: &[(u64, u32)] = &[(0, 0x63), (12, 0x6f)];
 const DUP1_UNDERFLOW: &[(u64, u32)] = &[(0, 0x63), (56, 0x6f)];
 const DUP1_OVERFLOW: &[(u64, u32)] = &[(0, 0x63), (4, 0x37), (8, 0x33), (12, 0x63), (60, 0x6f)];
 
-pub(super) type FaultPath = (u64, &'static [(u64, u32)]);
+pub(super) type FaultPath<'a> = (u64, &'a [(u64, u32)]);
 
 fn observe_stack_ops(
     program: &CompiledRv64Program,
     initial: &[U256],
     publisher: u64,
     code: u64,
-    fault: Option<FaultPath>,
+    fault: Option<FaultPath<'_>>,
 ) -> Observation {
     observe_guest(program, initial, publisher, code, fault, &[], 0)
 }
@@ -24,7 +24,7 @@ pub(super) fn observe_guest(
     initial: &[U256],
     publisher: u64,
     code: u64,
-    fault: Option<FaultPath>,
+    fault: Option<FaultPath<'_>>,
     calls: &[(u64, usize)],
     limit: u64,
 ) -> Observation {
@@ -198,7 +198,7 @@ fn assert_parity(
     expected: &[U256],
     code: u64,
     body_words: u64,
-    fault: Option<FaultPath>,
+    fault: Option<FaultPath<'_>>,
 ) {
     let candidate = compile(input).unwrap();
     let legacy = crate::compiler::compile_evm_bytecode_legacy(input).unwrap();
@@ -208,8 +208,8 @@ fn assert_parity(
         [normal, normal + 36, normal + 76]
     );
     assert_eq!(legacy.machine_code().len() as u64, normal - ENTRY_PC + 116);
-    let pushes = legacy_push_offsets(input);
-    let metered_normal = normal + 32 * pushes.len() as u64;
+    let charges = legacy_charge_sites(input);
+    let metered_normal = normal + 32 * charges.len() as u64;
     let has_overflow = decode_detailed(input).unwrap().iter().any(|op| {
         matches!(
             op,
@@ -220,9 +220,7 @@ fn assert_parity(
     if has_overflow {
         publishers.push(metered_normal + 76);
     }
-    if !pushes.is_empty() {
-        publishers.push(metered_normal + 116);
-    }
+    publishers.push(publishers.last().unwrap() + 40);
     assert_eq!(candidate.termination_entry_pcs(), publishers);
     assert_eq!(
         candidate.machine_code().len() as u64,
@@ -235,11 +233,16 @@ fn assert_parity(
         2 => (metered_normal + 36, normal + 76),
         _ => unreachable!("unexpected exception code"),
     };
-    let executed = pushes
+    let funded: Vec<_> = charges
         .iter()
-        .filter(|&&at| fault.is_none_or(|(site, _)| at < site))
-        .count() as u64;
-    let metered_fault = fault.map(|(site, path)| (site + 32 * executed, path));
+        .take_while(|&&(site, _)| fault.is_none_or(|(failure, _)| site <= failure))
+        .collect();
+    let executed = funded.len() as u64;
+    let budget = funded.iter().map(|&&(_, cost)| cost).sum();
+    let metered_path = fault.map(|(_, path)| funded_path(path));
+    let metered_fault = fault
+        .zip(metered_path.as_deref())
+        .map(|((site, _), path)| (site + 32 * (executed - 1), path));
     let actual = observe_guest(
         &candidate,
         initial,
@@ -247,12 +250,12 @@ fn assert_parity(
         code,
         metered_fault,
         &[],
-        3 * executed,
+        budget,
     );
     let reference = observe_stack_ops(&legacy, initial, legacy_publisher, code, fault);
     assert_guest_result(&actual, expected, code, body_words + 7 * executed);
     assert_guest_result(&reference, expected, code, body_words);
-    assert_eq!(actual.guest.gas_limit(), 3 * executed);
+    assert_eq!(actual.guest.gas_limit(), budget);
 }
 
 #[test]
@@ -363,95 +366,96 @@ fn pop_dup1_capacity_probe() {
         );
     }
 
-    let pop_fragments = |count| {
-        (0..count)
-            .map(|index| {
-                let continuation = if index + 1 == count {
-                    PublisherRole::Normal.label().to_owned()
-                } else {
-                    format!("guest_pop_{}", index + 1)
-                };
-                generate_symbolic_pop(index, continuation)
-            })
-            .collect::<Vec<_>>()
-    };
-    let fragments = pop_fragments(49_999);
-    let publishers = publisher_inventory(&fragments);
-    let source = emit(&fragments, &publishers);
-    let image = assemble_image(&source).unwrap();
-    assert_eq!(image.labels().len(), 100_000);
-    assert_eq!(image.len(), 800_060);
-    println!(
-        "POP count=49999 source_bytes={} labels={} image_bytes={} accepted",
-        source.len(),
-        image.labels().len(),
-        image.len()
-    );
-    let candidate = verified_program(&fragments, &publishers, source, image).unwrap();
-    let full = full_stack();
-    let result = observe_stack_ops(
-        &candidate,
-        &full,
-        ENTRY_PC + 800_020,
-        2,
-        Some((16 * 1024, POP_UNDERFLOW)),
-    );
-    assert_guest_result(&result, &[], 2, 3 * 1024 + 2);
-
-    for count in [50_000, 65_531, 65_532] {
-        let source = emit(&pop_fragments(count), &publishers);
-        assert_label_limit(&source, "POP", count, 2 * count + 2, 16 * count + 76);
-    }
     assert_eq!(EXIT_PC - ENTRY_PC, 1_048_572);
-    assert_eq!(16 * 65_531 + 76, 1_048_572);
-    validate_generated_code(ENTRY_PC, 16 * 65_531 + 76).unwrap();
-    assert_eq!(
-        validate_generated_code(ENTRY_PC, 16 * 65_532 + 76),
-        Err(LayoutError::CodeOverlapsExitSlot {
-            code_end: EXIT_PC + 16
-        })
-    );
-
-    for (count, accepted) in [(16_382, true), (16_383, false)] {
-        let fragments = dup1_fragments(count);
-        let publishers = publisher_inventory(&fragments);
-        let source = emit(&fragments, &publishers);
+    let full = full_stack();
+    for (opcode, count, stop, size, accepted) in [
+        (POP, 21_842, false, 1_048_532, true),
+        (POP, 21_843, false, 1_048_580, false),
+        (POP, 21_842, true, 1_048_536, true),
+        (POP, 21_843, true, 1_048_584, false),
+        (DUP1, 10_921, false, 1_048_572, true),
+        (DUP1, 10_920, true, 1_048_480, true),
+        (DUP1, 10_921, true, 1_048_576, false),
+    ] {
+        let source = stack_capacity_source(opcode, count, stop);
         let image = assemble_image(&source).unwrap();
-        let size = 64 * count + 116;
-        let normal = ENTRY_PC + 64 * count as u64;
+        let label_count = if opcode == POP {
+            3 * count + 3
+        } else {
+            4 * count + 4
+        };
+        assert_eq!(image.labels().len(), label_count + usize::from(stop));
         assert_eq!(image.len(), size);
-        assert_eq!(image.labels().len(), 3 * count + 3);
-        assert_eq!(image.label_address("dup1_underflow_0"), Some(ENTRY_PC + 56));
-        assert_eq!(
-            image.label_address("binary_stack_underflow_exit"),
-            Some(normal + 36)
-        );
-        assert_eq!(
-            image.label_address("push1_stack_overflow_exit"),
-            Some(normal + 76)
-        );
+
+        let normal = ENTRY_PC
+            + if opcode == POP {
+                size - 116
+            } else {
+                size - 156
+            } as u64;
+        let oog = ENTRY_PC + size as u64 - 40;
+        assert_eq!(image.label_address("normal_exit"), Some(normal));
+        assert_eq!(image.label_address("out_of_gas_exit"), Some(oog));
         println!(
-            "DUP1 count={count} source_bytes={} labels={} image_bytes={size} accepted={accepted}",
-            source.len(),
-            image.labels().len()
+            "opcode={opcode:02x} count={count} stop={stop} source_bytes={} labels={} image_bytes={size} first_oog_disp={} accepted={accepted}",
+            source.len(), image.labels().len(), oog - (ENTRY_PC + 20),
         );
-        let result = verified_program(&fragments, &publishers, source, image);
+
+        let mut input = vec![opcode; count];
+        input.extend(stop.then_some(0));
+        let result = compile(&input);
         if accepted {
             let candidate = result.unwrap();
-            let underflow =
-                observe_stack_ops(&candidate, &[], normal + 36, 2, Some((0, DUP1_UNDERFLOW)));
-            assert_guest_result(&underflow, &[], 2, 2);
-            let overflow =
-                observe_stack_ops(&candidate, &full, normal + 76, 1, Some((0, DUP1_OVERFLOW)));
-            assert_guest_result(&overflow, &full, 1, 5);
-            let repeated = observe_stack_ops(
-                &candidate,
-                &full[..1],
-                normal + 76,
-                1,
-                Some((64 * 1023, DUP1_OVERFLOW)),
-            );
-            assert_guest_result(&repeated, &vec![full[0]; 1024], 1, 14 * 1023 + 5);
+            assert_eq!(candidate.machine_code(), image.bytes());
+            let oog_result =
+                observe_guest(&candidate, &[], oog, 3, Some((0, OOG_CHARGE_PATH)), &[], 0);
+            assert_guest_result(&oog_result, &[], 3, 6);
+            if opcode == POP {
+                let path = funded_path(POP_UNDERFLOW);
+                let result = observe_guest(
+                    &candidate,
+                    &full,
+                    normal + 36,
+                    2,
+                    Some((48 * 1024, &path)),
+                    &[],
+                    2 * 1025,
+                );
+                assert_guest_result(&result, &[], 2, 10 * 1024 + 9);
+            } else {
+                let empty_path = funded_path(DUP1_UNDERFLOW);
+                let underflow = observe_guest(
+                    &candidate,
+                    &[],
+                    normal + 36,
+                    2,
+                    Some((0, &empty_path)),
+                    &[],
+                    3,
+                );
+                assert_guest_result(&underflow, &[], 2, 9);
+                let full_path = funded_path(DUP1_OVERFLOW);
+                let overflow = observe_guest(
+                    &candidate,
+                    &full,
+                    normal + 76,
+                    1,
+                    Some((0, &full_path)),
+                    &[],
+                    3,
+                );
+                assert_guest_result(&overflow, &full, 1, 12);
+                let repeated = observe_guest(
+                    &candidate,
+                    &full[..1],
+                    normal + 76,
+                    1,
+                    Some((96 * 1023, &full_path)),
+                    &[],
+                    3 * 1024,
+                );
+                assert_guest_result(&repeated, &vec![full[0]; 1024], 1, 21 * 1023 + 12);
+            }
         } else {
             assert_eq!(
                 result,
@@ -462,73 +466,116 @@ fn pop_dup1_capacity_probe() {
         }
     }
 
-    for (count, source_label, target, offset, line, disp) in [
-        (
-            16_384,
-            "dup1_overflow_0",
-            "push1_stack_overflow_exit",
-            60,
-            19,
-            1_048_592,
-        ),
-        (
-            33_331,
-            "dup1_underflow_0",
-            "binary_stack_underflow_exit",
-            56,
-            17,
-            2_133_164,
-        ),
-        (
-            33_332,
-            "dup1_underflow_0",
-            "binary_stack_underflow_exit",
-            56,
-            17,
-            2_133_228,
-        ),
+    // The first OOG site is at +20 and its shared publisher starts
+    // 40 bytes before the nominal end. Test relocation independently
+    // from the ABI image check and the assembler label ceiling.
+    for (opcode, count, stop, size) in [
+        (POP, 21_844, false, 1_048_628),
+        (POP, 21_844, true, 1_048_632),
     ] {
-        let fragments = dup1_fragments(count);
-        let source = emit(&fragments, &publisher_inventory(&fragments));
+        let source = stack_capacity_source(opcode, count, stop);
+        let image = assemble_image(&source).unwrap();
+        assert_eq!(image.len(), size);
         assert_eq!(
-            source.lines().nth(line - 2).unwrap(),
-            format!("{source_label}:")
+            image.label_address("out_of_gas_exit"),
+            Some(ENTRY_PC + size as u64 - 40)
         );
-        assert_eq!(
-            source.lines().nth(line - 1).unwrap().trim(),
-            format!("jal zero, {target}")
+        println!(
+            "POP count={count} stop={stop} image_bytes={size} first_oog_disp={}",
+            size - 60
         );
-        let publisher_offset = if offset == 56 { 36 } else { 76 };
-        let site_pc = ENTRY_PC + offset;
-        let target_pc = ENTRY_PC + (64 * count + publisher_offset) as u64;
-        assert_eq!(target_pc - site_pc, disp);
+    }
+    for (opcode, count, stop, size) in [
+        (POP, 21_845, false, 1_048_676),
+        (POP, 21_845, true, 1_048_680),
+        (DUP1, 10_922, false, 1_048_668),
+        (DUP1, 10_922, true, 1_048_672),
+        (POP, 33_332, false, 48 * 33_332 + 116),
+        (DUP1, 24_999, false, 96 * 24_999 + 156),
+    ] {
+        let source = stack_capacity_source(opcode, count, stop);
         let CompileError::Link { description } = assemble_image(&source).unwrap_err() else {
             panic!("expected link-stage JAL range error");
         };
-        assert!(description.contains(&format!(
-            "BranchOutOfRange {{ label: \"{target}\", disp: {disp}, max: 1048574, span: Span {{ line: {line}, col: 5,"
-        )), "{description}");
-        println!("DUP1 count={count} source_bytes={} nominal_image_bytes={} site={site_pc:#x} target={target_pc:#x} {description}",
-            source.len(), 64 * count + 116);
+        let disp = size - 60;
+        assert!(
+            description.contains(&format!(
+                "BranchOutOfRange {{ label: \"out_of_gas_exit\", disp: {disp}, max: 1048574"
+            )),
+            "{description}"
+        );
+        println!("opcode={opcode:02x} count={count} stop={stop} nominal_image_bytes={size} {description}");
+    }
+    for (opcode, count, stop, labels, size) in [
+        (POP, 33_333, false, 100_002, 48 * 33_333 + 116),
+        (DUP1, 25_000, false, 100_004, 96 * 25_000 + 156),
+        (DUP1, 24_999, true, 100_001, 96 * 24_999 + 160),
+    ] {
+        let source = stack_capacity_source(opcode, count, stop);
+        let name = if opcode == POP { "POP" } else { "DUP1" };
+        assert_label_limit(&source, name, count, labels, size);
     }
 
-    let count = 33_333;
-    let fragments = dup1_fragments(count);
-    let source = emit(&fragments, &publisher_inventory(&fragments));
-    assert_label_limit(&source, "DUP1", count, 3 * count + 3, 64 * count + 116);
+    for opcode in [0x01, 0x03] {
+        for stop in [false, true] {
+            let mut input = vec![opcode; 5_139];
+            input.extend(stop.then_some(0));
+            let size = 1_048_472 + 4 * usize::from(stop);
+            let candidate = compile(&input).unwrap();
+            assert_eq!(candidate.machine_code().len(), size);
+            let image = assemble_image(candidate.assembly()).unwrap();
+            let labels = 5 * 5_139 + 3 + usize::from(stop);
+            assert_eq!(image.labels().len(), labels);
+            let target = ENTRY_PC + size as u64 - 40;
+            let observed = observe_guest(
+                &candidate,
+                &[],
+                target,
+                3,
+                Some((0, OOG_CHARGE_PATH)),
+                &[],
+                0,
+            );
+            assert_guest_result(&observed, &[], 3, 6);
+
+            input.insert(0, opcode);
+            let CompileError::Link { description } = compile(&input).unwrap_err() else {
+                panic!("expected arithmetic OOG JAL range error");
+            };
+            let displacement = size + 204 - 60;
+            assert!(
+                description.contains(&format!(
+                "BranchOutOfRange {{ label: \"out_of_gas_exit\", disp: {displacement}, max: 1048574"
+            )),
+                "{description}"
+            );
+            println!(
+                "opcode={opcode:02x} count=5139 stop={stop} image_bytes={size} labels={labels}; count=5140 {description}"
+            );
+        }
+    }
 }
 
-fn dup1_fragments(count: usize) -> Vec<SymbolicFragment> {
-    (0..count)
+fn stack_capacity_source(opcode: u8, count: usize, stop: bool) -> String {
+    let (generate, entry): (fn(usize, String) -> SymbolicFragment, _) = match opcode {
+        POP => (generate_symbolic_pop, "guest_pop"),
+        DUP1 => (generate_symbolic_dup1, "guest_dup1"),
+        _ => unreachable!(),
+    };
+    let fragments: Vec<_> = (0..count)
         .map(|index| {
-            let continuation = if index + 1 == count {
-                PublisherRole::Normal.label().to_owned()
+            let continuation = if index + 1 < count {
+                format!("{entry}_{}", index + 1)
+            } else if stop {
+                "guest_stop".to_owned()
             } else {
-                format!("guest_dup1_{}", index + 1)
+                PublisherRole::Normal.label().to_owned()
             };
-            generate_symbolic_dup1(index, continuation)
+            generate(index, continuation)
         })
-        .collect()
+        .chain(stop.then(stop_fragment))
+        .collect();
+    emit(&fragments, &publisher_inventory(&fragments))
 }
 
 fn assert_label_limit(source: &str, name: &str, count: usize, labels: usize, size: usize) {
@@ -563,7 +610,7 @@ fn fixed_layout_rejects_swapped_dup1_publishers_even_with_matching_declarations(
         let error = verified_program(fragments, &publishers, broken.clone(), image).unwrap_err();
         assert!(
             matches!(&error, CompileError::Link { description } if description.contains(
-                "transfer at 0x80000038 targets 0x8000009c, expected 0x80000074"
+                "transfer at 0x80000058 targets 0x800000dc, expected 0x800000b4"
             )),
             "{error:?}"
         );
@@ -571,7 +618,88 @@ fn fixed_layout_rejects_swapped_dup1_publishers_even_with_matching_declarations(
     assert_role_error(&fragments);
     // With matching declarations the scan accepts those targets, but the
     // independent fixed-layout gate still requires the original roles.
-    fragments[0].external_references[0].role = PublisherRole::Overflow;
-    fragments[0].external_references[1].role = PublisherRole::Underflow;
+    fragments[0].external_references[1].role = PublisherRole::Overflow;
+    fragments[0].external_references[2].role = PublisherRole::Underflow;
     assert_role_error(&fragments);
+}
+
+#[test]
+fn full_stack_dup1_preserves_v36_allocation_and_settles_live_gas() {
+    let mut input = [0x60, 1].repeat(1024);
+    input.extend([DUP1, 0]);
+    let program = compile(&input).unwrap();
+    let publishers = program.termination_entry_pcs();
+    let overflow = funded_path(DUP1_OVERFLOW);
+    for (limit, code, publisher, path, residual) in [
+        (3074, 3, publishers[3], OOG_CHARGE_PATH, 2),
+        (3075, 1, publishers[2], overflow.as_slice(), 0),
+        (3080, 1, publishers[2], overflow.as_slice(), 5),
+    ] {
+        let observed = observe_guest(
+            &program,
+            &[],
+            publisher,
+            code,
+            Some((1024 * 76, path)),
+            &[],
+            limit,
+        );
+        assert_eq!(
+            observed.guest.status(),
+            GuestExecutionStatus::GuestException
+        );
+        assert_eq!(observed.guest.exception_code(), code);
+        assert_eq!(observed.guest.stack(), &[U256::from(1); 1024]);
+        assert_eq!(observed.guest.final_s1(), EVM_STACK_REGION.end());
+        assert_eq!(observed.guest.remaining_gas(), 0);
+        assert_eq!(observed.guest.gas_used(), limit);
+        assert_eq!(
+            observed.body.executed_instructions,
+            1024 * 17 + path.len() as u64
+        );
+        assert_eq!(observed.termination.executed_instructions, 10);
+        let running = |live| {
+            GuestMetadata::new(
+                GuestExecutionStatus::Running,
+                code,
+                EVM_STACK_REGION.end(),
+                limit,
+                live,
+                0,
+            )
+            .encode()
+        };
+        assert_eq!(observed.trace[5], running(residual));
+        assert_eq!(observed.trace[6..9], [running(0); 3]);
+    }
+}
+
+#[test]
+fn unfunded_pop_and_dup1_preserve_stack_allocation() {
+    for (opcode, limit) in [(POP, 4), (DUP1, 5)] {
+        let program = compile(&[0x60, 2, opcode, 0]).unwrap();
+        let observed = observe_guest(
+            &program,
+            &[],
+            *program.termination_entry_pcs().last().unwrap(),
+            3,
+            Some((76, OOG_CHARGE_PATH)),
+            &[],
+            limit,
+        );
+        assert_eq!(
+            observed.guest.status(),
+            GuestExecutionStatus::GuestException
+        );
+        assert_eq!(observed.guest.exception_code(), 3);
+        assert_eq!(observed.guest.stack(), &[U256::from(2)]);
+        assert_eq!(
+            observed.guest.final_s1(),
+            EVM_STACK_REGION.start() + EVM_WORD_SIZE
+        );
+        assert_eq!(observed.guest.remaining_gas(), 0);
+        assert_eq!(observed.guest.gas_used(), limit);
+        assert_eq!(observed.body.executed_instructions, 17 + 6);
+        assert_eq!(observed.termination.executed_instructions, 10);
+    }
 }

@@ -13,6 +13,8 @@ use crate::{
 };
 use std::fmt::Write;
 
+use super::gas::{emit_static_charge, STATIC_CHARGE_WORDS};
+
 /// Generates one stack-aware RV64 implementation of EVM `POP`.
 ///
 /// The generated code checks that `s1 > s0` before retiring the top word.
@@ -45,6 +47,7 @@ pub(crate) fn generate_symbolic_pop(index: usize, continuation: String) -> Symbo
     let underflow = format!("pop_underflow_{index}");
     let mut assembly = String::new();
     writeln!(assembly, "{entry}:").unwrap();
+    let (gas_check, oog) = emit_static_charge(&mut assembly, &entry, 2);
     writeln!(
         assembly,
         "    bgeu s0, s1, {underflow}\n\
@@ -56,56 +59,46 @@ pub(crate) fn generate_symbolic_pop(index: usize, continuation: String) -> Symbo
     )
     .unwrap();
 
-    let continuation_reference = if continuation == PublisherRole::Normal.label() {
-        vec![ExternalDeclaration {
-            site_word: 2,
-            role: PublisherRole::Normal,
+    let mut external_references = vec![
+        oog,
+        ExternalDeclaration {
+            site_word: STATIC_CHARGE_WORDS + 3,
+            role: PublisherRole::Underflow,
             kind: Transfer::Jal { rd: 0 },
-        }]
-    } else {
-        Vec::new()
-    };
-    let mut external_references = vec![ExternalDeclaration {
-        site_word: 3,
-        role: PublisherRole::Underflow,
-        kind: Transfer::Jal { rd: 0 },
-    }];
-    external_references.extend(continuation_reference);
-
-    let local_references = if continuation == PublisherRole::Normal.label() {
-        vec![LocalDeclaration {
-            site_word: 0,
+        },
+    ];
+    let mut local_references = vec![
+        gas_check,
+        LocalDeclaration {
+            site_word: STATIC_CHARGE_WORDS,
             target_symbol: underflow,
             kind: Transfer::Branch {
                 funct3: 7,
                 rs1: 8,
                 rs2: 9,
             },
-        }]
+        },
+    ];
+    let continuation_site = STATIC_CHARGE_WORDS + 2;
+    if continuation == PublisherRole::Normal.label() {
+        external_references.push(ExternalDeclaration {
+            site_word: continuation_site,
+            role: PublisherRole::Normal,
+            kind: Transfer::Jal { rd: 0 },
+        });
     } else {
-        vec![
-            LocalDeclaration {
-                site_word: 0,
-                target_symbol: underflow,
-                kind: Transfer::Branch {
-                    funct3: 7,
-                    rs1: 8,
-                    rs2: 9,
-                },
-            },
-            LocalDeclaration {
-                site_word: 2,
-                target_symbol: continuation,
-                kind: Transfer::Jal { rd: 0 },
-            },
-        ]
-    };
+        local_references.push(LocalDeclaration {
+            site_word: continuation_site,
+            target_symbol: continuation,
+            kind: Transfer::Jal { rd: 0 },
+        });
+    }
 
     SymbolicFragment::new(
         assembly,
         entry,
         external_references,
         local_references,
-        Fragment::Pop,
+        Fragment::MeteredPop,
     )
 }

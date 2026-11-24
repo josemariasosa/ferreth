@@ -18,14 +18,25 @@ use revm::{
     primitives::{Bytes, U256, hardfork::SpecId},
 };
 
-fn check(
-    id: &str,
-    code: &[u8],
-    limit: u64,
-    expected: InstructionResult,
+struct RawReference<'a> {
+    result: InstructionResult,
     remaining: u64,
-    expected_stack: &[U256],
-) {
+    stack: &'a [u64],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FrameOutcome<'a> {
+    Normal(&'a [u64]),
+    Exceptional,
+}
+
+struct SettledFrame<'a> {
+    outcome: FrameOutcome<'a>,
+    remaining: u64,
+    gross_used: u64,
+}
+
+fn check(id: &str, code: &[u8], limit: u64, reference: RawReference<'_>, frame: SettledFrame<'_>) {
     let spec = SpecId::CANCUN;
     let mut interpreter = Interpreter::<EthInterpreter>::new(
         SharedMemory::new(),
@@ -45,115 +56,159 @@ fn check(
     };
     let stack = interpreter.stack.data();
     eprintln!(
-        "{id} REVM {:?}, remaining={}, used={}, stack={stack:?}, pc={}",
+        "{id} REVM {:?}, remaining={}, used={}, stack={}, pc={}",
         raw.result,
         raw.gas.remaining(),
         limit - raw.gas.remaining(),
+        diagnostic_stack(stack),
         interpreter.bytecode.pc()
     );
-    assert_eq!(raw.result, expected, "{id} raw REVM result");
-    assert_eq!(raw.gas.remaining(), remaining, "{id} raw REVM remaining");
-    assert_eq!(stack, expected_stack, "{id} raw REVM stack");
-    // These rows already report zero raw gas on exceptions. Use the documented
-    // exceptional frame settlement for reference comparisons only.
-    let normal = raw.result == InstructionResult::Stop;
-    let settled = if normal { raw.gas.remaining() } else { 0 };
-    assert_eq!(settled, remaining, "{id} settled REVM remaining");
+
+    assert_eq!(raw.result, reference.result, "{id} raw REVM result");
+    assert_eq!(
+        raw.gas.remaining(),
+        reference.remaining,
+        "{id} raw REVM remaining"
+    );
+    assert_eq!(*stack, words(reference.stack), "{id} raw REVM stack");
+
+    // The pinned handler spends all remaining regular gas for exceptional
+    // halts. This settlement is source-derived for V22. run_plain stops
+    // before the handler, so preserve its raw observations above.
+    let settled = match raw.result {
+        InstructionResult::Stop => {
+            let FrameOutcome::Normal(expected) = frame.outcome else {
+                panic!("{id} expected exceptional reference termination")
+            };
+            assert_eq!(*stack, words(expected), "{id} successful REVM stack");
+            raw.gas.remaining()
+        }
+        result if result.is_halt() => {
+            assert_eq!(
+                frame.outcome,
+                FrameOutcome::Exceptional,
+                "{id} reference outcome"
+            );
+            0
+        }
+        result => panic!("{id} unsupported reference termination {result:?}"),
+    };
+    assert_eq!(settled, frame.remaining, "{id} settled REVM remaining");
+    assert_eq!(
+        limit - settled,
+        frame.gross_used,
+        "{id} settled REVM gross used"
+    );
+
     let execution = execute_guest_evm_bytecode(code, limit).unwrap_or_else(|e| panic!("{id} {e}"));
     let guest = execution.guest_result();
     eprintln!(
-        "{id} Ferreth {:?}, code={}, remaining={}, used={}, depth={}",
+        "{id} Ferreth {:?}, code={}, remaining={}, used={}, stack={}",
         guest.status(),
         guest.exception_code(),
         guest.remaining_gas(),
         guest.gas_used(),
-        guest.stack().len()
+        diagnostic_stack(guest.stack())
     );
-    let status = if normal {
-        GuestExecutionStatus::Normal
-    } else {
-        GuestExecutionStatus::GuestException
-    };
-    assert_eq!(guest.status(), status, "{id}");
-    if normal {
-        assert_eq!(guest.stack(), expected_stack, "{id}");
-        assert_eq!(guest.exception_code(), 0, "{id}");
-        assert_eq!(
-            guest.final_s1(),
-            EVM_STACK_REGION.start() + expected_stack.len() as u64 * EVM_WORD_SIZE,
-            "{id}"
-        );
+    match frame.outcome {
+        FrameOutcome::Normal(expected) => {
+            assert_eq!(guest.status(), GuestExecutionStatus::Normal, "{id}");
+            assert_eq!(guest.stack(), words(expected), "{id}");
+            assert_eq!(guest.exception_code(), 0, "{id}");
+            assert_eq!(
+                guest.final_s1(),
+                EVM_STACK_REGION.start() + expected.len() as u64 * EVM_WORD_SIZE,
+                "{id}"
+            );
+        }
+        FrameOutcome::Exceptional => {
+            assert_eq!(guest.status(), GuestExecutionStatus::GuestException, "{id}");
+        }
     }
     assert_eq!(
         guest.remaining_gas(),
-        remaining,
+        frame.remaining,
         "{id} published remaining gas"
     );
     assert_eq!(guest.gas_limit(), limit, "{id}");
-    assert_eq!(guest.gas_used(), limit - remaining, "{id}");
+    assert_eq!(guest.gas_used(), frame.gross_used, "{id}");
 }
 
-#[test]
-fn v01_stop() {
-    check("V01", &[0], 0, InstructionResult::Stop, 0, &[]);
+fn words(values: &[u64]) -> Vec<U256> {
+    values.iter().copied().map(U256::from).collect()
 }
 
-#[test]
-fn v02_stop_before_gas() {
-    check("V02", &[0, 0x5a], 7, InstructionResult::Stop, 7, &[]);
+fn diagnostic_stack(stack: &[U256]) -> String {
+    if stack.len() == 1024 && stack.iter().all(|&value| value == U256::from(1)) {
+        "1024 ones".to_owned()
+    } else {
+        format!("{stack:?}")
+    }
 }
 
-#[test]
-fn v03_empty() {
-    check("V03", &[], 0, InstructionResult::Stop, 0, &[]);
+macro_rules! vectors {
+    ($( $test:ident, $id:literal, $code:expr, $limit:literal;
+     $raw_result:ident, $raw_remaining:literal, $raw_stack:expr;
+     $outcome:expr, $settled:literal, $gross:literal; )+) => {$(
+        #[test]
+        fn $test() {
+            check(
+                $id,
+                $code,
+                $limit,
+                RawReference {
+                    result: InstructionResult::$raw_result,
+                    remaining: $raw_remaining,
+                    stack: $raw_stack,
+                },
+                SettledFrame {
+                    outcome: $outcome,
+                    remaining: $settled,
+                    gross_used: $gross,
+                },
+            );
+        }
+    )+};
 }
 
-#[test]
-fn v04_push_below_cost() {
-    check("V04", &[0x60, 2, 0], 2, InstructionResult::OutOfGas, 0, &[]);
-}
+use FrameOutcome::{Exceptional, Normal};
 
-#[test]
-fn v05_push_at_cost() {
-    check(
-        "V05",
-        &[0x60, 2, 0],
-        3,
-        InstructionResult::Stop,
-        0,
-        &[U256::from(2)],
-    );
-}
-
-#[test]
-fn v06_push_excess_at_eof() {
-    check(
-        "V06",
-        &[0x60, 2],
-        4,
-        InstructionResult::Stop,
-        1,
-        &[U256::from(2)],
-    );
-}
-
-#[test]
-fn v07_truncated_push() {
-    check("V07", &[0x60], 3, InstructionResult::Stop, 0, &[U256::ZERO]);
-}
-
-fn check_full_stack(id: &str, limit: u64, expected: InstructionResult) {
+fn full_stack_program(suffix: &[u8]) -> Vec<u8> {
     let mut code = [0x60, 1].repeat(1024);
-    code.extend([0x60, 2, 0]);
-    check(id, &code, limit, expected, 0, &vec![U256::from(1); 1024]);
+    code.extend(suffix);
+    code
 }
 
-#[test]
-fn v32_full_stack_below_cost() {
-    check_full_stack("V32", 3074, InstructionResult::OutOfGas);
-}
-
-#[test]
-fn v33_full_stack_at_cost() {
-    check_full_stack("V33", 3075, InstructionResult::StackOverflow);
+// Raw and settled expectations are transcribed from the recorded corpus.
+#[rustfmt::skip]
+vectors! {
+    // Test name, ID, bytecode, limit; raw outcome, remaining, stack; settled outcome, remaining, gross used.
+    v01_stop, "V01", &[0x00], 0; Stop, 0, &[]; Normal(&[]), 0, 0;
+    v02_stop_before_gas, "V02", &[0x00, 0x5a], 7; Stop, 7, &[]; Normal(&[]), 7, 0;
+    v03_empty, "V03", &[], 0; Stop, 0, &[]; Normal(&[]), 0, 0;
+    v04_push_below_cost, "V04", &[0x60, 0x02, 0x00], 2; OutOfGas, 0, &[]; Exceptional, 0, 2;
+    v05_push_at_cost, "V05", &[0x60, 0x02, 0x00], 3; Stop, 0, &[2]; Normal(&[2]), 0, 3;
+    v06_push_excess_at_eof, "V06", &[0x60, 0x02], 4; Stop, 1, &[2]; Normal(&[2]), 1, 3;
+    v07_truncated_push, "V07", &[0x60], 3; Stop, 0, &[0]; Normal(&[0]), 0, 3;
+    v08_pop_below_cost, "V08", &[0x60, 0x02, 0x50, 0x00], 4; OutOfGas, 0, &[2]; Exceptional, 0, 4;
+    v09_pop_at_cost, "V09", &[0x60, 0x02, 0x50, 0x00], 5; Stop, 0, &[]; Normal(&[]), 0, 5;
+    v10_pop_excess, "V10", &[0x60, 0x02, 0x50, 0x00], 6; Stop, 1, &[]; Normal(&[]), 1, 5;
+    v11_pop_empty_below_cost, "V11", &[0x50, 0x00], 1; OutOfGas, 0, &[]; Exceptional, 0, 1;
+    v12_dup1_below_cost, "V12", &[0x60, 0x02, 0x80, 0x00], 5; OutOfGas, 0, &[2]; Exceptional, 0, 5;
+    v13_dup1_at_cost, "V13", &[0x60, 0x02, 0x80, 0x00], 6; Stop, 0, &[2, 2]; Normal(&[2, 2]), 0, 6;
+    v14_dup1_excess, "V14", &[0x60, 0x02, 0x80, 0x00], 7; Stop, 1, &[2, 2]; Normal(&[2, 2]), 1, 6;
+    v15_dup1_empty_at_cost, "V15", &[0x80, 0x00], 3; StackOverflow, 0, &[]; Exceptional, 0, 3;
+    v16_add_below_cost, "V16", &[0x60, 0x02, 0x60, 0x03, 0x01, 0x00], 8; OutOfGas, 0, &[2, 3]; Exceptional, 0, 8;
+    v17_add_at_cost, "V17", &[0x60, 0x02, 0x60, 0x03, 0x01, 0x00], 9; Stop, 0, &[5]; Normal(&[5]), 0, 9;
+    v18_add_excess, "V18", &[0x60, 0x02, 0x60, 0x03, 0x01, 0x00], 10; Stop, 1, &[5]; Normal(&[5]), 1, 9;
+    v19_add_empty_zero_gas, "V19", &[0x01], 0; OutOfGas, 0, &[]; Exceptional, 0, 0;
+    v20_add_empty_below_cost, "V20", &[0x01], 2; OutOfGas, 0, &[]; Exceptional, 0, 2;
+    v21_add_empty_at_cost, "V21", &[0x01], 3; StackUnderflow, 0, &[]; Exceptional, 0, 3;
+    v22_add_one_operand, "V22", &[0x60, 0x02, 0x01, 0x00], 20; StackUnderflow, 14, &[2]; Exceptional, 0, 20;
+    v23_sub_below_cost, "V23", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 8; OutOfGas, 0, &[2, 3]; Exceptional, 0, 8;
+    v24_sub_at_cost, "V24", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 9; Stop, 0, &[1]; Normal(&[1]), 0, 9;
+    v25_sub_excess, "V25", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 10; Stop, 1, &[1]; Normal(&[1]), 1, 9;
+    v32_full_stack_below_cost, "V32", &full_stack_program(&[0x60, 2, 0]), 3074; OutOfGas, 0, &[1; 1024]; Exceptional, 0, 3074;
+    v33_full_stack_at_cost, "V33", &full_stack_program(&[0x60, 2, 0]), 3075; StackOverflow, 0, &[1; 1024]; Exceptional, 0, 3075;
+    v36_full_stack_dup1, "V36", &full_stack_program(&[0x80, 0]), 3075; StackOverflow, 0, &[1; 1024]; Exceptional, 0, 3075;
 }

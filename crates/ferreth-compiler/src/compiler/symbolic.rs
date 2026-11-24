@@ -276,9 +276,7 @@ fn verified_program(
     use PublisherRole::{Normal, OutOfGas, Overflow, Underflow};
     let symbolic_layout = match publishers {
         [Normal] => PublisherLayout::Symbolic,
-        [Normal, Underflow] => PublisherLayout::SymbolicNormalUnderflow,
-        [Normal, Overflow] => PublisherLayout::SymbolicNormalOverflow,
-        [Normal, Underflow, Overflow] => PublisherLayout::SymbolicNormalUnderflowOverflow,
+        [Normal, Underflow, OutOfGas] => PublisherLayout::SymbolicNormalUnderflowOutOfGas,
         [Normal, Overflow, OutOfGas] => PublisherLayout::SymbolicNormalOverflowOutOfGas,
         [Normal, Underflow, Overflow, OutOfGas] => {
             PublisherLayout::SymbolicNormalUnderflowOverflowOutOfGas

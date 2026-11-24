@@ -28,9 +28,8 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
     let decoded = decode_detailed(input).unwrap();
     let mut body_size = 0;
     let mut legacy_size = 0;
-    let mut labels = 2; // Normal and Underflow.
+    let mut labels = 3; // Normal, Underflow and OOG.
     let mut overflow = false;
-    let mut oog = false;
     let image = assemble_image(candidate.assembly()).unwrap();
     assert_eq!(image.bytes(), candidate.machine_code());
     assert_eq!(
@@ -48,20 +47,19 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
             DecodedInstruction::Push { opcode: 0x60, .. } => {
                 labels += 4;
                 overflow = true;
-                oog = true;
                 (44, 32, &[40])
             }
             DecodedInstruction::Pop { .. } => {
-                labels += 2;
-                (16, 0, &[12])
+                labels += 3;
+                (16, 32, &[12])
             }
             DecodedInstruction::Dup1 { .. } => {
-                labels += 3;
+                labels += 4;
                 overflow = true;
-                (64, 0, &[56, 60])
+                (64, 32, &[56, 60])
             }
             DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => {
-                labels += 4;
+                labels += 5;
                 let opcode = if matches!(instruction, DecodedInstruction::Add { .. }) {
                     Opcode::Add
                 } else {
@@ -69,20 +67,20 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
                 };
                 let core = standalone_core(opcode);
                 assert_eq!(core.len(), 136);
-                assert_eq!(c[body_size + 36..body_size + 172], core);
+                assert_eq!(c[body_size + 68..body_size + 204], core);
                 assert_eq!(l[legacy_size + 36..legacy_size + 172], core);
                 for (name, offset) in [
                     ("guest_arithmetic", 0),
-                    ("arith_update", 24),
-                    ("arith_underflow", 32),
-                    ("arith_core", 36),
+                    ("arith_update", 56),
+                    ("arith_underflow", 64),
+                    ("arith_core", 68),
                 ] {
                     assert_eq!(
                         image.label_address(&format!("{name}_{index}")),
                         Some(ENTRY_PC + (body_size + offset) as u64)
                     );
                 }
-                (172, 0, &[32])
+                (172, 32, &[32])
             }
             _ => unreachable!(),
         };
@@ -101,34 +99,26 @@ fn assert_artifacts(input: &[u8], candidate: &CompiledRv64Program, legacy: &Comp
         body_size += width + prefix;
         legacy_size += width;
     }
-    assert_eq!(
-        image.labels().len(),
-        labels + usize::from(overflow) + usize::from(oog)
-    );
+    assert_eq!(image.labels().len(), labels + usize::from(overflow));
     let normal = ENTRY_PC + body_size as u64;
     let old_normal = ENTRY_PC + legacy_size as u64;
     let mut candidate_pcs = vec![normal, normal + 36];
     if overflow {
         candidate_pcs.push(normal + 76);
     }
-    if oog {
-        candidate_pcs.push(normal + 116);
-    }
+    candidate_pcs.push(candidate_pcs.last().unwrap() + 40);
     assert_eq!(candidate.termination_entry_pcs(), candidate_pcs);
     assert_eq!(
         legacy.termination_entry_pcs(),
         [old_normal, old_normal + 36, old_normal + 76]
     );
-    assert_eq!(
-        c.len(),
-        body_size + 76 + 40 * (usize::from(overflow) + usize::from(oog))
-    );
+    assert_eq!(c.len(), body_size + 116 + 40 * usize::from(overflow));
     assert_eq!(l.len(), legacy_size + 116);
     assert_eq!(candidate.normal_termination_instructions(), 9);
     assert_eq!(legacy.normal_termination_instructions(), 9);
     assert_eq!(
         candidate.exceptional_termination_instructions(),
-        10 + 10 * (u64::from(overflow) + u64::from(oog))
+        20 + 10 * u64::from(overflow)
     );
     assert_eq!(legacy.exceptional_termination_instructions(), 10);
     assert_eq!(
@@ -153,7 +143,7 @@ fn parity(
     expected: &[U256],
     body_words: u64,
     calls: &[(u64, usize)],
-    failure: Option<(u64, FaultPath)>,
+    failure: Option<(u64, FaultPath<'_>)>,
 ) {
     let candidate = compile(input).unwrap();
     let legacy = crate::compiler::compile_evm_bytecode_legacy(input).unwrap();
@@ -161,23 +151,22 @@ fn parity(
     let (code, fault) = failure.map_or((0, None), |(code, path)| (code, Some(path)));
     let offsets = [(0, 0), (76, 36), (36, 76)];
     let (c_offset, l_offset) = offsets[code as usize];
-    let pushes = legacy_push_offsets(input);
-    let prefix = |site| pushes.partition_point(|&at| at < site) as u64;
-    let executed = fault.map_or(pushes.len() as u64, |(site, _)| {
-        prefix(site) + u64::from(pushes.contains(&site))
-    });
+    let charges = legacy_charge_sites(input);
+    let prefix = |site| charges.partition_point(|&(at, _)| at < site) as u64;
+    let funded: Vec<_> = charges
+        .iter()
+        .take_while(|&&(site, _)| fault.is_none_or(|(failure, _)| site <= failure))
+        .collect();
+    let executed = funded.len() as u64;
+    let budget = funded.iter().map(|&&(_, cost)| cost).sum();
     let metered_calls: Vec<_> = calls
         .iter()
-        .map(|&(site, depth)| (site + 32 * prefix(site), depth))
+        .map(|&(site, depth)| (site + 32 * (prefix(site) + 1), depth))
         .collect();
-    let metered_fault = fault.map(|(site, path)| {
-        let path = if pushes.contains(&site) {
-            METERED_OVERFLOW
-        } else {
-            path
-        };
-        (site + 32 * prefix(site), path)
-    });
+    let metered_path = fault.map(|(_, path)| funded_path(path));
+    let metered_fault = fault
+        .zip(metered_path.as_deref())
+        .map(|((site, _), path)| (site + 32 * prefix(site), path));
     let actual = observe_guest(
         &candidate,
         initial,
@@ -185,7 +174,7 @@ fn parity(
         code,
         metered_fault,
         &metered_calls,
-        3 * executed,
+        budget,
     );
     let reference = observe_guest(
         &legacy,
@@ -198,7 +187,7 @@ fn parity(
     );
     assert_guest_result(&actual, expected, code, body_words + 7 * executed);
     assert_guest_result(&reference, expected, code, body_words);
-    assert_eq!(actual.guest.gas_limit(), 3 * executed);
+    assert_eq!(actual.guest.gas_limit(), budget);
 }
 
 #[test]
@@ -210,8 +199,8 @@ fn standalone_arithmetic_core_words_and_fingerprints_match() {
         let core = standalone_core(opcode);
         let candidate = compile(&[bytecode, bytecode]).unwrap();
         assert_eq!(core.len(), 34 * 4);
-        for offset in [0, 172] {
-            assert_eq!(candidate.machine_code()[offset + 36..offset + 172], core);
+        for offset in [0, 204] {
+            assert_eq!(candidate.machine_code()[offset + 68..offset + 204], core);
         }
         let actual = core.iter().fold(0xcbf2_9ce4_8422_2325_u64, |acc, &byte| {
             (acc ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
@@ -493,7 +482,7 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
     let publishers = publisher_inventory(&originals);
     let source = emit(&originals, &publishers);
     let mut fragments = originals.clone();
-    let call = fragments[0].local_transfers.remove(1);
+    let call = fragments[0].local_transfers.remove(2);
     assert_rejected(
         &fragments,
         &publishers,
@@ -511,7 +500,7 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
     );
 
     let mut fragments = originals.clone();
-    fragments[0].local_transfers[2].target_symbol = "arith_update_1".into();
+    fragments[0].local_transfers[3].target_symbol = "arith_update_1".into();
     assert_rejected(
         &fragments,
         &publishers,
@@ -524,7 +513,7 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
     let mut fragments = originals.clone();
     fragments[0]
         .local_transfers
-        .retain(|transfer| !matches!(transfer.site_word, 5 | 42));
+        .retain(|transfer| !matches!(transfer.site_word, 13 | 50));
     let edited = source
         .replacen("jal ra, arith_core_0", "nop", 1)
         .replacen("ret", "nop", 1);
@@ -532,16 +521,16 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
         &fragments,
         &publishers,
         edited,
-        "at declared transfer 0x80000014",
+        "at declared transfer 0x80000034",
     );
 
     // Swapping both calls and their return declarations produces internally
     // consistent bindings to another occurrence, which the fixed layout rejects.
     let mut fragments = originals.clone();
-    fragments[0].local_transfers[1].target_symbol = "arith_core_1".into();
-    fragments[1].local_transfers[1].target_symbol = "arith_core_0".into();
-    fragments[0].local_transfers[2].target_symbol = "arith_update_1".into();
-    fragments[1].local_transfers[2].target_symbol = "arith_update_0".into();
+    fragments[0].local_transfers[2].target_symbol = "arith_core_1".into();
+    fragments[1].local_transfers[2].target_symbol = "arith_core_0".into();
+    fragments[0].local_transfers[3].target_symbol = "arith_update_1".into();
+    fragments[1].local_transfers[3].target_symbol = "arith_update_0".into();
     let edited = source
         .replacen("jal ra, arith_core_0", "jal ra, arith_core_1", 1)
         .replacen(
@@ -553,11 +542,11 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
         &fragments,
         &publishers,
         edited,
-        "transfer at 0x80000014 targets",
+        "transfer at 0x80000034 targets",
     );
 
     let mut fragments = originals;
-    fragments[0].external_references[0].role = PublisherRole::Overflow;
+    fragments[0].external_references[1].role = PublisherRole::Overflow;
     assert_rejected(
         &fragments,
         &publishers,
@@ -566,7 +555,7 @@ fn arithmetic_verifier_rejects_incorrect_or_incomplete_declarations() {
             "jal zero, push1_stack_overflow_exit",
             1,
         ),
-        "transfer at 0x80000020 targets",
+        "transfer at 0x80000040 targets",
     );
 }
 
@@ -611,4 +600,57 @@ fn replays_cancun_multilimb_dup_and_stopped_sub_vectors() {
         &[(108, 2)],
         None,
     );
+}
+
+#[test]
+fn failing_arithmetic_preserves_operands_and_settles_residual_live_gas() {
+    use GuestExecutionStatus::{GuestException, Running};
+
+    let underflow = funded_path(ARITH_UNDERFLOW);
+    for opcode in [ADD, SUB] {
+        for (prefix, limit, path, code, residual, expected) in [
+            (
+                &[0x60, 2, 0x60, 3][..],
+                8,
+                OOG_CHARGE_PATH,
+                3,
+                2,
+                &[2, 3][..],
+            ),
+            (&[0x60, 2][..], 20, underflow.as_slice(), 2, 14, &[2][..]),
+        ] {
+            let mut input = prefix.to_vec();
+            input.extend([opcode, 0]);
+            let program = compile(&input).unwrap();
+            let depth = (prefix.len() / 2) as u64;
+            let publisher = program.termination_entry_pcs()[if code == 2 { 1 } else { 3 }];
+            let observed = observe_guest(
+                &program,
+                &[],
+                publisher,
+                code,
+                Some((76 * depth, path)),
+                &[],
+                limit,
+            );
+            let stack: Vec<_> = expected.iter().copied().map(U256::from).collect();
+            let s1 = EVM_STACK_REGION.start() + depth * EVM_WORD_SIZE;
+            assert_eq!(observed.guest.status(), GuestException);
+            assert_eq!(observed.guest.exception_code(), code);
+            assert_eq!(observed.guest.stack(), stack);
+            assert_eq!(observed.guest.final_s1(), s1);
+            assert_eq!(observed.guest.remaining_gas(), 0);
+            assert_eq!(observed.guest.gas_used(), limit);
+            assert_eq!(
+                observed.body.executed_instructions,
+                17 * depth + path.len() as u64
+            );
+            assert_eq!(observed.termination.executed_instructions, 10);
+            let record =
+                |status, live| GuestMetadata::new(status, code, s1, limit, live, 0).encode();
+            assert_eq!(observed.trace[5], record(Running, residual));
+            assert_eq!(observed.trace[6..9], [record(Running, 0); 3]);
+            assert_eq!(observed.trace[9..], [record(GuestException, 0); 2]);
+        }
+    }
 }

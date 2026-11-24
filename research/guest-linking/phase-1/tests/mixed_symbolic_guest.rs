@@ -233,7 +233,7 @@ fn check_transfers(code: &[u8], range: Range<u64>, expected: &[Transfer]) -> Vec
 
 struct Layout {
     publishers: [u64; 4],
-    charges: Vec<u64>,
+    charges: Vec<(u64, u64)>,
     // (EVM instruction ordinal, core entry, return to the wrapper)
     calls: Vec<(usize, u64, u64)>,
     // (EVM instruction ordinal, trampoline, publisher)
@@ -281,7 +281,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
     } else {
         0
     };
-    let oog = if !experimental && ops.iter().any(|op| matches!(op, Instruction::Push(_))) {
+    let oog = if !experimental && ops.iter().any(|op| *op != Instruction::Stop) {
         label(OOG)
     } else {
         0
@@ -295,17 +295,14 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
             assert_eq!(entry, expected_pc, "fragment {i} ({op:?})");
             expected_pc += match op {
                 Instruction::Stop => 4,
-                Instruction::Push(_) => {
-                    if experimental {
-                        44
-                    } else {
-                        76
-                    }
-                }
+                Instruction::Push(_) => 44,
                 Instruction::Pop => 16,
                 Instruction::Dup1 => 64,
                 Instruction::Add | Instruction::Sub => 172,
             };
+            if !experimental && op != Instruction::Stop {
+                expected_pc += 32;
+            }
             entry
         })
         .collect();
@@ -326,6 +323,23 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
         if experimental && op != Instruction::Stop {
             assert_eq!(label(&format!("continue_{i}")), next);
         }
+        let body = if !experimental && op != Instruction::Stop {
+            let sufficient = label(&format!("{}_gas_sufficient", entry_name(op, i)));
+            assert_eq!(sufficient, entry + 24);
+            assert_eq!(
+                check_transfers(
+                    code,
+                    entry..entry + 32,
+                    &[Branch(0x0072_f063, sufficient), Jal(0, oog)],
+                ),
+                [entry + 16, entry + 20],
+            );
+            let cost = if op == Instruction::Pop { 2 } else { 3 };
+            layout.charges.push((entry + 28, cost));
+            entry + 32
+        } else {
+            entry
+        };
         let mut trap = |pc, publisher| {
             assert!(sites.insert(pc));
             layout.traps.push((i, pc, publisher));
@@ -338,18 +352,13 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                 } else {
                     label(&format!("push1_overflow_{i}"))
                 };
-                let mut edges = Vec::new();
                 if !experimental {
                     assert_eq!(label(&format!("push1_continue_{i}")), next);
-                    let sufficient = label(&format!("guest_push1_{i}_gas_sufficient"));
-                    assert_eq!(sufficient, entry + 24);
-                    assert_eq!(over, entry + 72);
-                    edges.extend([Branch(0x0072_f063, sufficient), Jal(0, oog)]);
-                    layout.charges.push(entry + 28);
+                    assert_eq!(over, body + 40);
                 }
-                edges.extend([Branch(FULL, over), Jal(0, next), trap(over, overflow)]);
+                let edges = [Branch(FULL, over), Jal(0, next), trap(over, overflow)];
                 assert_eq!(
-                    check_transfers(code, entry..next, &edges).last(),
+                    check_transfers(code, body..next, &edges).last(),
                     Some(&over)
                 );
             }
@@ -361,7 +370,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                 };
                 let under = label(&name);
                 let edges = [Branch(EMPTY, under), Jal(0, next), trap(under, underflow)];
-                assert_eq!(check_transfers(code, entry..next, &edges)[2], under);
+                assert_eq!(check_transfers(code, body..next, &edges)[2], under);
             }
             Instruction::Dup1 => {
                 let (under_name, over_name) = if experimental {
@@ -379,7 +388,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                     trap(over, overflow),
                 ];
                 assert_eq!(
-                    check_transfers(code, entry..next, &edges)[3..],
+                    check_transfers(code, body..next, &edges)[3..],
                     [under, over]
                 );
             }
@@ -406,7 +415,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                     Jal(0, next),
                     trap(under, underflow),
                 ];
-                let jump_sites = check_transfers(code, entry..core, &edges);
+                let jump_sites = check_transfers(code, body..core, &edges);
                 assert_eq!(jump_sites[3], under);
                 let return_pc = jump_sites[1] + 4;
                 let update = if experimental {
@@ -556,9 +565,12 @@ fn execute(
         publisher
     };
     let spent_at = |pc: u64| {
-        3 * layout
+        layout
             .charges
-            .partition_point(|&store| store < pc.min(body_end)) as u64
+            .iter()
+            .take_while(|&&(store, _)| store < pc.min(body_end))
+            .map(|&(_, cost)| cost)
+            .sum::<u64>()
     };
     let limit = spent_at(body_end);
     initialize_guest_state(&mut executor, limit).unwrap();
@@ -754,15 +766,15 @@ fn compare(bytecode: &[u8], initial: &[Word], expected: &[Word], fault: Option<(
         expected,
         fault,
     );
-    let executed_pushes = ops
+    let funded_opcodes = ops
         .iter()
         .take(fault.map_or(ops.len(), |(index, _)| index + 1))
-        .filter(|op| matches!(op, Instruction::Push(_)))
+        .filter(|&&op| op != Instruction::Stop)
         .count() as u64;
     assert_eq!(
         production_counts,
         (
-            symbolic_counts.0 + 7 * executed_pushes,
+            symbolic_counts.0 + 7 * funded_opcodes,
             symbolic_counts.1 + 2
         )
     );

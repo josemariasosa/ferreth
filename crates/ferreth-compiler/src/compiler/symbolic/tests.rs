@@ -167,24 +167,33 @@ const METERED_OVERFLOW: &[(u64, u32)] = &[
     (72, 0x6f),
 ];
 
-// Legacy word offsets let the replay fixtures keep their original scope.
-// Only PUSH1 widens, by eight words, in the metered image.
-fn legacy_push_offsets(input: &[u8]) -> Vec<u64> {
+// Map legacy offsets to the funded instruction prefixes in the candidate.
+fn legacy_charge_sites(input: &[u8]) -> Vec<(u64, u64)> {
     let mut at = 0;
-    let mut pushes = Vec::new();
-    for op in decode_detailed(input).unwrap() {
-        at += match op {
-            DecodedInstruction::Push { .. } => {
-                pushes.push(at);
-                44
-            }
-            DecodedInstruction::Stop { .. } => 4,
-            DecodedInstruction::Pop { .. } => 16,
-            DecodedInstruction::Dup1 { .. } => 64,
-            DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => 172,
-        };
-    }
-    pushes
+    decode_detailed(input)
+        .unwrap()
+        .into_iter()
+        .filter_map(|op| {
+            let (width, cost) = match op {
+                DecodedInstruction::Push { .. } => (44, 3),
+                DecodedInstruction::Pop { .. } => (16, 2),
+                DecodedInstruction::Dup1 { .. } => (64, 3),
+                DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => (172, 3),
+                DecodedInstruction::Stop { .. } => return None,
+            };
+            let site = at;
+            at += width;
+            Some((site, cost))
+        })
+        .collect()
+}
+
+fn funded_path(path: &[(u64, u32)]) -> Vec<(u64, u32)> {
+    FUNDED_CHARGE_PATH
+        .iter()
+        .copied()
+        .chain(path.iter().map(|&(offset, opcode)| (offset + 32, opcode)))
+        .collect()
 }
 
 fn observe_publication(
@@ -302,7 +311,7 @@ fn public_publisher_inventory_counts_resident_exceptional_bodies() {
         (&[][..], 0u64),
         (&[0x00][..], 0),
         (&[0x60, 1][..], 20),
-        (&[0x50][..], 10),
+        (&[0x50][..], 20),
         (&[0x60, 1, 0x50][..], 30),
     ];
     for (bytecode, expected) in cases {
@@ -609,7 +618,11 @@ fn pop_dup1_inventory_and_mixed_runtime() {
     for (input, roles) in [
         (
             &[0x50][..],
-            vec![PublisherRole::Normal, PublisherRole::Underflow],
+            vec![
+                PublisherRole::Normal,
+                PublisherRole::Underflow,
+                PublisherRole::OutOfGas,
+            ],
         ),
         (
             &[0x80][..],
@@ -617,6 +630,7 @@ fn pop_dup1_inventory_and_mixed_runtime() {
                 PublisherRole::Normal,
                 PublisherRole::Underflow,
                 PublisherRole::Overflow,
+                PublisherRole::OutOfGas,
             ],
         ),
         (
@@ -670,24 +684,48 @@ fn pop_dup1_inventory_and_mixed_runtime() {
         PublisherRole::Normal.label().to_owned(),
     )])
     .unwrap();
-    let pop_result = observe(&pop, &[U256::from(2)], 0, None, false);
-    assert_result(&pop_result, &[], false, 3);
+    let pop_result = pop_dup1::observe_guest(
+        &pop,
+        &[U256::from(2)],
+        pop.termination_entry_pcs()[0],
+        0,
+        None,
+        &[],
+        2,
+    );
+    assert_result(&pop_result, &[], false, 10);
 
     let dup = compose(&[generate_symbolic_dup1(
         0,
         PublisherRole::Normal.label().to_owned(),
     )])
     .unwrap();
-    let dup_result = observe(&dup, &[U256::from(2)], 0, None, false);
-    assert_result(&dup_result, &[U256::from(2), U256::from(2)], false, 14);
+    let dup_result = pop_dup1::observe_guest(
+        &dup,
+        &[U256::from(2)],
+        dup.termination_entry_pcs()[0],
+        0,
+        None,
+        &[],
+        3,
+    );
+    assert_result(&dup_result, &[U256::from(2), U256::from(2)], false, 21);
 
     let mixed = compose(&[
         generate_symbolic_dup1(0, "guest_pop_1".to_owned()),
         generate_symbolic_pop(1, PublisherRole::Normal.label().to_owned()),
     ])
     .unwrap();
-    let mixed_result = observe(&mixed, &[U256::from(2)], 0, None, false);
-    assert_result(&mixed_result, &[U256::from(2)], false, 17);
+    let mixed_result = pop_dup1::observe_guest(
+        &mixed,
+        &[U256::from(2)],
+        mixed.termination_entry_pcs()[0],
+        0,
+        None,
+        &[],
+        5,
+    );
+    assert_result(&mixed_result, &[U256::from(2)], false, 31);
 }
 
 #[test]
@@ -792,7 +830,7 @@ fn matching_pop_continuation_cannot_skip_the_next_fragment() {
     ];
     let error = compose(&fragments).unwrap_err();
     assert!(
-        matches!(error, CompileError::Link { ref description } if description.contains("targets 0x80000020, expected 0x80000010")),
+        matches!(error, CompileError::Link { ref description } if description.contains("targets 0x80000060, expected 0x80000030")),
         "{error}"
     );
 }
@@ -923,6 +961,16 @@ fn normal_publisher_writes_remaining_before_status() {
         assert_eq!(guest.remaining_gas(), limit);
     }
 }
+
+const FUNDED_CHARGE_PATH: &[(u64, u32)] = &[
+    (0, 0x13),
+    (4, 0x13),
+    (8, 0x03),
+    (12, 0x13),
+    (16, 0x63),
+    (24, 0x33),
+    (28, 0x23),
+];
 
 const OOG_CHARGE_PATH: &[(u64, u32)] = &[
     (0, 0x13),

@@ -331,7 +331,10 @@ fn declared_publisher_at_zero_cannot_hide_a_missing_body() {
     let normal_only = &program.machine_code()[..36];
     for (layout, pcs) in [
         (PublisherLayout::Symbolic, vec![0]),
-        (PublisherLayout::SymbolicNormalOverflow, vec![ENTRY_PC, 0]),
+        (
+            PublisherLayout::SymbolicNormalOverflowOutOfGas,
+            vec![ENTRY_PC, 0, 0],
+        ),
     ] {
         let bytes = if pcs.len() == 1 { &[][..] } else { normal_only };
         assert!(verify_final_image(bytes, [], layout, &pcs).is_err());
@@ -352,8 +355,8 @@ fn rejects_missing_gas_stores_and_premature_status() {
         let rejects = |bytes: &[u8]| {
             let error = verify_final_image(
                 bytes,
-                [Fragment::Dup1],
-                PublisherLayout::SymbolicNormalUnderflowOverflow,
+                [Fragment::MeteredDup1],
+                PublisherLayout::SymbolicNormalUnderflowOverflowOutOfGas,
                 pcs,
             )
             .unwrap_err();
@@ -369,5 +372,82 @@ fn rejects_missing_gas_stores_and_premature_status() {
         let mut bytes = compiled.machine_code().to_vec();
         bytes[start + gas_start..start + status + 4].rotate_left(8);
         rejects(&bytes);
+    }
+}
+
+#[test]
+fn metered_stack_and_arithmetic_reject_corrupted_charge_words_and_targets() {
+    for (opcode, fragment, layout, cost) in [
+        (
+            0x50,
+            Fragment::MeteredPop,
+            PublisherLayout::SymbolicNormalUnderflowOutOfGas,
+            2,
+        ),
+        (
+            0x80,
+            Fragment::MeteredDup1,
+            PublisherLayout::SymbolicNormalUnderflowOverflowOutOfGas,
+            3,
+        ),
+        (
+            0x01,
+            Fragment::MeteredArithmetic(ArithmeticCore::Add),
+            PublisherLayout::SymbolicNormalUnderflowOutOfGas,
+            3,
+        ),
+        (
+            0x03,
+            Fragment::MeteredArithmetic(ArithmeticCore::Sub),
+            PublisherLayout::SymbolicNormalUnderflowOutOfGas,
+            3,
+        ),
+    ] {
+        let program = compile_evm_bytecode(&[opcode]).unwrap();
+        let pcs = program.termination_entry_pcs();
+        let verify = |bytes: &[u8]| verify_final_image(bytes, [fragment], layout, pcs);
+        verify(program.machine_code()).unwrap();
+        for (from, to, diagnostic) in [
+            (
+                format!("addi t2, zero, {cost}"),
+                "addi t2, zero, 1",
+                "expected 0x00",
+            ),
+            ("bgeu t0, t2".to_owned(), "bge t0, t2", "funct3: 7"),
+            (
+                "sub t0, t0, t2".to_owned(),
+                "addi zero, zero, 0",
+                "expected 0x407282b3",
+            ),
+            (
+                "sub t0, t0, t2".to_owned(),
+                "add t0, t0, t2",
+                "expected 0x407282b3",
+            ),
+            (
+                "sd t0, 32(t1)".to_owned(),
+                "sd t0, 40(t1)",
+                "expected 0x02533023",
+            ),
+            (
+                "jal zero, out_of_gas_exit".to_owned(),
+                "jal zero, binary_stack_underflow_exit",
+                "targets",
+            ),
+            (
+                "jal zero, normal_exit".to_owned(),
+                "jal zero, binary_stack_underflow_exit",
+                "targets",
+            ),
+        ] {
+            let mutant = program.assembly().replacen(&from, to, 1);
+            assert_ne!(mutant, program.assembly(), "opcode {opcode:#04x}, {from}");
+            let bytes = assemble(&mutant, Arch::Rv64).unwrap();
+            let error = verify(&bytes).unwrap_err();
+            assert!(
+                error.contains(diagnostic),
+                "opcode {opcode:#04x}, {from}: {error}"
+            );
+        }
     }
 }

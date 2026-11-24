@@ -25,14 +25,18 @@ pub(crate) enum Fragment {
     #[cfg(test)]
     Push1,
     MeteredPush1,
+    #[cfg(test)]
     Pop,
+    MeteredPop,
+    #[cfg(test)]
     Dup1,
+    MeteredDup1,
     #[allow(
         dead_code,
         reason = "constructed only by the test-only legacy linker oracles"
     )]
     Arithmetic,
-    SymbolicArithmetic(ArithmeticCore),
+    MeteredArithmetic(ArithmeticCore),
     Stop,
 }
 
@@ -131,9 +135,7 @@ pub(crate) enum PublisherLayout {
     )]
     PushOnly,
     Symbolic,
-    SymbolicNormalOverflow,
-    SymbolicNormalUnderflow,
-    SymbolicNormalUnderflowOverflow,
+    SymbolicNormalUnderflowOutOfGas,
     SymbolicNormalOverflowOutOfGas,
     SymbolicNormalUnderflowOverflowOutOfGas,
     #[allow(
@@ -157,18 +159,16 @@ pub(crate) fn verify_final_image(
     publisher_pcs: &[u64],
 ) -> Result<(), String> {
     let (normal, overflow, underflow, oog) = match (layout, publisher_pcs) {
-        (PublisherLayout::PushOnly, &[normal, overflow])
-        | (PublisherLayout::SymbolicNormalOverflow, &[normal, overflow]) => {
-            (normal, Some(overflow), None, None)
-        }
+        (PublisherLayout::PushOnly, &[normal, overflow]) => (normal, Some(overflow), None, None),
         (PublisherLayout::Symbolic, &[normal]) => (normal, None, None, None),
-        (PublisherLayout::IsolatedArithmetic, &[normal, underflow])
-        | (PublisherLayout::SymbolicNormalUnderflow, &[normal, underflow]) => {
+        (PublisherLayout::IsolatedArithmetic, &[normal, underflow]) => {
             (normal, None, Some(underflow), None)
         }
-        (PublisherLayout::SymbolicNormalUnderflowOverflow, &[normal, underflow, overflow])
-        | (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
+        (PublisherLayout::Mixed, &[normal, overflow, underflow]) => {
             (normal, Some(overflow), Some(underflow), None)
+        }
+        (PublisherLayout::SymbolicNormalUnderflowOutOfGas, &[normal, underflow, oog]) => {
+            (normal, None, Some(underflow), Some(oog))
         }
         (PublisherLayout::SymbolicNormalOverflowOutOfGas, &[normal, overflow, oog]) => {
             (normal, Some(overflow), None, Some(oog))
@@ -318,40 +318,43 @@ impl Fragment {
         underflow: Option<u64>,
         oog: Option<u64>,
     ) -> Result<u64, String> {
-        // Word indices come from the opcode generators. ADD/SUB each embed a
-        // 34-word leaf core after the nine-word wrapper.
-        let words = match self {
+        let (fragment, cost) = match self {
+            Self::MeteredPush1 => (BodyLayout::Push1, Some(3)),
+            Self::MeteredPop => (BodyLayout::Pop, Some(2)),
+            Self::MeteredDup1 => (BodyLayout::Dup1, Some(3)),
             #[cfg(test)]
-            Self::Push1 => 11,
-            Self::MeteredPush1 => 19,
-            Self::Pop => 4,
-            Self::Dup1 => 16,
-            Self::Arithmetic | Self::SymbolicArithmetic(_) => 9 + 34,
-            Self::Stop => 1,
+            Self::Push1 => (BodyLayout::Push1, None),
+            #[cfg(test)]
+            Self::Pop => (BodyLayout::Pop, None),
+            #[cfg(test)]
+            Self::Dup1 => (BodyLayout::Dup1, None),
+            Self::MeteredArithmetic(_) => (BodyLayout::Arithmetic, Some(3)),
+            Self::Arithmetic => (BodyLayout::Arithmetic, None),
+            Self::Stop => (BodyLayout::Stop, None),
+        };
+        let start = match cost {
+            Some(cost) => verify_charge(
+                image,
+                start,
+                cost,
+                oog.ok_or("fragment requires an OOG publisher")?,
+            )?,
+            None => start,
+        };
+        // Word indices below are relative to the post-charge body. ADD/SUB each embed a
+        // 34-word leaf core after the nine-word wrapper.
+        let words = match fragment {
+            BodyLayout::Push1 => 11,
+            BodyLayout::Pop => 4,
+            BodyLayout::Dup1 => 16,
+            BodyLayout::Stop => 1,
+            BodyLayout::Arithmetic => 9 + 34,
         };
         let next = pc_at_word(start, words)?;
         let overflow = || overflow.ok_or("fragment requires an overflow publisher");
         let underflow = || underflow.ok_or("fragment requires an underflow publisher");
-        match self {
-            Self::MeteredPush1 => image.verify_block(
-                start,
-                words,
-                &[
-                    Site::fixed(0, 0x8004_0313), // addi t1, s0, -2048
-                    Site::fixed(1, 0x8003_0313), // addi t1, t1, -2048
-                    Site::fixed(2, 0x0203_3283), // ld t0, 32(t1)
-                    Site::fixed(3, 0x0030_0393), // addi t2, zero, 3
-                    Site::branch(4, BGEU, T0, T2, pc_at_word(start, 6)?),
-                    Site::jal(5, ZERO, oog.ok_or("fragment requires an OOG publisher")?),
-                    Site::fixed(6, 0x4072_82b3), // sub t0, t0, t2
-                    Site::fixed(7, 0x0253_3023), // sd t0, 32(t1)
-                    Site::branch(10, BGEU, S1, T0, pc_at_word(start, 18)?),
-                    Site::jal(17, ZERO, next),
-                    Site::jal(18, ZERO, overflow()?),
-                ],
-            ),
-            #[cfg(test)]
-            Self::Push1 => image.verify_block(
+        match fragment {
+            BodyLayout::Push1 => image.verify_block(
                 start,
                 words,
                 &[
@@ -360,16 +363,17 @@ impl Fragment {
                     Site::jal(10, ZERO, overflow()?),
                 ],
             ),
-            Self::Pop => image.verify_block(
+            BodyLayout::Pop => image.verify_block(
                 start,
                 words,
                 &[
                     Site::branch(0, BGEU, S0, S1, pc_at_word(start, 3)?),
+                    Site::fixed(1, STACK_DECREMENT),
                     Site::jal(2, ZERO, next),
                     Site::jal(3, ZERO, underflow()?),
                 ],
             ),
-            Self::Dup1 => image.verify_block(
+            BodyLayout::Dup1 => image.verify_block(
                 start,
                 words,
                 &[
@@ -380,7 +384,7 @@ impl Fragment {
                     Site::jal(15, ZERO, overflow()?),
                 ],
             ),
-            Self::Arithmetic | Self::SymbolicArithmetic(_) => image.verify_block(
+            BodyLayout::Arithmetic => image.verify_block(
                 start,
                 words,
                 &[
@@ -392,14 +396,14 @@ impl Fragment {
                     Site::fixed(words - 1, LEAF_RETURN),
                 ],
             ),
-            Self::Stop if next == normal => {
+            BodyLayout::Stop if next == normal => {
                 image.verify_block(start, words, &[Site::jal(0, ZERO, normal)])
             }
-            Self::Stop => Err(format!(
+            BodyLayout::Stop => Err(format!(
                 "STOP at {start:#x} must precede the normal publisher"
             )),
         }?;
-        if let Self::SymbolicArithmetic(core) = self {
+        if let Self::MeteredArithmetic(core) = self {
             // This contract is independent of resolved labels and declarations.
             // Require the preflight and pointer setup as well as the leaf bytes.
             for (index, expected) in [
@@ -422,6 +426,32 @@ impl Fragment {
         }
         Ok(next)
     }
+}
+
+enum BodyLayout {
+    Push1,
+    Pop,
+    Dup1,
+    Arithmetic,
+    Stop,
+}
+
+fn verify_charge(image: &Image<'_>, start: u64, cost: u32, oog: u64) -> Result<u64, String> {
+    image.verify_block(
+        start,
+        8,
+        &[
+            Site::fixed(0, 0x8004_0313),                // addi t1, s0, -2048
+            Site::fixed(1, 0x8003_0313),                // addi t1, t1, -2048
+            Site::fixed(2, 0x0203_3283),                // ld t0, 32(t1)
+            Site::fixed(3, (cost << 20) | 0x0000_0393), // addi t2, zero, cost
+            Site::branch(4, BGEU, T0, T2, pc_at_word(start, 6)?),
+            Site::jal(5, ZERO, oog),
+            Site::fixed(6, 0x4072_82b3), // sub t0, t0, t2
+            Site::fixed(7, 0x0253_3023), // sd t0, 32(t1)
+        ],
+    )?;
+    pc_at_word(start, 8)
 }
 
 #[derive(Debug)]

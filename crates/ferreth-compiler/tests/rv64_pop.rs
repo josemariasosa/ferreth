@@ -44,6 +44,8 @@ fn pop_programs_update_only_the_live_stack_extent() {
     let result =
         execute_guest_pop_with_initial_stack(&initial_stack).expect("isolated POP executes");
     assert_eq!(result.guest_result().stack(), &initial_stack[..2]);
+    assert_eq!(result.guest_result().remaining_gas(), u64::MAX - 2);
+    assert_eq!(result.guest_result().gas_used(), 2);
     assert_eq!(
         result.guest_result().final_s1(),
         EVM_STACK_REGION.start() + 64

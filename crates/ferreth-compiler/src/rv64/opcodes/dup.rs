@@ -13,6 +13,8 @@ use crate::{
 };
 use std::fmt::Write;
 
+use super::gas::{emit_static_charge, STATIC_CHARGE_WORDS};
+
 /// Generates one stack-aware RV64 implementation of EVM `DUP1`.
 ///
 /// The generated code checks underflow and capacity before touching stack
@@ -58,6 +60,7 @@ pub(crate) fn generate_symbolic_dup1(index: usize, continuation: String) -> Symb
     let overflow = format!("dup1_overflow_{index}");
     let mut assembly = String::new();
     writeln!(assembly, "{entry}:").unwrap();
+    let (gas_check, oog) = emit_static_charge(&mut assembly, &entry, 3);
     writeln!(
         assembly,
         "    bgeu s0, s1, {underflow}\n\
@@ -84,76 +87,59 @@ pub(crate) fn generate_symbolic_dup1(index: usize, continuation: String) -> Symb
     .unwrap();
 
     let mut external_references = vec![
+        oog,
         ExternalDeclaration {
-            site_word: 14,
+            site_word: STATIC_CHARGE_WORDS + 14,
             role: PublisherRole::Underflow,
             kind: Transfer::Jal { rd: 0 },
         },
         ExternalDeclaration {
-            site_word: 15,
+            site_word: STATIC_CHARGE_WORDS + 15,
             role: PublisherRole::Overflow,
             kind: Transfer::Jal { rd: 0 },
         },
     ];
-    let local_references = if continuation == PublisherRole::Normal.label() {
+    let mut local_references = vec![
+        gas_check,
+        LocalDeclaration {
+            site_word: STATIC_CHARGE_WORDS,
+            target_symbol: underflow,
+            kind: Transfer::Branch {
+                funct3: 7,
+                rs1: 8,
+                rs2: 9,
+            },
+        },
+        LocalDeclaration {
+            site_word: STATIC_CHARGE_WORDS + 3,
+            target_symbol: overflow,
+            kind: Transfer::Branch {
+                funct3: 7,
+                rs1: 9,
+                rs2: 5,
+            },
+        },
+    ];
+    let continuation_site = STATIC_CHARGE_WORDS + 13;
+    if continuation == PublisherRole::Normal.label() {
         external_references.push(ExternalDeclaration {
-            site_word: 13,
+            site_word: continuation_site,
             role: PublisherRole::Normal,
             kind: Transfer::Jal { rd: 0 },
         });
-        vec![
-            LocalDeclaration {
-                site_word: 0,
-                target_symbol: underflow,
-                kind: Transfer::Branch {
-                    funct3: 7,
-                    rs1: 8,
-                    rs2: 9,
-                },
-            },
-            LocalDeclaration {
-                site_word: 3,
-                target_symbol: overflow,
-                kind: Transfer::Branch {
-                    funct3: 7,
-                    rs1: 9,
-                    rs2: 5,
-                },
-            },
-        ]
     } else {
-        vec![
-            LocalDeclaration {
-                site_word: 0,
-                target_symbol: underflow,
-                kind: Transfer::Branch {
-                    funct3: 7,
-                    rs1: 8,
-                    rs2: 9,
-                },
-            },
-            LocalDeclaration {
-                site_word: 3,
-                target_symbol: overflow,
-                kind: Transfer::Branch {
-                    funct3: 7,
-                    rs1: 9,
-                    rs2: 5,
-                },
-            },
-            LocalDeclaration {
-                site_word: 13,
-                target_symbol: continuation,
-                kind: Transfer::Jal { rd: 0 },
-            },
-        ]
-    };
+        local_references.push(LocalDeclaration {
+            site_word: continuation_site,
+            target_symbol: continuation,
+            kind: Transfer::Jal { rd: 0 },
+        });
+    }
 
     SymbolicFragment::new(
         assembly,
         entry,
         external_references,
         local_references,
-        Fragment::Dup1,
+        Fragment::MeteredDup1,
     )
 }

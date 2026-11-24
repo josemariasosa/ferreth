@@ -5,6 +5,9 @@ use crate::{
     rv64::verify::{ArithmeticCore, Fragment, Transfer},
 };
 
+use super::gas::{emit_static_charge, STATIC_CHARGE_WORDS};
+use std::fmt::Write;
+
 pub(super) fn generate_symbolic_arithmetic(
     index: usize,
     continuation: String,
@@ -15,9 +18,11 @@ pub(super) fn generate_symbolic_arithmetic(
     let underflow = format!("arith_underflow_{index}");
     let leaf = format!("arith_core_{index}");
     let update = format!("arith_update_{index}");
-    let mut source = format!(
-        "{entry}:\n\
-         \x20   addi t0, s0, 64\n\
+    let mut source = format!("{entry}:\n");
+    let (gas_check, oog) = emit_static_charge(&mut source, &entry, 3);
+    write!(
+        source,
+        "    addi t0, s0, 64\n\
          \x20   bltu s1, t0, {underflow}\n\
          \x20   addi a0, s1, -32\n\
          \x20   addi a1, s1, -64\n\
@@ -30,17 +35,22 @@ pub(super) fn generate_symbolic_arithmetic(
          \x20   jal zero, {}\n\
          {leaf}:\n",
         PublisherRole::Underflow.label()
-    );
+    )
+    .unwrap();
     write_core(&mut source);
 
-    let mut externals = vec![ExternalDeclaration {
-        site_word: 8,
-        role: PublisherRole::Underflow,
-        kind: Transfer::Jal { rd: 0 },
-    }];
+    let mut externals = vec![
+        oog,
+        ExternalDeclaration {
+            site_word: STATIC_CHARGE_WORDS + 8,
+            role: PublisherRole::Underflow,
+            kind: Transfer::Jal { rd: 0 },
+        },
+    ];
     let mut locals = vec![
+        gas_check,
         LocalDeclaration {
-            site_word: 1,
+            site_word: STATIC_CHARGE_WORDS + 1,
             target_symbol: underflow,
             kind: Transfer::Branch {
                 funct3: 6,
@@ -49,25 +59,25 @@ pub(super) fn generate_symbolic_arithmetic(
             },
         },
         LocalDeclaration {
-            site_word: 5,
+            site_word: STATIC_CHARGE_WORDS + 5,
             target_symbol: leaf,
             kind: Transfer::Jal { rd: 1 },
         },
         LocalDeclaration {
-            site_word: 42,
+            site_word: STATIC_CHARGE_WORDS + 42,
             target_symbol: update,
             kind: Transfer::LeafReturn,
         },
     ];
     if continuation == PublisherRole::Normal.label() {
         externals.push(ExternalDeclaration {
-            site_word: 7,
+            site_word: STATIC_CHARGE_WORDS + 7,
             role: PublisherRole::Normal,
             kind: Transfer::Jal { rd: 0 },
         });
     } else {
         locals.push(LocalDeclaration {
-            site_word: 7,
+            site_word: STATIC_CHARGE_WORDS + 7,
             target_symbol: continuation,
             kind: Transfer::Jal { rd: 0 },
         });
@@ -77,6 +87,6 @@ pub(super) fn generate_symbolic_arithmetic(
         entry,
         externals,
         locals,
-        Fragment::SymbolicArithmetic(core),
+        Fragment::MeteredArithmetic(core),
     )
 }

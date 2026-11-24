@@ -198,13 +198,7 @@ pub fn execute_guest_add_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
     let linked = compile_evm_bytecode(&[0x01]).map_err(map_compilation_error)?;
-    execute_raw_program(
-        linked.assembly().to_owned(),
-        linked.machine_code().to_vec(),
-        linked.termination_entry_pcs(),
-        initial_stack,
-        u64::MAX,
-    )
+    execute_linked_program(linked, initial_stack, u64::MAX)
 }
 
 /// Executes one isolated EVM `SUB` through the RV64 guest ABI.
@@ -223,13 +217,7 @@ pub fn execute_guest_sub_with_initial_stack(
     initial_stack: &[U256],
 ) -> Result<OrchestratorResult, OrchestratorError> {
     let linked = compile_evm_bytecode(&[0x03]).map_err(map_compilation_error)?;
-    execute_raw_program(
-        linked.assembly().to_owned(),
-        linked.machine_code().to_vec(),
-        linked.termination_entry_pcs(),
-        initial_stack,
-        u64::MAX,
-    )
+    execute_linked_program(linked, initial_stack, u64::MAX)
 }
 
 fn map_compilation_error(error: CompileError) -> OrchestratorError {
@@ -273,7 +261,8 @@ pub fn execute_guest_dup1_with_initial_stack(
 ///
 /// The executor runs the resulting RV64 executable as a whole; Rust does not
 /// execute individual EVM operations.
-/// STOP and empty EOF preserve the frame budget. Positive-cost charging is pending.
+/// STOP and empty EOF preserve the frame budget. The guest charges each
+/// supported positive-cost opcode before checking its stack operands.
 pub fn execute_guest_evm_bytecode(
     bytecode: &[u8],
     gas_limit: u64,
@@ -617,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn isolated_arithmetic_images_match_legacy_singleton_linkers() {
+    fn isolated_arithmetic_preserves_legacy_body_and_uses_the_metered_image() {
         for (opcode, execute, link_legacy) in [
             (
                 0x01,
@@ -631,18 +620,19 @@ mod tests {
             let isolated = execute(U256::from(2), U256::from(3)).unwrap();
 
             assert_eq!(
-                compiled.machine_code(),
+                &compiled.machine_code()[32..280],
                 legacy.machine_code,
                 "opcode {opcode:#04x}"
             );
             assert_eq!(
-                compiled.termination_entry_pcs(),
-                legacy.termination_entry_pcs
+                legacy.termination_entry_pcs,
+                [ENTRY_PC + 172, ENTRY_PC + 208]
             );
             assert_eq!(
                 compiled.termination_entry_pcs(),
-                [ENTRY_PC + 172, ENTRY_PC + 208]
+                [ENTRY_PC + 204, ENTRY_PC + 240, ENTRY_PC + 280]
             );
+            assert_eq!(compiled.machine_code().len(), 320);
             assert_ne!(compiled.assembly(), legacy.assembly);
             assert_eq!(isolated.machine_code(), compiled.machine_code());
             assert_eq!(isolated.assembly(), compiled.assembly());
