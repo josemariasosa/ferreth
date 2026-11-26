@@ -138,7 +138,10 @@ pub fn format_disassembly(instructions: &[DisassembledInstruction]) -> String {
     out
 }
 
-/// Parses hex without a prefix; accepts upper or lower case.
+/// Parses zero or more pairs of ASCII hexadecimal digits, in either case.
+///
+/// Prefixes, signs, and whitespace are rejected. Invalid character positions
+/// are UTF-8 byte offsets.
 pub fn parse_hex(input: &str) -> Result<Vec<u8>, String> {
     if let Some((index, character)) = input
         .char_indices()

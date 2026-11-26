@@ -2,13 +2,17 @@ use std::process::ExitCode;
 
 use alloy_primitives::U256;
 use ferreth_compiler::{
+    compiler::{
+        OUT_OF_GAS_EXCEPTION_CODE, PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE,
+        PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE,
+    },
     decode,
     disassembler::{disassemble, format_disassembly, parse_hex},
     orchestrator::{
         execute_guest_add, execute_guest_dup1, execute_guest_evm_bytecode, execute_guest_pop,
         execute_guest_push1, execute_guest_sub,
     },
-    rv64::opcodes::push::generate_guest_push1,
+    rv64::{guest::GuestExecutionStatus, opcodes::push::generate_guest_push1},
     Opcode,
 };
 
@@ -136,21 +140,35 @@ fn execute(args: &[String]) -> ExitCode {
                 }
                 _ => return usage_failure(),
             };
-            let Some(bytecode) = parse_bytecode(bytecode) else {
-                return usage_failure();
+            let bytecode = match parse_hex(bytecode) {
+                Ok(bytecode) => bytecode,
+                Err(error) => {
+                    eprintln!("invalid bytecode hex: {error}");
+                    return usage_failure();
+                }
             };
             match (
                 decode(&bytecode),
                 execute_guest_evm_bytecode(&bytecode, gas_limit),
             ) {
                 (Ok(instructions), Ok(result)) => {
+                    let guest = result.guest_result();
                     println!("Decoded instructions: {instructions:?}");
-                    println!("Final status: {:?}", result.guest_result().status());
-                    println!(
-                        "Remaining frame gas: {}",
-                        result.guest_result().remaining_gas()
-                    );
-                    println!("Final stack: {:?}", result.guest_result().stack());
+                    println!("Final status: {:?}", guest.status());
+                    if guest.status() == GuestExecutionStatus::GuestException {
+                        let code = guest.exception_code();
+                        let name = match code {
+                            PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE => "StackOverflow",
+                            PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE => "StackUnderflow",
+                            OUT_OF_GAS_EXCEPTION_CODE => "OutOfGas",
+                            _ => unreachable!("GuestResult validates exception codes"),
+                        };
+                        println!("Guest exception: {name} ({code})");
+                    }
+                    println!("Initial frame gas: {}", guest.gas_limit());
+                    println!("Remaining frame gas: {}", guest.remaining_gas());
+                    println!("Gross gas used: {}", guest.gas_used());
+                    println!("Final stack: {:?}", guest.stack());
                     println!(
                         "Dynamic RV64 instruction count: {}",
                         result.instruction_metrics().total()
@@ -232,16 +250,6 @@ fn parse_push1_value(value: &str) -> Option<u8> {
 
 fn parse_u256(value: &str) -> Option<U256> {
     value.parse().ok()
-}
-
-fn parse_bytecode(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..value.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
-        .collect()
 }
 
 fn usage_failure() -> ExitCode {

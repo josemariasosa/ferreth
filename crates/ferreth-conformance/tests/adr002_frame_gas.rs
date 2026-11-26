@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use ferreth_compiler::{
     orchestrator::execute_guest_evm_bytecode,
     rv64::{
@@ -149,7 +151,32 @@ fn diagnostic_stack(stack: &[U256]) -> String {
 macro_rules! vectors {
     ($( $test:ident, $id:literal, $code:expr, $limit:literal;
      $raw_result:ident, $raw_remaining:literal, $raw_stack:expr;
-     $outcome:expr, $settled:literal, $gross:literal; )+) => {$(
+     $outcome:expr, $settled:literal, $gross:literal; )+) => {
+        #[test]
+        fn every_corpus_id_runs_once() {
+            let ids = [$($id),+];
+            let expected: BTreeSet<_> = (1..=37).map(|number| format!("V{number:02}")).collect();
+            let mut actual = BTreeSet::new();
+            let mut duplicates = BTreeSet::new();
+            for id in ids {
+                if !actual.insert(id.to_owned()) {
+                    duplicates.insert(id);
+                }
+            }
+            let missing: Vec<_> = expected.difference(&actual).collect();
+            let unexpected: Vec<_> = actual.difference(&expected).collect();
+            assert!(
+                ids.len() == expected.len()
+                    && missing.is_empty()
+                    && duplicates.is_empty()
+                    && unexpected.is_empty(),
+                "portable corpus has {} rows (expected {}); missing {missing:?}, duplicates {duplicates:?}, unexpected {unexpected:?}",
+                ids.len(),
+                expected.len(),
+            );
+        }
+
+        $(
         #[test]
         fn $test() {
             check(

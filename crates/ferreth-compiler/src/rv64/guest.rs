@@ -1,10 +1,8 @@
 //! Backend-neutral definitions for the published RV64 guest result record.
 //!
-//! The record begins at [`crate::rv64::memory::METADATA_REGION.start()`].
-//! This module deliberately does not repeat that address: the memory layout is
-//! its single source of truth.  A terminal record is valid only after the host
-//! executor has independently observed its configured deliberate exit
-//! boundary; status bytes alone never establish that fact.
+//! The record begins at the start of [`crate::rv64::memory::METADATA_REGION`].
+//! A terminal record is valid only after the host executor has independently
+//! observed the configured exit boundary.
 
 use std::fmt;
 
@@ -663,13 +661,14 @@ impl From<GuestMetadataError> for GuestResultError {
 
 /// Reads and validates a terminal EVM guest result after a successful run.
 ///
-/// The [`Rv64Executor::execute`] contract makes a returned
-/// [`ExecutionReport`] evidence that its configured exit PC was observed
-/// before another instruction was fetched.  Thus this function neither treats
-/// metadata as termination proof nor introduces a duplicate completion flag.
-/// Instruction-limit exhaustion and backend faults yield `ExecutorError`
-/// instead of an `ExecutionReport`, and therefore cannot be passed here from a
-/// failed execution.
+/// Supply the actual terminal [`ExecutionReport`] from this executor running
+/// a trusted image with the original host budget and ABI initialization.
+/// This reader checks the reported sentinel, metadata, and stack registers.
+/// The public report is caller-constructible, so these checks establish
+/// result consistency under those assumptions. Image provenance and metering
+/// correctness depend on how the image was verified and run.
+/// [`crate::orchestrator::execute_guest_evm_bytecode`] handles that setup and
+/// propagates executor faults before reading the terminal record.
 pub fn read_guest_result(
     executor: &mut impl Rv64Executor,
     execution_report: &ExecutionReport,

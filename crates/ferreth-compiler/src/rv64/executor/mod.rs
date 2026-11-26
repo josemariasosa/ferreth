@@ -37,7 +37,10 @@ impl IntegerRegister {
     }
 }
 
-/// Successful completion of an RV64 execution run.
+/// Observation that an RV64 run reached a caller-selected stop PC.
+///
+/// Callers can construct reports directly. The fields carry no proof of
+/// provenance or EVM semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionReport {
     /// Instructions for which the backend completed `execute()` successfully.
@@ -127,8 +130,12 @@ impl fmt::Display for ExecutorError {
 
 impl std::error::Error for ExecutorError {}
 
-/// Minimal executor contract shared by RV64 code generation and future
-/// emulator backends.
+/// Low-level contract for loading, running, and observing RV64 code.
+///
+/// The caller supplies the machine image, initial state, stop PCs, and RV64
+/// instruction bound. The executor performs no EVM image verification or
+/// frame gas accounting. Use [`crate::orchestrator::execute_guest_evm_bytecode`]
+/// to run a verified metered guest through the canonical path.
 pub trait Rv64Executor {
     /// Loads assembled machine code at the backend's RV64 code base.
     fn load_code(&mut self, machine_code: &[u8]) -> Result<(), ExecutorError>;

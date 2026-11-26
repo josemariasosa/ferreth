@@ -1,8 +1,8 @@
-//! Minimal whole-program composition for EVM `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, and `DUP1` operations.
+//! Whole-program compilation for Cancun `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`,
+//! `DUP1`, and `GAS`.
 //!
-//! The bytecode entry point decodes the supported subset and composes symbolic
-//! guest fragments into one executable with the shared terminal paths required
-//! by the guest ABI. It is not a general EVM compiler.
+//! The bytecode entry point composes symbolic guest fragments into one verified
+//! RV64 image with guest-side frame metering and shared terminal publishers.
 
 use std::fmt;
 
@@ -29,9 +29,9 @@ pub(crate) mod symbolic;
 
 use publisher::Publisher;
 
-/// Provisional guest exception code for an EVM stack-overflow push.
+/// ADR-002 guest exception code for EVM stack overflow.
 pub const PROVISIONAL_STACK_OVERFLOW_EXCEPTION_CODE: u64 = 1;
-/// Provisional guest exception code for an EVM binary-operation underflow.
+/// ADR-002 guest exception code for EVM stack underflow.
 pub const PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE: u64 = 2;
 /// ADR-002 guest exception code for insufficient frame gas.
 pub const OUT_OF_GAS_EXCEPTION_CODE: u64 = 3;
@@ -74,9 +74,10 @@ impl CompiledRv64Program {
 
     /// Number of resident exceptional publisher words in the compiled image.
     ///
-    /// Images contain 0 words with neither publisher, 10 with Underflow or
-    /// Overflow alone, and 20 with both. During exceptional execution only
-    /// the selected publisher runs, for ten dynamic instructions.
+    /// Each resident overflow, underflow, or out-of-gas publisher contributes
+    /// ten words. The canonical image contains 0, 20, or 30 exceptional
+    /// publisher words depending on the admitted opcodes. An exceptional
+    /// execution runs only its selected publisher, for ten dynamic instructions.
     pub const fn exceptional_termination_instructions(&self) -> u64 {
         self.exceptional_termination_instructions
     }
@@ -125,8 +126,9 @@ impl From<DecodeError> for CompileError {
 
 /// Decodes and compiles the supported EVM bytecode subset into one RV64 executable.
 ///
-/// Reaching the end of bytecode falls through to the compatibility normal
-/// epilogue. An explicit `STOP` emits a direct transfer to that same epilogue.
+/// The verified image is independent of the frame gas budget. EOF and
+/// explicit `STOP` both reach the normal publisher without a charge.
+/// Use [`crate::orchestrator::execute_guest_evm_bytecode`] to run a frame.
 pub fn compile_evm_bytecode(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileError> {
     symbolic::compile(bytecode)
 }

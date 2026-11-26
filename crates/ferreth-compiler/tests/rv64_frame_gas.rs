@@ -5,6 +5,134 @@ use ferreth_compiler::{
     rv64::{guest::GuestExecutionStatus, memory::EVM_STACK_REGION},
 };
 
+fn assert_invalid_cli_hex(command: &str, bytecode: &str) {
+    let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
+        .args([command, "--bytecode", bytecode])
+        .env("RUST_BACKTRACE", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let evidence = format!(
+        "{command} {bytecode:?}: {:?}\nstdout: {stdout:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(output.status.code(), Some(1), "{evidence}");
+    assert!(
+        stderr.contains("invalid bytecode hex:") && stderr.contains("hexadecimal"),
+        "{evidence}"
+    );
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("backtrace"),
+        "{evidence}"
+    );
+    assert!(stdout.is_empty(), "{evidence}");
+}
+
+#[test]
+fn cli_execute_rejects_signed_hex() {
+    assert_invalid_cli_hex("execute", "+1");
+}
+
+#[test]
+fn cli_execute_rejects_utf8_hex_without_panicking() {
+    assert_invalid_cli_hex("execute", "0é0");
+}
+
+#[test]
+fn cli_decode_and_execute_reject_malformed_hex() {
+    for command in ["decode", "execute"] {
+        for bytecode in [
+            "0", "0x00", "0X00", " 00 ", "00  00", "00\t00", "zz", "-1", "6+01",
+        ] {
+            assert_invalid_cli_hex(command, bytecode);
+        }
+    }
+    for bytecode in ["+1", "0é0"] {
+        assert_invalid_cli_hex("decode", bytecode);
+    }
+}
+
+fn cli_stdout(command: &str, bytecode: &str, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
+        .args([command, "--bytecode", bytecode])
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn cli_decode_and_execute_accept_case_insensitive_hex_and_empty_input() {
+    for bytecode in ["60ab00", "60AB00", "60aB00"] {
+        assert_eq!(
+            cli_stdout("decode", bytecode, &[]),
+            "PC      BYTES       OPCODE\n0x0000  60ab        PUSH1 0xab\n0x0002  00          STOP\n"
+        );
+        assert_eq!(
+            cli_stdout("execute", bytecode, &["--gas", "4"]),
+            "Decoded instructions: [Push(171), Stop]\nFinal status: Normal\nInitial frame gas: 4\nRemaining frame gas: 1\nGross gas used: 3\nFinal stack: [171]\nDynamic RV64 instruction count: 27\n"
+        );
+    }
+    assert_eq!(
+        cli_stdout("decode", "", &[]),
+        "PC      BYTES       OPCODE\n"
+    );
+    assert_eq!(
+        cli_stdout("execute", "", &["--gas", "0"]),
+        "Decoded instructions: []\nFinal status: Normal\nInitial frame gas: 0\nRemaining frame gas: 0\nGross gas used: 0\nFinal stack: []\nDynamic RV64 instruction count: 9\n"
+    );
+}
+
+#[test]
+fn cli_distinguishes_valid_hex_with_decode_and_compilation_failures() {
+    for (bytecode, diagnostic) in [
+        ("02", "bytecode decoding failed: unsupported opcode 0x02 at byte offset 0"),
+        ("610001", "bytecode execution failed: could not compile EVM bytecode: EVM opcode 0x61 at byte offset 0 is decoded but not supported by the RV64 compiler"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
+            .args(["execute", "--bytecode", bytecode])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), format!("{diagnostic}\n"));
+    }
+}
+
+#[test]
+fn cli_reports_normal_and_exceptional_frame_results() {
+    let normal = "Decoded instructions: [Gas, Stop]\nFinal status: Normal\nInitial frame gas: 2\nRemaining frame gas: 0\nGross gas used: 2\nFinal stack: [0]\nDynamic RV64 instruction count: 27\n";
+    for budget in ["2", "0x2"] {
+        assert_eq!(cli_stdout("execute", "5a00", &["--gas", budget]), normal);
+    }
+    for budget in ["0", "1"] {
+        assert_eq!(
+            cli_stdout("execute", "5a00", &["--gas", budget]),
+            format!("Decoded instructions: [Gas, Stop]\nFinal status: GuestException\nGuest exception: OutOfGas (3)\nInitial frame gas: {budget}\nRemaining frame gas: 0\nGross gas used: {budget}\nFinal stack: []\nDynamic RV64 instruction count: 16\n")
+        );
+    }
+    assert_eq!(
+        cli_stdout("execute", "600101", &["--gas", "20"]),
+        "Decoded instructions: [Push(1), Add]\nFinal status: GuestException\nGuest exception: StackUnderflow (2)\nInitial frame gas: 20\nRemaining frame gas: 0\nGross gas used: 20\nFinal stack: [1]\nDynamic RV64 instruction count: 37\n"
+    );
+}
+
+#[test]
+fn cli_reports_overflow_and_preserves_the_full_stack() {
+    let bytecode = "6001".repeat(1024) + "5a00";
+    let stdout = cli_stdout("execute", &bytecode, &["--gas", "3080"]);
+    let (decoded, result) = stdout.split_once('\n').unwrap();
+    assert!(decoded.starts_with("Decoded instructions: [Push(1), "));
+    assert!(decoded.ends_with(", Gas, Stop]"));
+    assert_eq!(
+        result,
+        format!("Final status: GuestException\nGuest exception: StackOverflow (1)\nInitial frame gas: 3080\nRemaining frame gas: 0\nGross gas used: 3080\nFinal stack: {:?}\nDynamic RV64 instruction count: 17429\n", [1; 1024])
+    );
+}
+
 #[test]
 fn stop_and_eof_publish_the_entire_budget() {
     for code in [&[0][..], &[]] {
@@ -29,18 +157,9 @@ fn cli_passes_resolved_budget_to_guest() {
         (&["--gas", "0"], 0),
         (&["--gas", "7"], 7),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
-            .args(["execute", "--bytecode", "00"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            stdout
-                .lines()
-                .any(|line| line == format!("Remaining frame gas: {expected}")),
-            "{stdout}"
+        assert_eq!(
+            cli_stdout("execute", "00", args),
+            format!("Decoded instructions: [Stop]\nFinal status: Normal\nInitial frame gas: {expected}\nRemaining frame gas: {expected}\nGross gas used: 0\nFinal stack: []\nDynamic RV64 instruction count: 10\n")
         );
     }
 }
@@ -292,32 +411,22 @@ fn gas_image_and_cli_default_are_budget_independent() {
         );
     }
 
-    let explicit = u64::MAX.to_string();
-    let cli = |args: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
-            .args(["execute", "--bytecode", "5a00"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap()
-    };
-    let default = cli(&[]);
-    assert_eq!(default, cli(&["--gas", &explicit]));
-
     let run = execute_guest_evm_bytecode(&code, u64::MAX).unwrap();
     assert_frame_result(&run, u64::MAX, 0, u64::MAX - 2, &[u64::MAX - 2]);
-    let guest = run.guest_result();
+
+    let explicit = u64::MAX.to_string();
+    let default = cli_stdout("execute", "5a00", &[]);
     assert_eq!(
         default,
-        format!(
-            "Decoded instructions: [Gas, Stop]\nFinal status: {:?}\nRemaining frame gas: {}\nFinal stack: {:?}\nDynamic RV64 instruction count: {}\n",
-            guest.status(),
-            guest.remaining_gas(),
-            guest.stack(),
-            run.instruction_metrics().total(),
-        )
+        cli_stdout("execute", "5a00", &["--gas", &explicit])
+    );
+    assert_eq!(
+        default,
+        cli_stdout("execute", "5a00", &["--gas", "0xffffffffffffffff"])
+    );
+    assert_eq!(
+        default,
+        "Decoded instructions: [Gas, Stop]\nFinal status: Normal\nInitial frame gas: 18446744073709551615\nRemaining frame gas: 18446744073709551613\nGross gas used: 2\nFinal stack: [18446744073709551613]\nDynamic RV64 instruction count: 27\n"
     );
 }
 

@@ -2,22 +2,21 @@
 
 ## Overview
 
-The `ferreth-compiler` package provides a small command-line interface for the
-current EVM-to-RV64 experiment:
+The `ferreth-compiler` CLI provides three entry points.
 
-- `translate` displays RV64 assembly for `ADD`, `SUB`, or a `PUSH1` opcode body.
-- `execute` runs isolated guest operations through RO (the isolated
-  **R**untime **O**rchestrator), or compiles and runs supported EVM bytecode
-  through RC (the whole-program **R**V64 **C**ompiler).
-- `decode` statically disassembles EVM bytecode; it does not execute it.
-- Execution commands report the guest result and dynamically executed RV64
-  instruction counts. Some commands also print the linked assembly and
-  machine-code words.
+- `translate` emits assembly for standalone ADD and SUB arithmetic routines or
+  an unlinked PUSH1 body.
+- `decode` statically disassembles Cancun bytecode.
+- `execute --bytecode` compiles and verifies one RV64 image, runs it as a
+  guest-owned EVM frame, and reports the validated result and dynamic RV64
+  instruction count. `execute --op` offers isolated guest adapters that use
+  the same metered compiler and runner with an implicit `u64::MAX` budget.
 
-RO executes one isolated opcode with the shared guest state and result
-contract. RC decodes supported bytecode, links its RV64 bodies into one guest
-program, and executes that program. Neither path implements general EVM
-semantics or gas accounting.
+The Rust Compiler (RC) path owns whole-program compilation. The historical
+Rust Orchestrator (RO) `ProgramRunner` managed the stack in Rust and ran only
+arithmetic in RV64. It remains available to historical experiments and
+regression tests pending a separate removal milestone. The supported frame
+API is [`execute_guest_evm_bytecode`](../../crates/ferreth-compiler/src/orchestrator.rs).
 
 ## Prerequisites
 
@@ -38,9 +37,9 @@ cargo run --locked -p ferreth-compiler -- <command> [arguments]
 
 ## Command reference
 
-The compiler CLI has three top-level commands: `translate`, `execute`, and `decode`.
+The compiler CLI recognizes `translate`, `execute`, and `decode` as its top-level commands.
 There is no dedicated `--help` option. Running the CLI without a recognized
-command prints usage to stderr and exits unsuccessfully.
+command prints usage to stderr and exits 1.
 
 ### `translate`
 
@@ -48,10 +47,10 @@ command prints usage to stderr and exits unsuccessfully.
 | --- | --- | --- |
 | `cargo run --locked -p ferreth-compiler -- translate --op ADD` | Generate the arithmetic `ADD` RV64 assembly. `--op` must be `ADD` or `SUB` for arithmetic translation. | GNU-style `.text` assembly for the routine. |
 | `cargo run --locked -p ferreth-compiler -- translate --op SUB` | Generate the arithmetic `SUB` RV64 assembly. | GNU-style `.text` assembly for the routine. |
-| `cargo run --locked -p ferreth-compiler -- translate --op PUSH1 --value 5` | Generate a `PUSH1` opcode body. The immediate is an unsigned byte, `0..255`. Decimal and `0x`-prefixed values are accepted. | An unlinked opcode-body assembly listing and its 32-bit machine-code words. The listing includes a patchable overflow trampoline; it is not the complete linked executable. |
+| `cargo run --locked -p ferreth-compiler -- translate --op PUSH1 --value 5` | Generate a `PUSH1` opcode body. The immediate is an unsigned byte, `0..255`. Decimal and `0x`-prefixed values are accepted. | An unlinked opcode-body assembly listing and its 32-bit machine-code words. The listing includes a patchable overflow trampoline. |
 
 `translate` does not accept other opcodes. The arithmetic translation prints
-assembly only; the `PUSH1` translation also prints machine-code words.
+assembly only. The `PUSH1` translation also prints machine-code words.
 
 ### `execute`
 
@@ -62,18 +61,65 @@ assembly only; the `PUSH1` translation also prints machine-code words.
 | `cargo run --locked -p ferreth-compiler -- execute --op SUB --a 5 --b 3` | Run isolated guest `SUB` with the same `U256` arguments and initial-stack order. `SUB` evaluates the top item minus the item below it (`b - a`). | For this example the result wraps to `2^256 - 2`; output includes the status, final stack, and dynamic count. |
 | `cargo run --locked -p ferreth-compiler -- execute --op POP` | Run isolated guest `POP` with one initialized zero word. | Final status, empty final stack, and dynamic RV64 instruction count. |
 | `cargo run --locked -p ferreth-compiler -- execute --op DUP1` | Run isolated guest `DUP1` with one initialized zero word. | Final status, duplicated stack, and dynamic RV64 instruction count. |
-| `cargo run --locked -p ferreth-compiler -- execute --bytecode 600560035000` | Decode, compile, and run even-length hexadecimal bytecode with no `0x` prefix. The compiler supports `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, and `SUB`. | Decoded instructions, final status, final stack, and dynamic RV64 instruction count. It does not print the complete compiled assembly or machine-code listing. |
+| `cargo run --locked -p ferreth-compiler -- execute --bytecode 600560035000 --gas 10` | Run a supported bytecode frame with an explicit budget. | Decoded instructions, final status, initial and remaining frame gas, gross gas used, final stack, and dynamic RV64 instruction count. A guest exception adds its name and code. |
 
 `--op ADD` and `--op SUB` require both `--a` and `--b`. For the isolated
-guest wrappers, `--a` is the lower stack item and `--b` is the top item; EVM
-`SUB` therefore evaluates `b - a`. Both operations use 256-bit modular
-arithmetic.
+guest wrappers, `--a` is the lower stack item and `--b` is the top item. EVM
+`SUB` evaluates `b - a`. Both operations use 256-bit modular arithmetic.
 
-The bytecode argument is pairs of hexadecimal digits. It must not include
-spaces or a `0x` prefix. A `STOP` ends decoding, so bytes after the first
-`STOP` are not interpreted. Missing trailing PUSH immediate bytes are
-zero-padded. Unlike bytecode execution, isolated `PUSH1` commands print the
-generated RV64 assembly and machine-code words directly.
+Both `execute` and `decode` accept zero or more pairs of ASCII digits
+`0–9`, `a–f`, or `A–F` in `--bytecode`. Pass an empty string as `''`.
+Odd lengths, whitespace, signs, prefixes such as `0x`, and non-ASCII
+characters are invalid. During execution decoding, the first `STOP` ends
+the program. Trailing bytecode text must still satisfy the hex grammar.
+Missing trailing PUSH immediate bytes are zero-padded.
+
+Place an optional `--gas` after the bytecode argument. The budget is an
+unsigned 64-bit value in decimal or hexadecimal with a lowercase `0x`
+prefix. For example, `--gas 2` and `--gas 0x2` are equivalent. Omitting
+`--gas` uses `u64::MAX` (18446744073709551615).
+
+```sh
+cargo run --locked -p ferreth-compiler -- execute --bytecode 5a00 --gas 0x2
+```
+
+```text
+Decoded instructions: [Gas, Stop]
+Final status: Normal
+Initial frame gas: 2
+Remaining frame gas: 0
+Gross gas used: 2
+Final stack: [0]
+Dynamic RV64 instruction count: 27
+```
+
+With `--gas 1`, the same bytecode reports:
+
+```text
+Decoded instructions: [Gas, Stop]
+Final status: GuestException
+Guest exception: OutOfGas (3)
+Initial frame gas: 1
+Remaining frame gas: 0
+Gross gas used: 1
+Final stack: []
+Dynamic RV64 instruction count: 16
+```
+
+`--gas 0` is explicit. STOP and empty EOF complete normally with zero
+remaining and zero used, with 10 and 9 RV64 instructions respectively.
+With `5a00` and budget 0, GAS reports `OutOfGas (3)`, zero used, and 16
+RV64 instructions. A normal frame can use its entire budget, as the
+budget-2 example shows. All guest exceptions settle remaining gas to zero.
+Gross gas used is the initial budget minus settled remaining gas. Dynamic
+counts measure executed RV64 instructions, including the terminal publisher.
+
+With budget 10, `600560035000` completes normally with remaining gas 2,
+gross used 8, stack `[5]`, and 54 RV64 instructions. With budget 20,
+`600101` reports `StackUnderflow (2)`, remaining gas 0, gross used 20,
+stack `[1]`, and 37 RV64 instructions. With budget 3080, 1024 copies of
+`6001` followed by `5a00` report `StackOverflow (1)`, remaining gas 0,
+gross used 3080, 1024 unchanged stack words, and 17,429 RV64 instructions.
 
 ### `decode`
 
@@ -97,44 +143,29 @@ cargo run --locked -p ferreth-conformance -- bench --op ADD --cases 100 --format
 See the [Benchmark Runbook](benchmark.md) for supported options and report
 details.
 
-## Error handling
+## Exit codes and diagnostics
 
-- **Missing arguments or invalid CLI syntax:** prints the usage block to
-  stderr and returns a failure status. Unsupported translation operations,
-  missing flags, invalid numeric values, and malformed hex argument syntax
-  follow this path.
-- **Unsupported opcode in bytecode:** prints `bytecode decoding failed` with
-  the offending byte offset and returns a failure status. For example, `02`
-  is an unsupported opcode. Truncated PUSH immediates are zero-padded instead;
-  for example, `60` executes as `PUSH1 0`.
-- **Decoded but uncompiled PUSH widths:** `PUSH2`–`PUSH32` are recognized by
-  the decoder, but RC reports an unsupported instruction when asked to
-  compile them. For example, `cargo run --locked -p ferreth-compiler -- execute
-  --bytecode 610001` is decoded and then rejected by compilation.
-- **Guest stack underflow or overflow:** guest-detected stack errors are
-  reported in `Final status` as `GuestException`, not as malformed CLI input.
-  For example, `cargo run --locked -p ferreth-compiler -- execute --bytecode 600101`
-  leaves `[1]` on the stack and reports `GuestException` after 21 executed
-  instructions. A program that tries to push beyond the 1024-word guest stack
-  similarly takes the guest overflow path.
-- **Executor or instruction-limit failure:** the CLI has no option to set an
-  instruction limit. Limits are enforced internally; if execution fails
-  before a valid guest result is published, the relevant command reports the
-  error to stderr and returns a failure status. Conformance benchmark parity
-  failures emit their JSON evidence before returning failure.
+| Exit | Outcome |
+| --- | --- |
+| 0 | A valid guest result, including `GuestException`, or a successful translation or disassembly. |
+| 1 | Invalid CLI input, execution decoding failure, compilation or linking failure, or host execution or result-validation error. |
 
-## Current limitations
+Invalid flags and numeric values print usage to stderr. Malformed bytecode
+text prints `invalid bytecode hex` with an explanation. `execute` also prints
+usage. Valid hex `02` fails execution decoding with the offending byte and
+offset. Valid hex `610001` decodes as PUSH2 and fails at compilation.
+Executor faults and RV64 instruction-limit failures report an error on
+stderr. The RV64 limit is internal to the CLI.
 
-The decoder and compiler do not support the same instruction set:
+## Supported scope
 
 | Component | Supported opcodes |
 | --- | --- |
-| `execute` bytecode decoder | `STOP`, `PUSH1`–`PUSH32`, `ADD`, `SUB`, `POP`, `DUP1` |
-| RC bytecode compiler | `STOP`, `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1` |
-| Isolated guest operations (RO) | `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1` |
+| Canonical Cancun frame execution | `STOP`, `PUSH1`, `POP`, `DUP1`, `ADD`, `SUB`, `GAS` |
+| Decoder used by canonical execution | Canonical set plus `PUSH2`–`PUSH32` |
+| Isolated guest execution | `PUSH1`, `ADD`, `SUB`, `POP`, `DUP1` |
+| Static disassembly | Broader Cancun opcode inventory, including bytes outside the execution subset |
 
-Other `PUSH` widths can decode but cannot be compiled to RV64 by RC. Control
-flow other than stopping at `STOP`, EVM memory and storage operations, and gas
-accounting are not implemented. Reaching the end of bytecode also completes
-the compiled guest program; it does not imply support for arbitrary EVM
-control flow or transaction behavior.
+Canonical execution meters fixed-cost Cancun frames. Transaction intrinsic
+gas, dynamic gas pricing, refunds, jumps, memory, storage, and calls are
+outside the milestone. [ADR-002](../adr/002-cancun-evm-gas-metering.md)

@@ -1,10 +1,9 @@
-//! Reusable RV64 code generation for EVM `PUSH1`.
+//! Assembly, machine bytes, and link offsets for standalone RV64 opcode artifacts.
 //!
-//! The emitted sequence operates on the guest ABI's `s0`/`s1` stack pair.  Its
-//! final instruction is an explicit, patchable overflow trampoline: it loops
-//! until a later runtime links it to the guest-exception publisher.  A
-//! successful push jumps over that trampoline and falls through into the next
-//! generated guest operation.
+//! The historical opcode generators emit unmetered fragments for inspection,
+//! translation, and regression comparisons. A standalone fragment needs a
+//! caller-provided layout and linked fault targets. Use
+//! [`crate::compiler::compile_evm_bytecode`] for a verified metered image.
 
 /// Generated RV64 code and the assembly from which its bytes were assembled.
 ///

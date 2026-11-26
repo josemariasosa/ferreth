@@ -1,6 +1,6 @@
 # ADR-002 implementation plan
 
-Maintainer approval was recorded on 2026-11-23. Phases 1–4 have implementation evidence on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), and [raw corpus and fixture table](adr-002-reference-corpus.md). All 37 portable fixtures are active. Phase 4 is ready for human review. The final milestone gate remains pending in Phase 5.
+Maintainer approval was recorded on 2026-11-23. Phases 1–4 have implementation evidence on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), and [raw corpus and fixture table](adr-002-reference-corpus.md). All 37 portable fixtures are active. The maintainer approved Phase 4. The maintainer approved the Phase 5.1 inventory check. The Phase 5.2 gate passed and the candidate awaits final maintainer acceptance.
 
 ## Test boundaries and common gate
 
@@ -271,6 +271,41 @@ cargo test --frozen -p ferreth-linking-spike --test capacity_probe -- --ignored 
 ```
 
 Run the common gate as well. The ignored filters above select existing opt-in capacity probes. Record exact revision, commands, failures, skipped checks and resulting limits. Exit requires explicit evidence for all three layers and every vector.
+
+### Phase 5.1 execution evidence (2026-11-26)
+
+At Phase 4 commit `eff079291035f9fd715de60f4471b8530e4a1311`, the inventory check rejected an omitted V37, a duplicate V36 and an unexpected V38. After restoring the original rows, the portable target passed 37 vectors and one inventory test. The exact successful stack count was 19. Direct REVM Cancun ran against the checked-in expectations, with V22 settlement derived from the pinned handler source. EELS evidence remains historical RF-028.
+
+The common gate, transaction differential target and executor target passed. The workspace had 289 passes and four ignored capacity probes. The 31 GAS-related corruption specimens passed their rejection assertions. The production-path and CLI audit found documentation gaps and malformed-input bugs for review, with no supported guest metering bypass identified. The complete separate capacity replay remains part of the Phase 5.2 closure gate. [Phase 5.1 audit and command evidence](../bitacora/2026-11-26.md#phase-51--corpus-integrity-and-production-path-audit)
+
+### Phase 5.2 execution evidence (2026-11-26)
+
+The final candidate at base `eff079291035f9fd715de60f4471b8530e4a1311`
+preserves the approved Phase 5.1 corpus inventory and all fixture rows.
+Layer A passed 37/37 terminal classes, settled remaining gas, and gross
+gas used, with 19/19 exact successful stacks. The inventory test passed
+and no portable vector was ignored. Pinned direct REVM Cancun ran all
+37 cases. EELS evidence remains the historical RF-028 record. V22 raw
+direct REVM remained 14 gas left and 6 used. The 0 left and 20 used
+reference settlement is source-derived. Ferreth directly published
+0 left and 20 used.
+
+Layers B and C passed the focused frame, executor, and workspace gates.
+These covered charge-first diagnostics, prefix preservation and atomicity,
+unsigned budgets, image equality across budgets, settlement, status-last
+publication, sentinel validation, and host errors. The existing 47-PUSH
+EOF and STOP witnesses, split dynamic counts, and all 31 GAS corruption
+controls (including four with matching altered declarations) passed.
+Seven new CLI tests bring the workspace to 296 active passes, up from 289.
+All four workspace ignores passed in the two separately invoked capacity
+commands. The measured image sizes, label inventories, and acceptance and
+rejection boundaries matched previous evidence.
+
+The approved CLI remediation shares the textual hex parser and displays
+validated frame gas and exception details. The Phase 5.2 record includes
+RED/GREEN observations, exact commands and results, capacity measurements,
+Rustdoc reconciliation, and the review restart. Final acceptance is a
+maintainer decision. [Phase 5.2 engineering evidence](../bitacora/2026-11-26.md#phase-52--final-validation-candidate)
 
 ## Implementation review
 

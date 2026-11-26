@@ -119,6 +119,10 @@ pub struct Rv64Execution {
     pub metrics: InstructionMetrics,
 }
 
+/// Executes a standalone ADD or SUB RV64 arithmetic routine on two U256 words.
+///
+/// This leaf harness measures RV64 instructions. It has no EVM frame state
+/// or frame gas budget.
 pub struct Rv64Runner {
     executor: RvemuExecutor,
     halt_pc: u64,
@@ -220,9 +224,16 @@ impl Rv64Runner {
     }
 }
 
-/// Executes decoded arithmetic instructions with a host-managed stack and RV64 arithmetic.
+/// Historical Rust Orchestrator prototype retained for experiments and regressions.
 ///
-/// POP, DUP1, and GAS require the stack-aware RV64 guest execution path.
+/// Rust manages the operand stack and dispatches decoded PUSH, STOP, ADD, and
+/// SUB. Only the arithmetic routines run in RV64. The prototype has no frame
+/// gas accounting and is unsupported as an ADR-002 EVM frame execution API.
+///
+/// Removal is planned for the separate post-ADR-002 legacy execution cleanup.
+/// Use [`crate::orchestrator::execute_guest_evm_bytecode`] for canonical metered
+/// execution, or [`crate::orchestrator::execute_guest_evm_bytecode_with_initial_stack`]
+/// for stack-seeded tests.
 pub struct ProgramRunner {
     add: Rv64Runner,
     sub: Rv64Runner,

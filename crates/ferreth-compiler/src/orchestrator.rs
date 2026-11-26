@@ -1,7 +1,8 @@
 //! Rust orchestration for isolated opcodes and supported EVM bytecode.
 //!
-//! Both paths compile guest programs through the shared bytecode compiler and
-//! execute the resulting RV64 image with the guest state and result ABI.
+//! Both paths compile and run a verified, metered RV64 image through the
+//! shared guest ABI. Isolated opcode adapters use an implicit `u64::MAX`
+//! frame budget. Use [`execute_guest_evm_bytecode`] for explicit budgets.
 
 use std::fmt;
 
@@ -27,19 +28,19 @@ use crate::{
     },
 };
 
-/// rvemu version used by this initial isolated-opcode orchestrator.
+/// rvemu version used to execute linked guest programs.
 pub const EXECUTOR_IDENTITY: &str = "rvemu 0.0.11";
 
 pub use crate::compiler::PROVISIONAL_STACK_UNDERFLOW_EXCEPTION_CODE;
 
 const EBREAK: u32 = 0x0010_0073;
 
-/// Dynamic RV64 instruction counts for one isolated guest execution.
+/// Dynamic RV64 instruction counts for one linked guest execution.
 ///
-/// These are successfully executed RV64 instructions, not EVM gas, elapsed
-/// time, or hardware cycles. `opcode_body` includes the linked overflow
-/// trampoline when that path is taken, because it occupies the generated
-/// opcode-body range.
+/// Counts cover successfully executed RV64 instructions. `opcode_body` includes
+/// executed fragment instructions and transfers before the selected publisher.
+/// `guest_termination` counts the instructions from publisher entry to the
+/// pre-fetch exit sentinel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestInstructionMetrics {
     opcode_body: u64,
@@ -61,7 +62,7 @@ impl GuestInstructionMetrics {
     }
 }
 
-/// Host-visible result of one linked, isolated guest opcode execution.
+/// Linked RV64 image, validated guest result, and metrics for one execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrchestratorResult {
     assembly: String,
@@ -96,7 +97,7 @@ impl OrchestratorResult {
     }
 }
 
-/// Failures in the isolated-opcode orchestration boundary.
+/// Host failures when preparing, running, or validating a compiled guest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestratorError {
     Layout(LayoutError),
@@ -257,12 +258,13 @@ pub fn execute_guest_dup1_with_initial_stack(
     execute_linked_program(compile_evm_bytecode(&[0x80])?, initial_stack, u64::MAX)
 }
 
-/// Decodes, compiles, and executes a supported EVM bytecode program once.
+/// Executes a supported Cancun EVM frame with an empty stack and a `u64` budget.
 ///
-/// The executor runs the resulting RV64 executable as a whole; Rust does not
-/// execute individual EVM operations.
-/// STOP and empty EOF preserve the frame budget. The guest charges each
-/// supported positive-cost opcode before checking its stack operands.
+/// The verified RV64 program owns the stack and charges each positive-cost
+/// opcode before stack validation. STOP and EOF complete without an additional
+/// charge. A validated guest exception is returned in the result with zero
+/// settled remaining gas. Compilation, executor, and result validation
+/// failures return [`OrchestratorError`].
 pub fn execute_guest_evm_bytecode(
     bytecode: &[u8],
     gas_limit: u64,
