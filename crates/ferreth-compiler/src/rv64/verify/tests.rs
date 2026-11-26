@@ -451,3 +451,59 @@ fn metered_stack_and_arithmetic_reject_corrupted_charge_words_and_targets() {
         }
     }
 }
+
+#[test]
+fn gas_rejects_malformed_charge_stack_and_publisher_words() {
+    let compiled = compile_evm_bytecode(&[0x5a, 0]).unwrap();
+    let pcs = compiled.termination_entry_pcs();
+    let verify = |bytes: &[u8]| {
+        verify_final_image(
+            bytes,
+            [Fragment::Gas, Fragment::Stop],
+            PublisherLayout::SymbolicNormalOverflowOutOfGas,
+            pcs,
+        )
+    };
+    verify(compiled.machine_code()).unwrap();
+    for (index, replacement, description) in [
+        (2, "ld t0, 40(t1)", "charge load from published gas"),
+        (3, "addi t2, zero, 3", "wrong cost"),
+        (4, "bge t0, t2, 8", "signed charge guard"),
+        (5, "addi zero, zero, 0", "missing OOG transfer"),
+        (6, "add t0, t0, t2", "credit instead of debit"),
+        (7, "sd t0, 40(t1)", "debit to published gas"),
+        (8, "lui t0, 7", "wrong capacity"),
+        (9, "sd t0, 0(s1)", "store before capacity guard"),
+        (10, "bge s1, t0, 32", "signed capacity guard"),
+        (11, "ld t0, 24(t1)", "reload of initial budget"),
+        (11, "ld t0, 32(s0)", "reload from the stack"),
+        (12, "sd t1, 0(s1)", "wrong low limb"),
+        (13, "addi zero, zero, 0", "missing first upper store"),
+        (14, "sd t0, 16(s1)", "nonzero second upper limb"),
+        (15, "sd zero, 16(s1)", "wrong third upper limb offset"),
+        (16, "addi s1, s1, 64", "wrong pointer increment"),
+        (17, "jal zero, 12", "continuation skips STOP"),
+        (18, "jal zero, 8", "overflow targets normal publisher"),
+    ] {
+        let mut bytes = compiled.machine_code().to_vec();
+        let offset = index * 4;
+        let word = assemble(replacement, Arch::Rv64).unwrap();
+        assert_ne!(bytes[offset..offset + 4], word, "{description}");
+        bytes[offset..offset + 4].copy_from_slice(&word);
+        let error = verify(&bytes).unwrap_err();
+        assert!(
+            error.contains(&format!("{:#x}", ENTRY_PC + offset as u64)),
+            "{description}: {error}"
+        );
+    }
+    for (role, &pc) in pcs.iter().enumerate() {
+        let start = (pc - ENTRY_PC) as usize;
+        let sentinel = if role == 0 { 32 } else { 36 };
+        for offset in [20, sentinel - 4, sentinel] {
+            let mut bytes = compiled.machine_code().to_vec();
+            bytes[start + offset..start + offset + 4].copy_from_slice(&NOP.to_le_bytes());
+            let error = verify(&bytes).unwrap_err();
+            assert!(error.contains("publisher at"), "{error}");
+        }
+    }
+}

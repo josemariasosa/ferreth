@@ -1,8 +1,12 @@
 use std::fmt::Write;
 
 use crate::{
-    compiler::symbolic::{ExternalDeclaration, LocalDeclaration, PublisherRole},
-    rv64::{guest::GUEST_METADATA_LIVE_REMAINING_OFFSET, verify::Transfer},
+    compiler::symbolic::{ExternalDeclaration, LocalDeclaration, PublisherRole, SymbolicFragment},
+    rv64::{
+        guest::GUEST_METADATA_LIVE_REMAINING_OFFSET,
+        memory::{EVM_STACK_SIZE, EVM_WORD_SIZE},
+        verify::{Fragment, Transfer},
+    },
 };
 
 pub(super) const STATIC_CHARGE_WORDS: u64 = 8;
@@ -47,5 +51,64 @@ pub(super) fn emit_static_charge(
             role: oog,
             kind: Transfer::Jal { rd: 0 },
         },
+    )
+}
+
+pub(crate) fn generate_symbolic_gas(index: usize, continuation: String) -> SymbolicFragment {
+    let entry = format!("guest_gas_{index}");
+    let overflow = format!("{entry}_overflow");
+    let mut assembly = format!("{entry}:\n");
+    let (gas_check, oog) = emit_static_charge(&mut assembly, &entry, 2);
+
+    // The capacity guard replaces t0 but leaves the metadata base in t1.
+    let remaining = GUEST_METADATA_LIVE_REMAINING_OFFSET;
+    let stack_pages = EVM_STACK_SIZE >> 12;
+    writeln!(
+        assembly,
+        "    lui t0, {stack_pages}\n\
+         \x20   add t0, s0, t0\n\
+         \x20   bgeu s1, t0, {overflow}\n\
+         \x20   ld t0, {remaining}(t1)\n\
+         \x20   sd t0, 0(s1)\n\
+         \x20   sd zero, 8(s1)\n\
+         \x20   sd zero, 16(s1)\n\
+         \x20   sd zero, 24(s1)\n\
+         \x20   addi s1, s1, {EVM_WORD_SIZE}\n\
+         \x20   jal zero, {continuation}\n\
+         {overflow}:\n\
+         \x20   jal zero, {}",
+        PublisherRole::Overflow.label()
+    )
+    .unwrap();
+
+    SymbolicFragment::new(
+        assembly,
+        entry,
+        vec![
+            oog,
+            ExternalDeclaration {
+                site_word: STATIC_CHARGE_WORDS + 10,
+                role: PublisherRole::Overflow,
+                kind: Transfer::Jal { rd: 0 },
+            },
+        ],
+        vec![
+            gas_check,
+            LocalDeclaration {
+                site_word: STATIC_CHARGE_WORDS + 2,
+                target_symbol: overflow,
+                kind: Transfer::Branch {
+                    funct3: 7,
+                    rs1: 9,
+                    rs2: 5,
+                },
+            },
+            LocalDeclaration {
+                site_word: STATIC_CHARGE_WORDS + 9,
+                target_symbol: continuation,
+                kind: Transfer::Jal { rd: 0 },
+            },
+        ],
+        Fragment::Gas,
     )
 }

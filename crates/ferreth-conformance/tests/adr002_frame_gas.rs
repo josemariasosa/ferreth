@@ -208,7 +208,16 @@ vectors! {
     v23_sub_below_cost, "V23", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 8; OutOfGas, 0, &[2, 3]; Exceptional, 0, 8;
     v24_sub_at_cost, "V24", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 9; Stop, 0, &[1]; Normal(&[1]), 0, 9;
     v25_sub_excess, "V25", &[0x60, 0x02, 0x60, 0x03, 0x03, 0x00], 10; Stop, 1, &[1]; Normal(&[1]), 1, 9;
+    v26_gas_zero_budget, "V26", &[0x5a, 0x00], 0; OutOfGas, 0, &[]; Exceptional, 0, 0;
+    v27_gas_below_cost, "V27", &[0x5a, 0x00], 1; OutOfGas, 0, &[]; Exceptional, 0, 1;
+    v28_gas_at_cost, "V28", &[0x5a, 0x00], 2; Stop, 0, &[0]; Normal(&[0]), 0, 2;
+    v29_repeated_gas, "V29", &[0x5a, 0x5a, 0x00], 10; Stop, 6, &[8, 6]; Normal(&[8, 6]), 6, 4;
+    v30_gas_max_budget, "V30", &[0x5a, 0x00], 18446744073709551615; Stop, 18446744073709551613, &[18446744073709551613]; Normal(&[18446744073709551613]), 18446744073709551613, 2;
+    v31_gas_unsigned_boundary, "V31", &[0x5a, 0x00], 9223372036854775808; Stop, 9223372036854775806, &[9223372036854775806]; Normal(&[9223372036854775806]), 9223372036854775806, 2;
     v32_full_stack_below_cost, "V32", &full_stack_program(&[0x60, 2, 0]), 3074; OutOfGas, 0, &[1; 1024]; Exceptional, 0, 3074;
     v33_full_stack_at_cost, "V33", &full_stack_program(&[0x60, 2, 0]), 3075; StackOverflow, 0, &[1; 1024]; Exceptional, 0, 3075;
+    v34_full_stack_gas_below_cost, "V34", &full_stack_program(&[0x5a, 0]), 3073; OutOfGas, 0, &[1; 1024]; Exceptional, 0, 3073;
+    v35_full_stack_gas_at_cost, "V35", &full_stack_program(&[0x5a, 0]), 3074; StackOverflow, 0, &[1; 1024]; Exceptional, 0, 3074;
     v36_full_stack_dup1, "V36", &full_stack_program(&[0x80, 0]), 3075; StackOverflow, 0, &[1; 1024]; Exceptional, 0, 3075;
+    v37_mixed_gas_at_eof, "V37", &[0x60, 0x02, 0x80, 0x01, 0x5a, 0x50, 0x60, 0x07, 0x03, 0x5a], 25; Stop, 4, &[3, 4]; Normal(&[3, 4]), 4, 21;
 }

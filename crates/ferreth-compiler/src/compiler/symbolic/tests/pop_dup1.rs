@@ -126,14 +126,11 @@ pub(super) fn observe_guest(
             .unwrap();
         assert_eq!(prefix.exit_pc, start);
         let before_s1 = executor.read_register(s1);
-        let read_stack_allocation = |executor: &mut RvemuExecutor| {
-            let mut bytes = vec![0; EVM_STACK_REGION.size() as usize + guard.len()];
-            executor.read_memory(base, &mut bytes).unwrap();
-            bytes
-        };
-        let before = read_stack_allocation(&mut executor);
-        // Step only the failing opcode, with its expected instruction PCs and
-        // opcode fields, then check the full stack allocation is unchanged.
+        let mut before = vec![0; EVM_STACK_REGION.size() as usize + 2 * guard.len()];
+        executor.read_memory(base - 32, &mut before).unwrap();
+        let mut after = vec![0; before.len()];
+        // Check the entire allocation, both guards and s1 at each step.
+        // A transient write followed by a restore must also fail.
         for (i, &(offset, opcode)) in path.iter().enumerate() {
             let pc = start + offset;
             let next = path
@@ -151,9 +148,10 @@ pub(super) fn observe_guest(
                     executed_instructions: 1
                 }
             );
+            assert_eq!(executor.read_register(s1), before_s1, "step at {pc:#x}");
+            executor.read_memory(base - 32, &mut after).unwrap();
+            assert_eq!(after, before, "step at {pc:#x}");
         }
-        assert_eq!(executor.read_register(s1), before_s1);
-        assert_eq!(read_stack_allocation(&mut executor), before);
         ExecutionReport {
             exit_pc: publisher,
             executed_instructions: prefix.executed_instructions + path.len() as u64,

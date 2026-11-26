@@ -25,6 +25,7 @@ pub(crate) enum Fragment {
     #[cfg(test)]
     Push1,
     MeteredPush1,
+    Gas,
     #[cfg(test)]
     Pop,
     MeteredPop,
@@ -320,6 +321,7 @@ impl Fragment {
     ) -> Result<u64, String> {
         let (fragment, cost) = match self {
             Self::MeteredPush1 => (BodyLayout::Push1, Some(3)),
+            Self::Gas => (BodyLayout::Gas, Some(2)),
             Self::MeteredPop => (BodyLayout::Pop, Some(2)),
             Self::MeteredDup1 => (BodyLayout::Dup1, Some(3)),
             #[cfg(test)]
@@ -344,7 +346,7 @@ impl Fragment {
         // Word indices below are relative to the post-charge body. ADD/SUB each embed a
         // 34-word leaf core after the nine-word wrapper.
         let words = match fragment {
-            BodyLayout::Push1 => 11,
+            BodyLayout::Push1 | BodyLayout::Gas => 11,
             BodyLayout::Pop => 4,
             BodyLayout::Dup1 => 16,
             BodyLayout::Stop => 1,
@@ -359,6 +361,23 @@ impl Fragment {
                 words,
                 &[
                     Site::branch(2, BGEU, S1, T0, pc_at_word(start, 10)?),
+                    Site::jal(9, ZERO, next),
+                    Site::jal(10, ZERO, overflow()?),
+                ],
+            ),
+            BodyLayout::Gas => image.verify_block(
+                start,
+                words,
+                &[
+                    Site::fixed(0, 0x0000_82b7), // lui t0, 8
+                    Site::fixed(1, 0x0054_02b3), // add t0, s0, t0
+                    Site::branch(2, BGEU, S1, T0, pc_at_word(start, 10)?),
+                    Site::fixed(3, 0x0203_3283), // ld t0, 32(t1)
+                    Site::fixed(4, 0x0054_b023), // sd t0, 0(s1)
+                    Site::fixed(5, 0x0004_b423), // sd zero, 8(s1)
+                    Site::fixed(6, 0x0004_b823), // sd zero, 16(s1)
+                    Site::fixed(7, 0x0004_bc23), // sd zero, 24(s1)
+                    Site::fixed(8, 0x0204_8493), // addi s1, s1, 32
                     Site::jal(9, ZERO, next),
                     Site::jal(10, ZERO, overflow()?),
                 ],
@@ -430,6 +449,7 @@ impl Fragment {
 
 enum BodyLayout {
     Push1,
+    Gas,
     Pop,
     Dup1,
     Arithmetic,

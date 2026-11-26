@@ -156,6 +156,12 @@ pub(crate) fn compile_evm_bytecode_legacy(
             DecodedInstruction::Sub { .. } => operations.push(CompiledOperation::Sub),
             DecodedInstruction::Pop { .. } => operations.push(CompiledOperation::Pop),
             DecodedInstruction::Dup1 { .. } => operations.push(CompiledOperation::Dup1),
+            DecodedInstruction::Gas { offset } => {
+                return Err(CompileError::UnsupportedInstruction {
+                    opcode: 0x5a,
+                    offset,
+                });
+            }
         }
     }
     // Keep the established PUSH1-only linker (and therefore its exact output)

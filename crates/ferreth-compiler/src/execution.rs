@@ -222,9 +222,7 @@ impl Rv64Runner {
 
 /// Executes decoded arithmetic instructions with a host-managed stack and RV64 arithmetic.
 ///
-/// This legacy helper deliberately rejects POP and DUP1: stack manipulation
-/// is implemented only by the stack-aware guest RV64 path, never by host-side
-/// stack mutation.
+/// POP, DUP1, and GAS require the stack-aware RV64 guest execution path.
 pub struct ProgramRunner {
     add: Rv64Runner,
     sub: Rv64Runner,
@@ -251,6 +249,9 @@ impl ProgramRunner {
                 Instruction::Dup1 => {
                     return Err("DUP1 requires the stack-aware RV64 guest execution path".to_owned())
                 }
+                Instruction::Gas => {
+                    return Err("GAS requires the stack-aware RV64 guest execution path".to_owned())
+                }
                 Instruction::Add | Instruction::Sub => {
                     if stack.len() < 2 {
                         return Err(format!("stack underflow at instruction {index}"));
@@ -263,7 +264,8 @@ impl ProgramRunner {
                         Instruction::Stop
                         | Instruction::Push(_)
                         | Instruction::Pop
-                        | Instruction::Dup1 => unreachable!(),
+                        | Instruction::Dup1
+                        | Instruction::Gas => unreachable!(),
                     };
                     stack.push(runner.run(a, b)?.result);
                 }

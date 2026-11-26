@@ -1,6 +1,6 @@
 # ADR-002 implementation plan
 
-Maintainer approval was recorded on 2026-11-23. Phases 1–3 have implementation evidence on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), and [raw corpus and fixture table](adr-002-reference-corpus.md). Active portable fixtures are V01–V25, V32–V33 and V36. Phase 3 is ready for human review. GAS and the final milestone gate remain pending in Phases 4–5.
+Maintainer approval was recorded on 2026-11-23. Phases 1–4 have implementation evidence on the experimental branch. Read the [accepted ADR](../adr/002-cancun-evm-gas-metering.md), [baseline assessment](adr-002-readiness.md), and [raw corpus and fixture table](adr-002-reference-corpus.md). All 37 portable fixtures are active. Phase 4 is ready for human review. The final milestone gate remains pending in Phase 5.
 
 ## Test boundaries and common gate
 
@@ -251,6 +251,12 @@ Phase 3 covers the six existing opcodes and the 28 active reference vectors. EEL
 ## Phase 4 — GAS
 
 Depends on Phase 3. Activate V26–V31, V34–V35 and V37. Add gas_pushes_post_charge_u64_as_u256. RED should observe unsupported opcode 0x5a from strict decoding. Adopt GAS in lib.rs::decode_detailed and its projection, handle exhaustive consumers including legacy ProgramRunner (explicit guest-only rejection), and extend symbolic::compile dispatch and successor naming. Generate a fragment with cost 2, capacity preflight and four-limb store. Update independent layout verification. Check exact raw stack limbs at maximum budget (low u64::MAX-2, three zero limbs), and V31 across bit 63. V26/V27 require OOG without push, V28 [0]/0, V29 [8,6]/6, V34 OOG and V35 overflow, V37 [3,4]/4. Refactor common push stores only where the tests cover both forms. Run cargo test --frozen -p ferreth-compiler --test rv64_frame_gas and the common gate. Exit with all 37 IDs active and supported entry points using the complete gas path. Proposed commit covers GAS and its fixtures. Use V30 to compare the CLI with an omitted budget against the canonical API called with u64::MAX. Both must push u64::MAX-2.
+
+### Phase 4 execution evidence (2026-11-26)
+
+At `ad86b14`, the approved RED replay observed 28 portable passes and nine reachable-GAS decode failures, plus the focused behavioral decode failure. GREEN passed all 37 portable cases and the focused test. The Phase 4C gate passed 288 workspace tests and all four capacity probes in separate runs. Stepping established four ordered limb stores, a single stack pointer advance, unchanged allocation and pointer on fault, and zero settlement with preserved prefix effects. All 31 machine-code corruption controls were rejected, including four whose declarations matched the corrupted words.
+
+Observed GAS fragment width was 76 bytes and success/OOG/overflow took 17/6/11 fragment instructions. The complete singleton image was 192 bytes at EOF or 196 bytes with STOP. Repeated GAS fit through 13,795 occurrences, with reservation rejection at 13,796 and relocation rejection at 13,797 in both termination forms. Direct REVM was executed against all portable cases. EELS evidence remains the recorded RF-028 run. Command outcomes, raw-memory observations, exact specimens and the review restart are recorded in the [November 26 engineering log](../bitacora/2026-11-26.md).
 
 ## Phase 5 — full milestone validation
 

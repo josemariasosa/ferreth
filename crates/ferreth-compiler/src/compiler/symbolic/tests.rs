@@ -180,6 +180,7 @@ fn legacy_charge_sites(input: &[u8]) -> Vec<(u64, u64)> {
                 DecodedInstruction::Dup1 { .. } => (64, 3),
                 DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => (172, 3),
                 DecodedInstruction::Stop { .. } => return None,
+                DecodedInstruction::Gas { .. } => panic!("GAS has no legacy fragment"),
             };
             let site = at;
             at += width;
@@ -611,6 +612,7 @@ fn declarations_and_namespaces_reject_incomplete_or_corrupted_images() {
 }
 
 mod arithmetic;
+mod gas;
 mod pop_dup1;
 
 #[test]

@@ -31,6 +31,7 @@ fn entry_name(op: Instruction, index: usize) -> String {
         Instruction::Push(_) => format!("guest_push1_{index}"),
         Instruction::Pop => format!("guest_pop_{index}"),
         Instruction::Dup1 => format!("guest_dup1_{index}"),
+        Instruction::Gas => panic!("GAS is outside the historical replay subset"),
         Instruction::Add | Instruction::Sub => format!("guest_arithmetic_{index}"),
     }
 }
@@ -113,6 +114,7 @@ fn experimental_source(ops: &[Instruction]) -> String {
     jal zero, {OVERFLOW}"#
             )
             .unwrap(),
+            Instruction::Gas => panic!("GAS is outside the historical replay subset"),
             Instruction::Add | Instruction::Sub => {
                 let (opcode, name) = if op == Instruction::Add {
                     (Opcode::Add, "evm_add")
@@ -298,6 +300,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                 Instruction::Push(_) => 44,
                 Instruction::Pop => 16,
                 Instruction::Dup1 => 64,
+                Instruction::Gas => panic!("GAS is outside the historical replay subset"),
                 Instruction::Add | Instruction::Sub => 172,
             };
             if !experimental && op != Instruction::Stop {
@@ -392,6 +395,7 @@ fn check_layout(image: &AssemblyResult, ops: &[Instruction], experimental: bool)
                     [under, over]
                 );
             }
+            Instruction::Gas => panic!("GAS is outside the historical replay subset"),
             Instruction::Add | Instruction::Sub => {
                 let (opcode, name, expected_hash) = if op == Instruction::Add {
                     (Opcode::Add, "add", 0xf1ff_f32f_f479_62f3)

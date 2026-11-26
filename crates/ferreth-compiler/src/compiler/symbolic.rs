@@ -10,8 +10,8 @@ use crate::{
     rv64::{
         memory::{validate_generated_code, ENTRY_PC, RV64_INSTRUCTION_SIZE},
         opcodes::{
-            add::generate_symbolic_add, dup::generate_symbolic_dup1, pop::generate_symbolic_pop,
-            push::generate_symbolic_push1, sub::generate_symbolic_sub,
+            add::generate_symbolic_add, dup::generate_symbolic_dup1, gas::generate_symbolic_gas,
+            pop::generate_symbolic_pop, push::generate_symbolic_push1, sub::generate_symbolic_sub,
         },
         verify::{
             verify_declared_transfers, verify_final_image, DeclaredTransfer, Fragment,
@@ -104,6 +104,7 @@ pub(crate) fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileErr
                         DecodedInstruction::Push { opcode: 0x60, .. } => {
                             format!("guest_push1_{}", index + 1)
                         }
+                        DecodedInstruction::Gas { .. } => format!("guest_gas_{}", index + 1),
                         DecodedInstruction::Pop { .. } => format!("guest_pop_{}", index + 1),
                         DecodedInstruction::Dup1 { .. } => format!("guest_dup1_{}", index + 1),
                         DecodedInstruction::Add { .. } | DecodedInstruction::Sub { .. } => {
@@ -135,6 +136,7 @@ pub(crate) fn compile(bytecode: &[u8]) -> Result<CompiledRv64Program, CompileErr
                 }
                 DecodedInstruction::Add { .. } => Ok(generate_symbolic_add(index, continuation()?)),
                 DecodedInstruction::Sub { .. } => Ok(generate_symbolic_sub(index, continuation()?)),
+                DecodedInstruction::Gas { .. } => Ok(generate_symbolic_gas(index, continuation()?)),
                 DecodedInstruction::Pop { .. } => Ok(generate_symbolic_pop(index, continuation()?)),
                 DecodedInstruction::Dup1 { .. } => {
                     Ok(generate_symbolic_dup1(index, continuation()?))

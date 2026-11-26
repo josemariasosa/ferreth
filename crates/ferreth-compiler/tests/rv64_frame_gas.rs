@@ -75,6 +75,34 @@ fn assert_frame_result(
 }
 
 #[test]
+fn gas_pushes_post_charge_u64_as_u256() {
+    let code = [0x5a, 0];
+    for limit in [0, 1, 2, 10, 1 << 63, u64::MAX] {
+        let execution = execute_guest_evm_bytecode(&code, limit).unwrap();
+        if limit < 2 {
+            assert_frame_result(&execution, limit, 3, 0, &[]);
+        } else {
+            let remaining = limit - 2;
+            assert_frame_result(&execution, limit, 0, remaining, &[remaining]);
+            assert_eq!(
+                execution.guest_result().stack()[0].as_limbs(),
+                &[remaining, 0, 0, 0]
+            );
+        }
+    }
+
+    let execution = execute_guest_evm_bytecode(&[0x5a, 0x5a, 0], 10).unwrap();
+    assert_frame_result(&execution, 10, 0, 6, &[8, 6]);
+
+    let mut full = [0x60, 1].repeat(1024);
+    full.extend([0x5a, 0]);
+    for (limit, exception) in [(3073, 3), (3074, 1), (3080, 1)] {
+        let execution = execute_guest_evm_bytecode(&full, limit).unwrap();
+        assert_frame_result(&execution, limit, exception, 0, &[1; 1024]);
+    }
+}
+
+#[test]
 fn push1_boundaries_share_the_same_compiled_image() {
     use ferreth_compiler::{compiler::compile_evm_bytecode, orchestrator::execute_guest_push1};
 
@@ -241,4 +269,89 @@ fn every_new_charge_compares_unsigned_at_full_width() {
             assert_eq!(result.machine_code(), at_cost.machine_code());
         }
     }
+}
+
+#[test]
+fn gas_preserves_successful_prefix_when_next_gas_is_unfunded() {
+    let execution = execute_guest_evm_bytecode(&[0x5a, 0x5a, 0], 3).unwrap();
+    assert_frame_result(&execution, 3, 3, 0, &[1]);
+}
+
+#[test]
+fn gas_image_and_cli_default_are_budget_independent() {
+    use ferreth_compiler::compiler::compile_evm_bytecode;
+
+    let code = [0x5a, 0];
+    let compiled = compile_evm_bytecode(&code).unwrap();
+    for limit in [0, 1, 2, 10, 1 << 63, u64::MAX] {
+        let run = execute_guest_evm_bytecode(&code, limit).unwrap();
+        assert_eq!(
+            run.machine_code(),
+            compiled.machine_code(),
+            "budget={limit}"
+        );
+    }
+
+    let explicit = u64::MAX.to_string();
+    let cli = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_ferreth-compiler"))
+            .args(["execute", "--bytecode", "5a00"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let default = cli(&[]);
+    assert_eq!(default, cli(&["--gas", &explicit]));
+
+    let run = execute_guest_evm_bytecode(&code, u64::MAX).unwrap();
+    assert_frame_result(&run, u64::MAX, 0, u64::MAX - 2, &[u64::MAX - 2]);
+    let guest = run.guest_result();
+    assert_eq!(
+        default,
+        format!(
+            "Decoded instructions: [Gas, Stop]\nFinal status: {:?}\nRemaining frame gas: {}\nFinal stack: {:?}\nDynamic RV64 instruction count: {}\n",
+            guest.status(),
+            guest.remaining_gas(),
+            guest.stack(),
+            run.instruction_metrics().total(),
+        )
+    );
+}
+
+#[test]
+fn gas_decodes_with_offsets_and_requires_guest_execution() {
+    use alloy_primitives::U256;
+    use ferreth_compiler::{
+        decode, decode_detailed, execution::ProgramRunner, DecodedInstruction, Instruction,
+    };
+
+    let code = [0x60, 0x5a, 0x5a, 0, 0x5a];
+    assert_eq!(
+        decode_detailed(&code).unwrap(),
+        [
+            DecodedInstruction::Push {
+                value: U256::from(0x5a),
+                opcode: 0x60,
+                offset: 0,
+            },
+            DecodedInstruction::Gas { offset: 2 },
+            DecodedInstruction::Stop { offset: 3 },
+        ]
+    );
+    let ops = decode(&code).unwrap();
+    assert_eq!(
+        ops,
+        [
+            Instruction::Push(U256::from(0x5a)),
+            Instruction::Gas,
+            Instruction::Stop
+        ]
+    );
+    assert_eq!(
+        ProgramRunner::new().unwrap().run(&ops).unwrap_err(),
+        "GAS requires the stack-aware RV64 guest execution path"
+    );
 }

@@ -16,6 +16,7 @@ pub enum Instruction {
     Sub,
     Pop,
     Dup1,
+    Gas,
 }
 
 /// One decoded EVM instruction with source metadata for compiler diagnostics.
@@ -39,6 +40,9 @@ pub enum DecodedInstruction {
         offset: usize,
     },
     Dup1 {
+        offset: usize,
+    },
+    Gas {
         offset: usize,
     },
 }
@@ -80,7 +84,7 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// Decodes the strict STOP, PUSH1-PUSH32, ADD, SUB, POP, and DUP1 research subset.
+/// Decodes the strict STOP, PUSH1-PUSH32, ADD, SUB, POP, DUP1, and GAS research subset.
 ///
 /// Decoding ends at the first `STOP`, so bytes after it are unreachable and
 /// intentionally not interpreted as EVM instructions.
@@ -95,6 +99,7 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>, DecodeError> {
                 DecodedInstruction::Sub { .. } => Instruction::Sub,
                 DecodedInstruction::Pop { .. } => Instruction::Pop,
                 DecodedInstruction::Dup1 { .. } => Instruction::Dup1,
+                DecodedInstruction::Gas { .. } => Instruction::Gas,
             })
             .collect()
     })
@@ -115,6 +120,7 @@ pub fn decode_detailed(bytecode: &[u8]) -> Result<Vec<DecodedInstruction>, Decod
             0x01 => DecodedInstruction::Add { offset },
             0x03 => DecodedInstruction::Sub { offset },
             0x50 => DecodedInstruction::Pop { offset },
+            0x5a => DecodedInstruction::Gas { offset },
             0x80 => DecodedInstruction::Dup1 { offset },
             0x60..=0x7f => {
                 let width = push_width(opcode).expect("0x60..=0x7f are PUSH opcodes");
